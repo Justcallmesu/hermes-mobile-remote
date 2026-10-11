@@ -3,6 +3,12 @@
 Releases are git tags; the version in the app comes from the tag. `git log v0.9.0..vX.Y.Z` is the
 authoritative history — this file only summarises what is worth knowing before upgrading.
 
+## v1.9.2
+
+- The drawer no longer jumps around while a reply streams. Live updates now re-read only the
+  newest chats and merge them in, instead of re-paging the whole list while it was shifting.
+- Chats with the same timestamp keep a fixed order between refreshes.
+
 ## v1.9.1
 
 - Enter on a hardware keyboard is a new line again (back to how it was before v1.9.0). Use the

@@ -9,6 +9,7 @@ import androidx.lifecycle.DefaultLifecycleObserver
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.ProcessLifecycleOwner
 import androidx.lifecycle.viewModelScope
+import io.github.nideta231.hermesremote.data.mergeSessionHead
 import io.github.nideta231.hermesremote.data.AppUpdate
 import io.github.nideta231.hermesremote.data.BridgeClient
 import io.github.nideta231.hermesremote.data.BridgeException
@@ -783,7 +784,31 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
 
     private fun scheduleSessionsRefresh() {
         sessionsRefreshJob?.cancel()
-        sessionsRefreshJob = viewModelScope.launch { delay(600); refreshSessions(quiet = true) }
+        sessionsRefreshJob = viewModelScope.launch { delay(600); refreshSessionsHead() }
+    }
+
+    /**
+     * Live update of the drawer (`sessions.changed` fires every ~2 s while a reply streams): re-read
+     * only the newest page and merge it in. Re-reading every page by offset while the active chat
+     * keeps moving to the top shifted the pages under the reader, so chats vanished, came back and
+     * the list jumped on every refresh.
+     */
+    private fun refreshSessionsHead() {
+        val c = client ?: return
+        if (_sessions.value.items.isEmpty()) return refreshSessions(quiet = true)
+        viewModelScope.launch {
+            try {
+                val (page, _) = c.sessions(SESSIONS_PER_REQUEST, 0)
+                val merged = mergeSessionHead(_sessions.value.items, page)
+                if (merged != _sessions.value.items) _sessions.update { it.copy(items = merged, error = null) }
+                val open = page.firstOrNull { it.id == _chat.value.sessionId }
+                if (open != null) _chat.update { it.copy(pinned = open.pinned, title = if (it.title == "New chat") open.displayTitle else it.title) }
+                refreshProjects()
+            } catch (t: Throwable) {
+                if (t is CancellationException) throw t
+                // Quiet: a missed live refresh is retried on the next change; never flash an error row.
+            }
+        }
     }
 
     /**

@@ -9,6 +9,7 @@ import io.github.nideta231.hermesremote.data.SessionView
 import io.github.nideta231.hermesremote.data.arrangeSessions
 import io.github.nideta231.hermesremote.data.dateGroupOf
 import io.github.nideta231.hermesremote.data.statusOf
+import io.github.nideta231.hermesremote.data.mergeSessionHead
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -103,5 +104,20 @@ class SessionViewTest {
         assertEquals("Yesterday", dateGroupOf(nowSec - 1.2 * day, now))
         assertEquals("This month", dateGroupOf(nowSec - 10 * day, now))
         assertEquals("Older", dateGroupOf(null, now))
+    }
+
+    private fun row(id: String, t: Double) = SessionSummary(id, id, null, null, 1, t, null)
+
+    @Test fun headMergeKeepsOlderPagesAndDropsDeleted() {
+        val cur = listOf(row("a", 50.0), row("gone", 40.0), row("b", 30.0), row("old", 5.0))
+        val merged = mergeSessionHead(cur, listOf(row("b", 60.0), row("a", 50.0), row("c", 20.0)))
+        assertEquals(listOf("b", "a", "c", "old"), merged.map { it.id })
+    }
+
+    @Test fun equalTimestampsKeepAStableOrder() {
+        val a = listOf(row("x", 10.0), row("y", 10.0), row("z", 10.0))
+        val first = arrangeSessions(a, SessionView()).flatMap { g -> g.items.map { it.id } }
+        val second = arrangeSessions(a.reversed(), SessionView()).flatMap { g -> g.items.map { it.id } }
+        assertEquals(first, second)
     }
 }

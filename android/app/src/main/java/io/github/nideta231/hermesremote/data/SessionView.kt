@@ -94,7 +94,8 @@ fun arrangeSessions(
         SessionOrdering.TOKENS -> compareByDescending<SessionSummary> { it.tokens }.then(recency)
         SessionOrdering.COST -> compareByDescending<SessionSummary> { it.costUsd }.then(recency)
     }
-    val sorted = visible.sortedWith(order)
+    // Id breaks ties, so equal timestamps never swap places between refreshes.
+    val sorted = visible.sortedWith(order.thenBy { it.id })
     val (pinned, rest) = sorted.partition { it.pinned }
 
     val groups: List<SessionGroup> = when (view.grouping) {
@@ -166,4 +167,17 @@ class SessionViewStore(private val prefs: SharedPreferences) {
 
     private inline fun <reified E : Enum<E>> enumOr(name: String?, default: E): E =
         enumValues<E>().firstOrNull { it.name == name } ?: default
+}
+
+/**
+ * Merge a fresh newest-first [head] page into the chats already loaded. Chats in [head] replace
+ * their old copies; an old chat that is missing from [head] but would sort inside it (newer than
+ * its oldest row) was deleted and is dropped; everything older is kept as it was.
+ */
+fun mergeSessionHead(current: List<SessionSummary>, head: List<SessionSummary>): List<SessionSummary> {
+    if (head.isEmpty()) return current
+    val fresh = head.associateBy { it.id }
+    val floor = head.minOf { it.lastActive ?: 0.0 }
+    val kept = current.filter { it.id !in fresh && (it.lastActive ?: 0.0) < floor }
+    return (head + kept).distinctBy { it.id }
 }
