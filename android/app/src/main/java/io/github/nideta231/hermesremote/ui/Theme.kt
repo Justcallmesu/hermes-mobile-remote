@@ -155,6 +155,7 @@ object ThemePrefs {
         }
         accent = Accent.entries.firstOrNull { it.name == p.getString("accent", null) }
             ?: Accent.entries.firstOrNull { it.name == legacy } ?: Accent.GOLD
+        collapsedGroups = p.getStringSet("collapsed_groups", null)?.toSet() ?: emptySet()
     }
 
     fun pickMode(value: ThemeMode) {
@@ -165,6 +166,15 @@ object ThemePrefs {
     fun pickAccent(value: Accent) {
         accent = value
         ctx?.let { prefs(it).edit().putString("accent", value.name).remove("theme").apply() }
+    }
+
+    /** Drawer groups the user collapsed ("GROUPING/key"), kept across app restarts. */
+    var collapsedGroups by mutableStateOf<Set<String>>(emptySet())
+        private set
+
+    fun toggleCollapsed(key: String) {
+        collapsedGroups = if (key in collapsedGroups) collapsedGroups - key else collapsedGroups + key
+        ctx?.let { prefs(it).edit().putStringSet("collapsed_groups", HashSet(collapsedGroups)).apply() }
     }
 
     private fun prefs(c: Context) = c.getSharedPreferences("ui", Context.MODE_PRIVATE)

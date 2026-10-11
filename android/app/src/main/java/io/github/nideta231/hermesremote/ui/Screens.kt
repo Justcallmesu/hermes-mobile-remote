@@ -151,7 +151,8 @@ fun SessionsPane(
     var renaming by remember { mutableStateOf<SessionSummary?>(null) }
     var deleting by remember { mutableStateOf<SessionSummary?>(null) }
     // Collapsed groups as "GROUPING/key", so collapsing "Today" never hides a project group of the same name.
-    var collapsedKeys by rememberSaveable { mutableStateOf(arrayListOf<String>()) }
+    // Persisted (ThemePrefs "ui" prefs) so reopening the app keeps folders the way they were left.
+    val collapsedKeys = ThemePrefs.collapsedGroups
     fun collapseKey(groupKey: String) = "${view.grouping.name}/$groupKey"
 
     val grouped = remember(state.items, state.live, state.projects, view, query) {
@@ -230,7 +231,7 @@ fun SessionsPane(
                         GroupHeader(group.label, group.items.size, closed, Modifier.animateItem(),
                             project = view.grouping == SessionGrouping.PROJECT && group.label != "Pinned",
                             live = page.group.items.count { state.live[it.id] != null }) {
-                            collapsedKeys = ArrayList(if (ck in collapsedKeys) collapsedKeys - ck else collapsedKeys + ck)
+                            ThemePrefs.toggleCollapsed(ck)
                         }
                     }
                     if (!closed) {
