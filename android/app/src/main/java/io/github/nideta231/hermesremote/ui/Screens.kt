@@ -865,10 +865,16 @@ private fun ThemePanel() {
         }
         Text("Accent", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.padding(start = 16.dp, top = 4.dp))
-        Row(Modifier.fillMaxWidth().padding(start = 12.dp, end = 12.dp, top = 8.dp, bottom = 12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            val bg = MaterialTheme.colorScheme.background
-            Accent.entries.forEach { a ->
-                ThemeSwatch(a.label, a == accent, bg, a.color(mode, systemDark), Modifier.weight(1f)) { ThemePrefs.pickAccent(a) }
+        // 30 accents: a wrapping grid of 5 per row, grouped by hue family (see Accent).
+        val bg = MaterialTheme.colorScheme.background
+        Column(Modifier.fillMaxWidth().padding(start = 12.dp, end = 12.dp, top = 8.dp, bottom = 12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Accent.entries.chunked(5).forEach { row ->
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    row.forEach { a ->
+                        ThemeSwatch(a.label, a == accent, bg, a.color(mode, systemDark), Modifier.weight(1f)) { ThemePrefs.pickAccent(a) }
+                    }
+                    repeat(5 - row.size) { Spacer(Modifier.weight(1f)) }
+                }
             }
         }
     }

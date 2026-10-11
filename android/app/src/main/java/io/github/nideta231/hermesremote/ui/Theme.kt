@@ -30,12 +30,45 @@ enum class ThemeMode(val label: String) {
 }
 
 /** Accent colour. [dark] is used on dark/midnight backgrounds, [light] (deeper, for contrast) on light. */
+// Names of the first five (GOLD, OCEAN, FOREST, VIOLET, ROSE) are stored in prefs: never rename them.
+// Order is the picker order, grouped by hue family.
 enum class Accent(val label: String, val dark: Color, val light: Color) {
+    // yellows / oranges
     GOLD("Gold", Color(0xFFE8B54A), Color(0xFF8A5F00)),
-    OCEAN("Ocean", Color(0xFF6FA8F5), Color(0xFF1F5FB8)),
-    FOREST("Forest", Color(0xFF6CCB8A), Color(0xFF1E7A43)),
-    VIOLET("Violet", Color(0xFFB794F6), Color(0xFF6A3FC4)),
+    AMBER("Amber", Color(0xFFFFC145), Color(0xFF9A6700)),
+    LEMON("Lemon", Color(0xFFE6DA5A), Color(0xFF7A6E00)),
+    ORANGE("Orange", Color(0xFFFF9F4A), Color(0xFFB45309)),
+    COPPER("Copper", Color(0xFFD9895B), Color(0xFF9A4A1E)),
+    // reds
+    CORAL("Coral", Color(0xFFFF8A75), Color(0xFFC2412D)),
+    RED("Red", Color(0xFFF26B6B), Color(0xFFB91C1C)),
+    CRIMSON("Crimson", Color(0xFFE5576F), Color(0xFF9F1239)),
+    MAROON("Maroon", Color(0xFFC77B85), Color(0xFF7F1D2D)),
+    // pinks
     ROSE("Rose", Color(0xFFF28FA8), Color(0xFFB0305A)),
+    PINK("Pink", Color(0xFFF7A1D0), Color(0xFFBE185D)),
+    MAGENTA("Magenta", Color(0xFFE879E0), Color(0xFFA21CAF)),
+    // purples
+    LAVENDER("Lavender", Color(0xFFC9B6F7), Color(0xFF7056B8)),
+    VIOLET("Violet", Color(0xFFB794F6), Color(0xFF6A3FC4)),
+    PURPLE("Purple", Color(0xFFA77BEA), Color(0xFF6B21A8)),
+    PLUM("Plum", Color(0xFFB98BC0), Color(0xFF6B2D6F)),
+    // blues
+    SKY("Sky", Color(0xFF7DD3FC), Color(0xFF0369A1)),
+    OCEAN("Ocean", Color(0xFF6FA8F5), Color(0xFF1F5FB8)),
+    INDIGO("Indigo", Color(0xFF8C9EFF), Color(0xFF3730A3)),
+    NAVY("Navy", Color(0xFF7F95C8), Color(0xFF1E3A6E)),
+    // cyans / teals
+    CYAN("Cyan", Color(0xFF5FDDE8), Color(0xFF0E7490)),
+    TEAL("Teal", Color(0xFF4FD1B5), Color(0xFF0F766E)),
+    // greens
+    MINT("Mint", Color(0xFF8EEBC0), Color(0xFF15803D)),
+    FOREST("Forest", Color(0xFF6CCB8A), Color(0xFF1E7A43)),
+    LIME("Lime", Color(0xFFB5E05A), Color(0xFF4D7C0F)),
+    OLIVE("Olive", Color(0xFFB8BE6A), Color(0xFF5B6113)),
+    EMERALD("Emerald", Color(0xFF34D399), Color(0xFF047857)),
+    // neutrals
+    SLATE("Slate", Color(0xFFA3B1C6), Color(0xFF475569)),
     ;
 
     fun color(mode: ThemeMode, systemDark: Boolean) = if (mode.isDark(systemDark)) dark else light

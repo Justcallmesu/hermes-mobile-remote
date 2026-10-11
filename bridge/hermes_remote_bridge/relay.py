@@ -34,8 +34,8 @@ ALLOWED_METHODS = frozenset({
     "session.create", "session.close", "session.history", "session.events.since", "session.title",
     "session.delete", "session.undo", "session.branch", "session.compress", "session.usage", "session.status",
     "session.save",
-    # projects (read-only: the drawer's group-by-project)
-    "projects.tree",
+    # projects: the drawer's group-by-project, plus "New project" from the phone
+    "projects.tree", "projects.create",
     # turns
     "prompt.submit", "prompt.btw", "prompt.background", "session.interrupt", "session.steer", "session.redirect",
     # slash commands, models, settings
