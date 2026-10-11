@@ -1,5 +1,8 @@
 package io.github.nideta231.hermesremote.ui
 
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.draw.drawBehind
 import android.net.Uri
@@ -843,29 +846,49 @@ private fun DefaultModelPanel(state: SystemState, models: ModelCatalog?, onOpen:
 
 @Composable
 private fun ThemePanel() {
-    val current = ThemePrefs.current
+    val mode = ThemePrefs.mode
+    val accent = ThemePrefs.accent
+    val systemDark = isSystemInDarkTheme()
     Panel {
         Text("Only changes this phone.", style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 10.dp))
-        Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 12.dp, vertical = 12.dp),
-            horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            AppTheme.entries.forEach { t ->
-                val selected = t == current
-                Column(horizontalAlignment = Alignment.CenterHorizontally,
-                    modifier = Modifier.clip(RoundedCornerShape(14.dp)).clickable { ThemePrefs.set(t) }.padding(6.dp).width(64.dp)) {
-                    val bg = t.scheme.background
-                    Box(Modifier.size(44.dp).clip(CircleShape).background(bg)
-                        .border(if (selected) 3.dp else 1.dp, if (selected) t.accent else MaterialTheme.colorScheme.outline, CircleShape),
-                        contentAlignment = Alignment.Center) {
-                        Box(Modifier.size(18.dp).clip(CircleShape).background(t.accent))
-                    }
-                    Spacer(Modifier.size(6.dp))
-                    Text(t.label.substringBefore(" ("), style = MaterialTheme.typography.labelSmall, maxLines = 1,
-                        color = if (selected) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant,
-                        fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal)
+        Text("Mode", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(start = 16.dp, top = 12.dp))
+        Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            ThemeMode.entries.forEach { m ->
+                val scheme = colorScheme(m, accent, systemDark)
+                ThemeSwatch(m.label, m == mode, if (m == ThemeMode.SYSTEM) colorScheme(ThemeMode.DARK, accent, true).background else scheme.background, scheme.primary, Modifier.weight(1f),
+                    split = if (m == ThemeMode.SYSTEM) colorScheme(ThemeMode.LIGHT, accent, false).background else null) {
+                    ThemePrefs.pickMode(m)
                 }
             }
         }
+        Text("Accent", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(start = 16.dp, top = 4.dp))
+        Row(Modifier.fillMaxWidth().padding(start = 12.dp, end = 12.dp, top = 8.dp, bottom = 12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            val bg = MaterialTheme.colorScheme.background
+            Accent.entries.forEach { a ->
+                ThemeSwatch(a.label, a == accent, bg, a.color(mode, systemDark), Modifier.weight(1f)) { ThemePrefs.pickAccent(a) }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ThemeSwatch(label: String, selected: Boolean, bg: Color, dot: Color, modifier: Modifier,
+                        split: Color? = null, onClick: () -> Unit) {
+    Column(horizontalAlignment = Alignment.CenterHorizontally,
+        modifier = modifier.clip(RoundedCornerShape(14.dp)).clickable(onClick = onClick).padding(vertical = 6.dp)) {
+        Box(Modifier.size(44.dp).clip(CircleShape)
+            .background(if (split != null) Brush.linearGradient(0.5f to split, 0.5f to bg) else SolidColor(bg))
+            .border(if (selected) 3.dp else 1.dp, if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline, CircleShape),
+            contentAlignment = Alignment.Center) {
+            Box(Modifier.size(18.dp).clip(CircleShape).background(dot))
+        }
+        Spacer(Modifier.size(6.dp))
+        Text(label, style = MaterialTheme.typography.labelSmall, maxLines = 1,
+            color = if (selected) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant,
+            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal)
     }
 }
 

@@ -3,6 +3,12 @@
 Releases are git tags; the version in the app comes from the tag. `git log v0.9.0..vX.Y.Z` is the
 authoritative history — this file only summarises what is worth knowing before upgrading.
 
+## v1.8.1
+
+- Theme is now two separate choices: Mode (System, Light, Dark, Midnight) and Accent
+  (Gold, Ocean, Forest, Violet, Rose). Every accent works in every mode, so there are no
+  more duplicate same-colour themes. Your previous pick carries over.
+
 ## v1.8.0
 
 - Theme picker in Settings.

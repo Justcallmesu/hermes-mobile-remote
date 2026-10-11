@@ -58,7 +58,7 @@ import io.github.nideta231.hermesremote.ui.ChatActions
 import io.github.nideta231.hermesremote.ui.ChatScreen
 import io.github.nideta231.hermesremote.ui.HermesTheme
 import io.github.nideta231.hermesremote.ui.ThemePrefs
-import io.github.nideta231.hermesremote.ui.AppTheme
+import io.github.nideta231.hermesremote.ui.isDark
 import io.github.nideta231.hermesremote.ui.PairScreen
 import io.github.nideta231.hermesremote.ui.SessionActions
 import io.github.nideta231.hermesremote.ui.SessionsPane
@@ -117,9 +117,9 @@ class MainActivity : ComponentActivity() {
         if (vm.pairing.value != null) askForNotifications()
         ThemePrefs.init(this)
         setContent {
-            val theme = ThemePrefs.current
-            LaunchedEffect(theme) {
-                val bars = if (theme.dark) SystemBarStyle.dark(android.graphics.Color.TRANSPARENT)
+            val dark = ThemePrefs.mode.isDark(androidx.compose.foundation.isSystemInDarkTheme())
+            LaunchedEffect(dark) {
+                val bars = if (dark) SystemBarStyle.dark(android.graphics.Color.TRANSPARENT)
                     else SystemBarStyle.light(android.graphics.Color.TRANSPARENT, android.graphics.Color.TRANSPARENT)
                 enableEdgeToEdge(statusBarStyle = bars, navigationBarStyle = bars)
             }
