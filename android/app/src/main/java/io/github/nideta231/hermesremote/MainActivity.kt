@@ -245,7 +245,7 @@ class MainActivity : ComponentActivity() {
             openSettings = { go(Page.SETTINGS) },
             loadModels = vm::loadModels, chooseModel = vm::chooseModel, dismissConfirm = vm::dismissConfirm,
             setReasoning = vm::setReasoning, modelPickerOpened = vm::modelPickerOpened,
-            chooseProject = vm::chooseProject,
+            chooseProject = vm::chooseProject, createProject = vm::createProject,
         )
         val settingsActions = SettingsActions(
             refresh = vm::refreshStatus, unpair = vm::unpair, setApprovalMode = vm::setApprovalMode,

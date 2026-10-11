@@ -3,6 +3,15 @@
 Releases are git tags; the version in the app comes from the tag. `git log v0.9.0..vX.Y.Z` is the
 authoritative history — this file only summarises what is worth knowing before upgrading.
 
+## v1.9.0
+
+- 30 accent colours, grouped by hue: several blues (sky, ocean, indigo, navy...), greens, reds,
+  purples, oranges and neutrals. Your current accent is kept.
+- Hardware keyboards: Enter sends, Shift+Enter starts a new line.
+- New project: in the project picker, "+ New project" creates a project on the PC from a name
+  and a folder path (e.g. ~/Workspace/my-app) and starts the chat there. Needs the updated bridge.
+- Project folders in the drawer remember being collapsed after the app restarts.
+
 ## v1.8.1
 
 - Theme is now two separate choices: Mode (System, Light, Dark, Midnight) and Accent

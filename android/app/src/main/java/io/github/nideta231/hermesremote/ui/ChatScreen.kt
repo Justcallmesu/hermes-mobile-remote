@@ -137,6 +137,8 @@ class ChatActions(
     val modelPickerOpened: () -> Unit,
     /** New chat only: pick the project it starts in (null = no project). */
     val chooseProject: (String?) -> Unit = {},
+    /** Create a project on the PC (name, folder); callback gets null or an error message. */
+    val createProject: (String, String, (String?) -> Unit) -> Unit = { _, _, _ -> },
 )
 
 /** How the phone reaches the PC right now, reduced to what the top bar shows. */
@@ -219,7 +221,8 @@ fun ChatScreen(
     if (modelSheet) ModelSheet(catalog, model, state.sessionId == null, onDismiss = { modelSheet = false }, onPick = {
         actions.chooseModel(it, false); modelSheet = false
     })
-    if (projectSheet) ProjectSheet(projects, state.project?.id, onDismiss = { projectSheet = false }) {
+    if (projectSheet) ProjectSheet(projects, state.project?.id, onDismiss = { projectSheet = false },
+        onCreate = actions.createProject) {
         actions.chooseProject(it); projectSheet = false
     }
     if (reasoningSheet) ReasoningSheet(catalog, reasoning, onDismiss = { reasoningSheet = false }) { actions.setReasoning(it); reasoningSheet = false }
@@ -908,8 +911,13 @@ internal fun ModelSheet(
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun ProjectSheet(projects: List<ProjectRef>, current: String?, onDismiss: () -> Unit, onPick: (String?) -> Unit) {
+private fun ProjectSheet(
+    projects: List<ProjectRef>, current: String?, onDismiss: () -> Unit,
+    onCreate: (String, String, (String?) -> Unit) -> Unit, onPick: (String?) -> Unit,
+) {
     val sheet = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    var creating by remember { mutableStateOf(false) }
+    if (creating) NewProjectDialog(onDismiss = { creating = false }, onCreate = onCreate, onCreated = { creating = false; onDismiss() })
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheet, containerColor = MaterialTheme.colorScheme.surfaceContainer) {
         Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
             Text("Project", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
@@ -917,6 +925,7 @@ private fun ProjectSheet(projects: List<ProjectRef>, current: String?, onDismiss
                 style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             Spacer(Modifier.size(12.dp))
             LazyColumn(Modifier.fillMaxWidth().heightIn(max = 520.dp), contentPadding = PaddingValues(bottom = 24.dp)) {
+                item { SheetOption("+ New project", "Create one on the PC from a folder", selected = false) { creating = true } }
                 item { SheetOption("No project", "Hermes' default folder", selected = current == null) { onPick(null) } }
                 items(projects, key = { it.id }) { p ->
                     SheetOption(p.label, p.path, selected = current == p.id) { onPick(p.id) }
@@ -924,6 +933,37 @@ private fun ProjectSheet(projects: List<ProjectRef>, current: String?, onDismiss
             }
         }
     }
+}
+
+/** Name + PC folder for `projects.create`. The folder is a path on the PC, e.g. ~/Workspace/my-app. */
+@Composable
+private fun NewProjectDialog(onDismiss: () -> Unit, onCreate: (String, String, (String?) -> Unit) -> Unit, onCreated: () -> Unit) {
+    var name by remember { mutableStateOf("") }
+    var path by remember { mutableStateOf("") }
+    var busy by remember { mutableStateOf(false) }
+    var error by remember { mutableStateOf<String?>(null) }
+    AlertDialog(
+        onDismissRequest = { if (!busy) onDismiss() },
+        title = { Text("New project") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(name, { name = it; error = null }, label = { Text("Name") }, singleLine = true,
+                    placeholder = { Text("My app") }, modifier = Modifier.fillMaxWidth())
+                OutlinedTextField(path, { path = it; error = null }, label = { Text("Folder on the PC") }, singleLine = true,
+                    placeholder = { Text("~/Workspace/my-app") }, modifier = Modifier.fillMaxWidth())
+                Text("A path on the PC, e.g. ~/Workspace/my-app. New chats in this project start there.",
+                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                error?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error) }
+            }
+        },
+        confirmButton = {
+            TextButton(enabled = !busy && name.isNotBlank() && path.isNotBlank(), onClick = {
+                busy = true
+                onCreate(name, path) { err -> busy = false; if (err == null) onCreated() else error = err }
+            }) { Text(if (busy) "Creating…" else "Create") }
+        },
+        dismissButton = { TextButton(enabled = !busy, onClick = onDismiss) { Text("Cancel") } },
+    )
 }
 
 private val effortHints = mapOf(

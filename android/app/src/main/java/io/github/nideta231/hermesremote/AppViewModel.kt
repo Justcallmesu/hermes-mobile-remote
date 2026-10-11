@@ -955,6 +955,28 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
         _chat.update { it.copy(project = project) }
     }
 
+    /**
+     * Creates a Hermes project on the PC (`projects.create`, same as the desktop's "New project") with
+     * [path] as its primary folder, then selects it for the new chat. [done] gets null on success, else the error.
+     */
+    fun createProject(name: String, path: String, done: (String?) -> Unit) {
+        viewModelScope.launch {
+            val g = gateway
+            if (g == null || g.state.value != GatewayState.OPEN) { done("Not connected to the PC."); return@launch }
+            val params = JSONObject().put("name", name.trim())
+            if (path.isNotBlank()) params.put("primary_path", path.trim())
+            val result = runCatching { g.call("projects.create", params, 15_000) }
+            result.exceptionOrNull()?.let { t ->
+                if (t is CancellationException) throw t
+                done(describe(t)); return@launch
+            }
+            val id = result.getOrNull()?.optJSONObject("project")?.str("id")
+            refreshProjects()
+            if (id != null) chooseProject(id)
+            done(null)
+        }
+    }
+
     /** Save unsent composer text. Called on every keystroke; cheap enough to be synchronous. */
     fun setDraft(text: String) {
         drafts.put(_chat.value.sessionId, text)

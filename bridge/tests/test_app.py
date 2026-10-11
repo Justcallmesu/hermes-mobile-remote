@@ -247,6 +247,13 @@ def test_frame_filter():
     for method in ("cli.exec", "process.stop", "mcp.servers.add", "profiles.configure", "display.start"):
         ok, err = check_frame(json.dumps({"jsonrpc": "2.0", "id": 2, "method": method}), 1000)
         assert ok is None and json.loads(err)["error"]["code"] == -32601
+    # The phone may list and create projects ("New project"), nothing more of projects.*.
+    for method in ("projects.tree", "projects.create"):
+        ok, err = check_frame(json.dumps({"jsonrpc": "2.0", "id": 5, "method": method,
+                                          "params": {"name": "x", "primary_path": "~/x"}}), 1000)
+        assert ok and err is None
+    ok, err = check_frame(json.dumps({"jsonrpc": "2.0", "id": 6, "method": "projects.delete"}), 1000)
+    assert ok is None and json.loads(err)["error"]["code"] == -32601
     # config.set only for the chat's own settings.
     ok, err = check_frame(json.dumps({"jsonrpc": "2.0", "id": 3, "method": "config.set",
                                       "params": {"key": "model", "value": "x"}}), 1000)
