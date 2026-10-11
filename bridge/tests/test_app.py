@@ -205,6 +205,38 @@ def test_approval_mode_get_set_and_validation(tmp_path):
     assert c.put("/v1/settings/approvals", json={"mode": "manual"}).status_code == 401
 
 
+def test_default_model_setting(env):
+    cfg, store, token, calls, _ = env
+    state = {"model": "claude-opus", "provider": "anthropic"}
+
+    def handler(request: httpx.Request):
+        calls.append(request)
+        if request.url.path == "/api/model/info":
+            return httpx.Response(200, json=dict(state))
+        if request.url.path == "/api/model/set":
+            body = json.loads(request.content)
+            if body["model"] == "pricey" and not body["confirm_expensive_model"]:
+                return httpx.Response(200, json={"confirm_required": True, "confirm_message": "costly"})
+            state.update(model=body["model"], provider=body["provider"])
+            return httpx.Response(200, json={"ok": True})
+        return httpx.Response(404)
+
+    http = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    app = create_app(cfg, locator=FakeLocator(), http=http, tailnet=FakeTailnet({PHONE: "me@example.com"}),
+                     devices=store, owner_login="me@example.com")
+    c = client(app, PHONE)
+    assert c.get("/v1/settings/model", headers=auth(token)).json() == {"model": "claude-opus", "provider": "anthropic"}
+    r = c.put("/v1/settings/model", headers=auth(token), json={"model": "gpt-5", "provider": "openai"})
+    assert r.json() == {"model": "gpt-5", "provider": "openai"}
+    sent = json.loads(next(q for q in calls if q.url.path == "/api/model/set").content)
+    assert sent["scope"] == "main"
+    r = c.put("/v1/settings/model", headers=auth(token), json={"model": "pricey"})
+    assert r.json()["confirm_required"] is True and state["model"] == "gpt-5"
+    r = c.put("/v1/settings/model", headers=auth(token), json={"model": "pricey", "confirm_expensive_model": True})
+    assert r.json()["model"] == "pricey"
+    assert c.put("/v1/settings/model", json={"model": "x"}).status_code == 401
+
+
 # ---------------------------------------------------------------- the live relay
 
 def test_frame_filter():

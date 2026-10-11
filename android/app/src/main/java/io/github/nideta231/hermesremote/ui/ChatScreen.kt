@@ -213,9 +213,9 @@ fun ChatScreen(
             onProject = if (state.sessionId == null && projects.isNotEmpty()) ({ projectSheet = true }) else null)
     }
 
-    if (modelSheet) ModelSheet(catalog, model, state.sessionId == null, onDismiss = { modelSheet = false }) {
+    if (modelSheet) ModelSheet(catalog, model, state.sessionId == null, onDismiss = { modelSheet = false }, onPick = {
         actions.chooseModel(it, false); modelSheet = false
-    }
+    })
     if (projectSheet) ProjectSheet(projects, state.project?.id, onDismiss = { projectSheet = false }) {
         actions.chooseProject(it); projectSheet = false
     }
@@ -840,12 +840,15 @@ private fun SendButton(state: ChatState, text: String, onSend: () -> Unit, onSto
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun ModelSheet(catalog: ModelCatalog?, current: ModelOption?, newChat: Boolean, onDismiss: () -> Unit, onPick: (ModelOption?) -> Unit) {
+internal fun ModelSheet(
+    catalog: ModelCatalog?, current: ModelOption?, newChat: Boolean, onDismiss: () -> Unit, onPick: (ModelOption?) -> Unit,
+    title: String = "Model", subtitle: String? = null, offerHermesDefault: Boolean = newChat,
+) {
     val sheet = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheet, containerColor = MaterialTheme.colorScheme.surfaceContainer) {
         Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
-            Text("Model", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
-            Text(if (newChat) "Used by the chat you start next." else "Switches this chat, here and on the desktop.",
+            Text(title, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
+            Text(subtitle ?: if (newChat) "Used by the chat you start next." else "Switches this chat, here and on the desktop.",
                 style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             Spacer(Modifier.size(12.dp))
             if (catalog == null) {
@@ -861,7 +864,7 @@ private fun ModelSheet(catalog: ModelCatalog?, current: ModelOption?, newChat: B
                 }.groupBy { it.providerName }
             }
             LazyColumn(Modifier.fillMaxWidth().heightIn(max = 520.dp), contentPadding = PaddingValues(bottom = 24.dp)) {
-                if (newChat) item {
+                if (offerHermesDefault) item {
                     SheetOption("Hermes default", "Whatever Hermes is configured to use", selected = current == null) { onPick(null) }
                 }
                 groups.forEach { (provider, options) ->

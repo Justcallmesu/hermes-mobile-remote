@@ -1,11 +1,15 @@
 package io.github.nideta231.hermesremote.ui
 
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.draw.drawBehind
 import android.net.Uri
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.border
+import io.github.nideta231.hermesremote.data.ModelCatalog
+import io.github.nideta231.hermesremote.data.ModelOption
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.draw.rotate
 import androidx.compose.animation.animateContentSize
@@ -17,6 +21,7 @@ import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
@@ -219,14 +224,16 @@ fun SessionsPane(
                     val ck = collapseKey(group.key)
                     val closed = query.isBlank() && ck in collapsedKeys
                     item(key = "g-${group.key}") {
-                        GroupHeader(group.label, group.items.size, closed, Modifier.animateItem()) {
+                        GroupHeader(group.label, group.items.size, closed, Modifier.animateItem(),
+                            project = view.grouping == SessionGrouping.PROJECT && group.label != "Pinned",
+                            live = page.group.items.count { state.live[it.id] != null }) {
                             collapsedKeys = ArrayList(if (ck in collapsedKeys) collapsedKeys - ck else collapsedKeys + ck)
                         }
                     }
                     if (!closed) {
                         items(page.items, key = { it.id }) { s ->
                             SessionRow(s, current = s.id == currentId, live = state.live[s.id],
-                                modifier = Modifier.animateItem(),
+                                modifier = Modifier.animateItem(), nested = view.grouping == SessionGrouping.PROJECT,
                                 onClick = { actions.open(s.id) }, onLongClick = { menuFor = s })
                         }
                         if (page.remaining > 0) item(key = "more-${group.key}") {
@@ -409,11 +416,36 @@ private fun ShowMoreRow(remaining: Int, modifier: Modifier, onClick: () -> Unit)
     }
 }
 
-/** Tappable group header: label, count and a chevron that turns when the group is collapsed. */
+/**
+ * Tappable group header: label, count and a chevron that turns when the group is collapsed.
+ * Project groups get a folder card in sentence case so each project stands out from its chats;
+ * date/status groups stay as quiet uppercase labels.
+ */
 @Composable
-private fun GroupHeader(label: String, count: Int, collapsed: Boolean, modifier: Modifier, onToggle: () -> Unit) {
+private fun GroupHeader(label: String, count: Int, collapsed: Boolean, modifier: Modifier,
+                        project: Boolean = false, live: Int = 0, onToggle: () -> Unit) {
     val angle by animateFloatAsState(if (collapsed) -90f else 0f, label = "chevron")
-    Row(modifier.fillMaxWidth().padding(top = 4.dp).clip(RoundedCornerShape(10.dp)).clickable(onClick = onToggle)
+    if (project) {
+        Row(modifier.fillMaxWidth().padding(top = 10.dp, bottom = 2.dp).clip(RoundedCornerShape(12.dp))
+            .background(MaterialTheme.colorScheme.surfaceContainerHigh).clickable(onClick = onToggle)
+            .padding(start = 12.dp, end = 10.dp, top = 10.dp, bottom = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+            Icon(Glyphs.Folder, null, tint = Gold, modifier = Modifier.size(18.dp))
+            Spacer(Modifier.width(10.dp))
+            Text(label, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onSurface, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f, fill = false))
+            Spacer(Modifier.width(8.dp))
+            Text("$count", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.clip(RoundedCornerShape(50)).background(MaterialTheme.colorScheme.surfaceContainerHighest)
+                    .padding(horizontal = 7.dp, vertical = 1.dp))
+            if (live > 0) { Spacer(Modifier.width(6.dp)); StatusDot(Gold, pulse = true) }
+            Spacer(Modifier.weight(1f))
+            Icon(Glyphs.Chevron, if (collapsed) "Expand $label" else "Collapse $label", modifier = Modifier.size(18.dp).rotate(angle),
+                tint = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        return
+    }
+    Row(modifier.fillMaxWidth().padding(top = 8.dp).clip(RoundedCornerShape(10.dp)).clickable(onClick = onToggle)
         .padding(start = 12.dp, end = 8.dp, top = 6.dp, bottom = 6.dp), verticalAlignment = Alignment.CenterVertically) {
         // Label and count share the weighted slot, so every chevron lines up on the right edge.
         Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
@@ -428,11 +460,18 @@ private fun GroupHeader(label: String, count: Int, collapsed: Boolean, modifier:
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun SessionRow(s: SessionSummary, current: Boolean, live: String?, modifier: Modifier, onClick: () -> Unit, onLongClick: () -> Unit) {
+private fun SessionRow(s: SessionSummary, current: Boolean, live: String?, modifier: Modifier, nested: Boolean = false,
+                       onClick: () -> Unit, onLongClick: () -> Unit) {
     val haptics = LocalHapticFeedback.current
     val bg by animateColorAsState(if (current) Gold.copy(alpha = 0.13f) else Color.Transparent, label = "row")
     // Same cue as the desktop sidebar: a working session shimmers, one waiting for you pulses amber.
-    Row(modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(bg).shimmer(live != null, if (live == "waiting") Warn else Gold)
+    // Chats inside a project sit indented on a guide line, so it's clear which project they belong to.
+    val guide = MaterialTheme.colorScheme.outlineVariant
+    Row(modifier.fillMaxWidth()
+        .then(if (nested) Modifier.padding(start = 14.dp).drawBehind {
+            drawLine(guide, Offset(-6.dp.toPx(), 0f), Offset(-6.dp.toPx(), size.height), strokeWidth = 1.5.dp.toPx())
+        } else Modifier)
+        .clip(RoundedCornerShape(14.dp)).background(bg).shimmer(live != null, if (live == "waiting") Warn else Gold)
         .combinedClickable(onClick = onClick, onLongClick = { haptics.performHapticFeedback(HapticFeedbackType.LongPress); onLongClick() })
         .padding(horizontal = 12.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
         Column(Modifier.weight(1f)) {
@@ -560,6 +599,9 @@ class SettingsActions(
     val installUpdate: () -> Unit,
     val openUpdate: () -> Unit = {},
     val openChangelog: () -> Unit = {},
+    val loadModels: () -> Unit = {},
+    val setDefaultModel: (ModelOption, Boolean) -> Unit = { _, _ -> },
+    val dismissDefaultConfirm: () -> Unit = {},
 )
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -571,8 +613,10 @@ fun SettingsScreen(
     update: UpdateState,
     actions: SettingsActions,
     onBack: (() -> Unit)?,
+    models: ModelCatalog? = null,
 ) {
     var confirmUnpair by remember { mutableStateOf(false) }
+    var modelSheet by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) { actions.refresh() }
     PageScaffold("Settings", onBack) {
         PullToRefreshBox(isRefreshing = state.loading, onRefresh = actions.refresh, modifier = Modifier.fillMaxSize()) {
@@ -585,12 +629,16 @@ fun SettingsScreen(
                 StatusPanel(state)
                 SectionLabel("Command approvals")
                 ApprovalPanel(state, actions.setApprovalMode)
+                SectionLabel("Default model")
+                DefaultModelPanel(state, models) { actions.loadModels(); modelSheet = true }
+                SectionLabel("Appearance")
+                ThemePanel()
                 SectionLabel("This device")
                 Panel {
                     PanelRow("App version", update.installed.ifBlank { "?" }, Glyphs.Download, onClick = actions.checkUpdate) {
                         when {
                             update.checking -> TypingDots()
-                            update.available != null -> Pill("Update", tint = Color.Black, container = Gold, onClick = actions.openUpdate)
+                            update.available != null -> Pill("Update", tint = MaterialTheme.colorScheme.onPrimary, container = Gold, onClick = actions.openUpdate)
                             update.checkedAt != null -> Text("Up to date", style = MaterialTheme.typography.labelMedium, color = Ok)
                             else -> Text("Check", style = MaterialTheme.typography.labelMedium, color = Gold)
                         }
@@ -611,6 +659,19 @@ fun SettingsScreen(
             text = { Text("Removes the token from this phone. Also run `hermes-remote-bridge revoke ${pairing?.device ?: "<name>"}` on the PC to invalidate it there.") },
             confirmButton = { TextButton(onClick = { confirmUnpair = false; actions.unpair() }) { Text("Unpair", color = Bad) } },
             dismissButton = { TextButton(onClick = { confirmUnpair = false }) { Text("Cancel") } })
+    }
+    if (modelSheet) {
+        val current = models?.options?.firstOrNull { it.id == state.defaultModel && it.provider == state.defaultProvider }
+        ModelSheet(models, current, newChat = true, onDismiss = { modelSheet = false },
+            onPick = { o -> modelSheet = false; if (o != null) actions.setDefaultModel(o, false) },
+            title = "Default model", subtitle = "Hermes uses it for every new chat: here, on the desktop and in messaging.",
+            offerHermesDefault = false)
+    }
+    state.defaultConfirm?.let { c ->
+        AlertDialog(onDismissRequest = actions.dismissDefaultConfirm, title = { Text("Make ${c.option.label} the default?") },
+            text = { Text(c.message) },
+            confirmButton = { TextButton(onClick = { actions.setDefaultModel(c.option, true) }) { Text("Use it") } },
+            dismissButton = { TextButton(onClick = actions.dismissDefaultConfirm) { Text("Cancel") } })
     }
 }
 
@@ -761,6 +822,49 @@ private fun ApprovalPanel(state: SystemState, onPick: (String) -> Unit) {
             }, style = MaterialTheme.typography.bodySmall,
                 color = if (m?.first == "off") Bad else MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(start = 16.dp, end = 16.dp, bottom = 14.dp))
+        }
+    }
+}
+
+@Composable
+private fun DefaultModelPanel(state: SystemState, models: ModelCatalog?, onOpen: () -> Unit) {
+    val label = models?.options?.firstOrNull { it.id == state.defaultModel && it.provider == state.defaultProvider }?.label
+        ?: state.defaultModel.substringAfterLast('/').ifBlank { null }
+    Panel {
+        PanelRow(label ?: "Unknown", when {
+            state.defaultSaving -> "Saving…"
+            state.defaultProvider.isNotBlank() -> "${state.defaultProvider} · used by every new chat, on the desktop too"
+            else -> "Used by every new chat, on the desktop too"
+        }, onClick = onOpen) {
+            Text("Change", style = MaterialTheme.typography.labelMedium, color = Gold)
+        }
+    }
+}
+
+@Composable
+private fun ThemePanel() {
+    val current = ThemePrefs.current
+    Panel {
+        Text("Only changes this phone.", style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 10.dp))
+        Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 12.dp, vertical = 12.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            AppTheme.entries.forEach { t ->
+                val selected = t == current
+                Column(horizontalAlignment = Alignment.CenterHorizontally,
+                    modifier = Modifier.clip(RoundedCornerShape(14.dp)).clickable { ThemePrefs.set(t) }.padding(6.dp).width(64.dp)) {
+                    val bg = t.scheme.background
+                    Box(Modifier.size(44.dp).clip(CircleShape).background(bg)
+                        .border(if (selected) 3.dp else 1.dp, if (selected) t.accent else MaterialTheme.colorScheme.outline, CircleShape),
+                        contentAlignment = Alignment.Center) {
+                        Box(Modifier.size(18.dp).clip(CircleShape).background(t.accent))
+                    }
+                    Spacer(Modifier.size(6.dp))
+                    Text(t.label.substringBefore(" ("), style = MaterialTheme.typography.labelSmall, maxLines = 1,
+                        color = if (selected) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant,
+                        fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal)
+                }
+            }
         }
     }
 }

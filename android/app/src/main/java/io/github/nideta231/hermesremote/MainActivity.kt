@@ -8,6 +8,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.SystemBarStyle
 import androidx.activity.result.contract.ActivityResultContracts.GetContent
 import androidx.activity.result.contract.ActivityResultContracts.RequestPermission
 import androidx.activity.viewModels
@@ -56,6 +57,8 @@ import io.github.nideta231.hermesremote.data.Notifier
 import io.github.nideta231.hermesremote.ui.ChatActions
 import io.github.nideta231.hermesremote.ui.ChatScreen
 import io.github.nideta231.hermesremote.ui.HermesTheme
+import io.github.nideta231.hermesremote.ui.ThemePrefs
+import io.github.nideta231.hermesremote.ui.AppTheme
 import io.github.nideta231.hermesremote.ui.PairScreen
 import io.github.nideta231.hermesremote.ui.SessionActions
 import io.github.nideta231.hermesremote.ui.SessionsPane
@@ -112,7 +115,16 @@ class MainActivity : ComponentActivity() {
         Notifier.ensureChannels(this)
         // Upgrades never pass through pairing, so ask here too. Android stops prompting after two declines.
         if (vm.pairing.value != null) askForNotifications()
-        setContent { HermesTheme { Surface(color = MaterialTheme.colorScheme.background) { App() } } }
+        ThemePrefs.init(this)
+        setContent {
+            val theme = ThemePrefs.current
+            LaunchedEffect(theme) {
+                val bars = if (theme.dark) SystemBarStyle.dark(android.graphics.Color.TRANSPARENT)
+                    else SystemBarStyle.light(android.graphics.Color.TRANSPARENT, android.graphics.Color.TRANSPARENT)
+                enableEdgeToEdge(statusBarStyle = bars, navigationBarStyle = bars)
+            }
+            HermesTheme { Surface(color = MaterialTheme.colorScheme.background) { App() } }
+        }
     }
 
     /** Android 13+ gates notifications behind a runtime permission; below that they are on. */
@@ -240,6 +252,7 @@ class MainActivity : ComponentActivity() {
             useTransport = vm::useTransport, useAuto = vm::useAutoTransport,
             checkUpdate = { vm.checkForUpdate() }, installUpdate = vm::installUpdate,
             openUpdate = { updateSheet = true }, openChangelog = { changelogSheet = true },
+            loadModels = vm::loadModels, setDefaultModel = vm::setDefaultModel, dismissDefaultConfirm = vm::dismissDefaultConfirm,
         )
         val openUpdate = { scope.launch { drawer.close() }; updateSheet = true }
 
@@ -256,7 +269,7 @@ class MainActivity : ComponentActivity() {
                             openModelPicker, confirm, showMenuButton = !wide, actions = chatActions,
                             update = update, onOpenUpdate = openUpdate, onDismissUpdate = vm::dismissUpdateBanner,
                             projects = sessions.projects.filter { it.path != null })
-                        Page.SETTINGS -> SettingsScreen(system, pairing, conn, update, settingsActions, onBack = { page = Page.CHAT })
+                        Page.SETTINGS -> SettingsScreen(system, pairing, conn, update, settingsActions, onBack = { page = Page.CHAT }, models = models)
                     }
                 }
                 SnackbarHost(snack, Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(bottom = 72.dp))

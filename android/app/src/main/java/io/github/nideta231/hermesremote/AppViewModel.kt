@@ -133,6 +133,12 @@ data class SystemState(
     val checkedAt: Long? = null,
     val approvalMode: String? = null,
     val approvalSaving: Boolean = false,
+    /** Hermes' default model for new chats ("" when unknown or the bridge is too old). */
+    val defaultModel: String = "",
+    val defaultProvider: String = "",
+    val defaultSaving: Boolean = false,
+    /** Set while Hermes asks to confirm an expensive default. */
+    val defaultConfirm: ModelConfirm? = null,
 )
 
 data class UpdateState(
@@ -1396,7 +1402,12 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
             try {
                 val comps = c.status()
                 val mode = runCatching { c.approvalMode() }.getOrNull()
-                _system.update { SystemState(comps, false, null, System.currentTimeMillis(), mode ?: it.approvalMode) }
+                val def = runCatching { c.defaultModel() }.getOrNull()
+                _system.update {
+                    it.copy(components = comps, loading = false, error = null, checkedAt = System.currentTimeMillis(),
+                        approvalMode = mode ?: it.approvalMode,
+                        defaultModel = def?.first ?: it.defaultModel, defaultProvider = def?.second ?: it.defaultProvider)
+                }
             } catch (t: Throwable) {
                 if (t is CancellationException) throw t
                 _system.update { it.copy(loading = false, error = describe(t), checkedAt = System.currentTimeMillis()) }
@@ -1419,6 +1430,34 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
             }
         }
     }
+
+    /** Change Hermes' profile default model: every NEW chat (desktop, messaging, this app) uses it. */
+    fun setDefaultModel(option: ModelOption, confirmed: Boolean = false) {
+        val c = client ?: return
+        if (_system.value.defaultSaving) return
+        _system.update { it.copy(defaultSaving = true, defaultConfirm = null) }
+        viewModelScope.launch {
+            try {
+                val res = c.setDefaultModel(option.id, option.provider, confirmed)
+                if (res.optBoolean("confirm_required")) {
+                    val msg = res.optString("confirm_message").ifBlank { "This model is expensive. Make it the default anyway?" }
+                    _system.update { it.copy(defaultSaving = false, defaultConfirm = ModelConfirm(option, msg)) }
+                    return@launch
+                }
+                _system.update { it.copy(defaultSaving = false, defaultModel = res.optString("model", option.id),
+                    defaultProvider = res.optString("provider", option.provider)) }
+                _models.update { cat -> cat?.copy(options = cat.options.map { o ->
+                    o.copy(current = o.id == option.id && o.provider == option.provider) }) }
+                _toast.value = "New chats now use ${option.label}"
+            } catch (t: Throwable) {
+                if (t is CancellationException) throw t
+                _system.update { it.copy(defaultSaving = false) }
+                say(t)
+            }
+        }
+    }
+
+    fun dismissDefaultConfirm() = _system.update { it.copy(defaultConfirm = null) }
 
     private companion object {
         /** Bridge protocol this app speaks (the WebSocket relay). */

@@ -175,7 +175,8 @@ fun PanelRow(
  * A soft light band sweeping left to right across the content: the desktop sidebar's "working"
  * row. Drawn over the content, so text stays readable and nothing re-lays out.
  */
-fun Modifier.shimmer(active: Boolean, color: Color = Gold): Modifier = if (!active) this else composed {
+fun Modifier.shimmer(active: Boolean, tint: Color? = null): Modifier = if (!active) this else composed {
+    val color = tint ?: Gold
     val t = rememberInfiniteTransition(label = "shimmer")
     val x by t.animateFloat(-0.4f, 1.4f, infiniteRepeatable(tween(1500, easing = LinearEasing), RepeatMode.Restart), label = "x")
     drawWithContent {

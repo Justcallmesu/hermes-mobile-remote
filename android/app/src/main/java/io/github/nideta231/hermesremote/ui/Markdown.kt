@@ -261,7 +261,7 @@ private fun AnnotatedString.Builder.appendInline(s: String) {
         append(s.substring(i, m.range.first))
         when {
             m.groups[1] != null -> withStyle(SpanStyle(fontWeight = FontWeight.Bold)) { append(m.groupValues[1]) }
-            m.groups[2] != null -> withStyle(SpanStyle(fontFamily = FontFamily.Monospace, background = Color(0xFF2A2D35), fontSize = 13.sp)) { append(m.groupValues[2]) }
+            m.groups[2] != null -> withStyle(SpanStyle(fontFamily = FontFamily.Monospace, background = Color(0x33808080), fontSize = 13.sp)) { append(m.groupValues[2]) }
             else -> withStyle(SpanStyle(fontStyle = FontStyle.Italic)) { append(m.groupValues[3]) }
         }
         i = m.range.last + 1

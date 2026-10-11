@@ -123,6 +123,15 @@ class BridgeClient(
     suspend fun setApprovalMode(mode: String): String =
         call("PUT", "/v1/settings/approvals", body = JSONObject().put("mode", mode)).getString("mode")
 
+    /** Hermes' profile default model (new chats); null on bridges older than this route. */
+    suspend fun defaultModel(): Pair<String, String> =
+        call("GET", "/v1/settings/model").let { it.optString("model") to it.optString("provider") }
+
+    /** Returns the bridge's reply: either the applied model or `confirm_required` + `confirm_message`. */
+    suspend fun setDefaultModel(model: String, provider: String, confirmed: Boolean): JSONObject =
+        call("PUT", "/v1/settings/model", body = JSONObject().put("model", model).put("provider", provider)
+            .put("confirm_expensive_model", confirmed))
+
     private fun enc(s: String) = URLEncoder.encode(s, "UTF-8").replace("+", "%20")
 }
 

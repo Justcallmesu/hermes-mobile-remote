@@ -67,6 +67,12 @@ class SetApprovalMode(BaseModel):
     mode: str = Field(max_length=16)
 
 
+class SetDefaultModel(BaseModel):
+    model: str = Field(min_length=1, max_length=200)
+    provider: str = Field(default="", max_length=100)
+    confirm_expensive_model: bool = False
+
+
 class RateLimiter:
     def __init__(self) -> None:
         self._hits: dict[str, deque] = defaultdict(deque)
@@ -341,6 +347,27 @@ def create_app(cfg: Config, *, locator: BackendLocator | None = None, tailnet: T
             raise ApiError(502, "not_applied", f"Hermes still reports approvals.mode={after}")
         audit_event({"event": "approval_mode_changed", "device": device.name, "from": before, "to": after})
         return {"mode": after, "modes": list(APPROVAL_MODES)}
+
+    @app.get("/v1/settings/model")
+    async def get_default_model(_: Device = Depends(device_auth)):
+        info = await hermes_http("GET", "/api/model/info")
+        return {"model": info.get("model") or "", "provider": info.get("provider") or ""}
+
+    @app.put("/v1/settings/model")
+    async def set_default_model(body: SetDefaultModel, device: Device = Depends(device_auth)):
+        """The profile default for NEW chats (Hermes' own /api/model/set, scope=main).
+        Open chats keep their model; they switch per session over the live connection."""
+        res = await hermes_http("POST", "/api/model/set", json={
+            "scope": "main", "model": body.model, "provider": body.provider,
+            "confirm_expensive_model": body.confirm_expensive_model})
+        if res.get("confirm_required"):
+            return {"confirm_required": True, "confirm_message": res.get("confirm_message") or "",
+                    "model": body.model, "provider": body.provider}
+        if res.get("ok") is False:
+            raise ApiError(502, "not_applied", str(res.get("error") or res.get("detail") or "Hermes refused the model"))
+        info = await hermes_http("GET", "/api/model/info")
+        audit_event({"event": "default_model_changed", "device": device.name, "to": info.get("model")})
+        return {"model": info.get("model") or body.model, "provider": info.get("provider") or body.provider}
 
     # ------------------------------------------------------------ the live connection
 
