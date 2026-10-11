@@ -75,6 +75,19 @@ The app picks the best path on its own. You only need to care when it cannot.
 - **If the PC's IP changes,** the app finds it again over mDNS without re-pairing. On the PC side,
   network changes are picked up within about 5 seconds.
 
+## Tray app (Linux)
+
+`install.sh` adds **Hermes Remote** to the app menu and, if you say yes, shows its tray icon at
+login. It is the Linux version of the Windows tray: a coloured dot for bridge health
+(green ok, amber warning, red failure, grey stopped), the doctor checks under **Details**,
+start/stop/restart, **Network** (trust or forget networks), **Devices** (pair with a QR, revoke),
+copying the log, the firewall fix, and **Start tray at login**.
+
+The bridge itself stays a systemd user service, so quitting the tray does not stop it. Start the
+tray by hand with `python3 bridge/linux/tray.py`. It needs PyQt6 (`sudo pacman -S python-pyqt6`,
+`sudo apt install python3-pyqt6` or `sudo dnf install python3-pyqt6`). GNOME also needs the
+*AppIndicator and KStatusNotifierItem Support* extension to show tray icons.
+
 ## Everyday commands
 
 ```bash
