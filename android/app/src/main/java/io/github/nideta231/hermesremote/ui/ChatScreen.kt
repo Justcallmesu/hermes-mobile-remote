@@ -104,6 +104,7 @@ import io.github.nideta231.hermesremote.ChatState
 import io.github.nideta231.hermesremote.ConnectionState
 import io.github.nideta231.hermesremote.Link
 import io.github.nideta231.hermesremote.ModelConfirm
+import io.github.nideta231.hermesremote.data.ProjectRef
 import io.github.nideta231.hermesremote.data.ChatItem
 import io.github.nideta231.hermesremote.data.LiveReducer
 import io.github.nideta231.hermesremote.data.ModelCatalog
@@ -131,6 +132,8 @@ class ChatActions(
     val dismissConfirm: () -> Unit,
     val setReasoning: (String?) -> Unit,
     val modelPickerOpened: () -> Unit,
+    /** New chat only: pick the project it starts in (null = no project). */
+    val chooseProject: (String?) -> Unit = {},
 )
 
 /** How the phone reaches the PC right now, reduced to what the top bar shows. */
@@ -158,8 +161,11 @@ fun ChatScreen(
     update: UpdateState? = null,
     onOpenUpdate: () -> Unit = {},
     onDismissUpdate: () -> Unit = {},
+    /** Projects a new chat can start in (only those with a folder). */
+    projects: List<ProjectRef> = emptyList(),
 ) {
     var modelSheet by remember { mutableStateOf(false) }
+    var projectSheet by remember { mutableStateOf(false) }
     var reasoningSheet by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) { if (catalog == null) actions.loadModels() }
     LaunchedEffect(openModelPicker) {
@@ -203,11 +209,15 @@ fun ChatScreen(
         SlashSuggestions(state, suggestions, actions.draft)
         Composer(state, catalog, model, reasoning, actions,
             onModel = { actions.loadModels(); modelSheet = true },
-            onReasoning = { actions.loadModels(); reasoningSheet = true })
+            onReasoning = { actions.loadModels(); reasoningSheet = true },
+            onProject = if (state.sessionId == null && projects.isNotEmpty()) ({ projectSheet = true }) else null)
     }
 
     if (modelSheet) ModelSheet(catalog, model, state.sessionId == null, onDismiss = { modelSheet = false }) {
         actions.chooseModel(it, false); modelSheet = false
+    }
+    if (projectSheet) ProjectSheet(projects, state.project?.id, onDismiss = { projectSheet = false }) {
+        actions.chooseProject(it); projectSheet = false
     }
     if (reasoningSheet) ReasoningSheet(catalog, reasoning, onDismiss = { reasoningSheet = false }) { actions.setReasoning(it); reasoningSheet = false }
     confirm?.let { c ->
@@ -735,6 +745,7 @@ private fun Composer(
     actions: ChatActions,
     onModel: () -> Unit,
     onReasoning: () -> Unit,
+    onProject: (() -> Unit)? = null,
 ) {
     val text = state.draft
     val haptics = LocalHapticFeedback.current
@@ -765,6 +776,12 @@ private fun Composer(
                             disabledContainerColor = Color.Transparent, focusedIndicatorColor = Color.Transparent,
                             unfocusedIndicatorColor = Color.Transparent, disabledIndicatorColor = Color.Transparent),
                     )
+                    if (onProject != null) {
+                        Row(Modifier.fillMaxWidth().padding(start = 10.dp, end = 10.dp, bottom = 2.dp)) {
+                            Pill(state.project?.label ?: "No project", Glyphs.Folder,
+                                tint = if (state.project != null) Gold else MaterialTheme.colorScheme.onSurfaceVariant, onClick = onProject)
+                        }
+                    }
                     Row(Modifier.fillMaxWidth().padding(start = 10.dp, end = 6.dp, bottom = 6.dp), verticalAlignment = Alignment.CenterVertically) {
                         val modelLabel = model?.label ?: catalog?.currentModel?.substringAfterLast('/') ?: "Model"
                         Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
@@ -856,6 +873,26 @@ private fun ModelSheet(catalog: ModelCatalog?, current: ModelOption?, newChat: B
                 }
                 if (groups.isEmpty()) item {
                     Text("No model matches “$query”.", color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(16.dp))
+                }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun ProjectSheet(projects: List<ProjectRef>, current: String?, onDismiss: () -> Unit, onPick: (String?) -> Unit) {
+    val sheet = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheet, containerColor = MaterialTheme.colorScheme.surfaceContainer) {
+        Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
+            Text("Project", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
+            Text("The new chat starts in this project's folder and shows under it on the desktop.",
+                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Spacer(Modifier.size(12.dp))
+            LazyColumn(Modifier.fillMaxWidth().heightIn(max = 520.dp), contentPadding = PaddingValues(bottom = 24.dp)) {
+                item { SheetOption("No project", "Hermes' default folder", selected = current == null) { onPick(null) } }
+                items(projects, key = { it.id }) { p ->
+                    SheetOption(p.label, p.path, selected = current == p.id) { onPick(p.id) }
                 }
             }
         }

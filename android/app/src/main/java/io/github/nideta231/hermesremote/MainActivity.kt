@@ -228,11 +228,12 @@ class MainActivity : ComponentActivity() {
         val chatActions = ChatActions(
             send = vm::send, stop = vm::stop, steer = vm::steer, approve = vm::answerApproval,
             answerClarify = vm::answerClarify, draft = vm::setDraft,
-            togglePin = vm::togglePin, newChat = vm::newChat,
+            togglePin = vm::togglePin, newChat = { vm.newChat() },
             openDrawer = { vm.refreshSessions(); scope.launch { drawer.open() } },
             openSettings = { go(Page.SETTINGS) },
             loadModels = vm::loadModels, chooseModel = vm::chooseModel, dismissConfirm = vm::dismissConfirm,
             setReasoning = vm::setReasoning, modelPickerOpened = vm::modelPickerOpened,
+            chooseProject = vm::chooseProject,
         )
         val settingsActions = SettingsActions(
             refresh = vm::refreshStatus, unpair = vm::unpair, setApprovalMode = vm::setApprovalMode,
@@ -253,7 +254,8 @@ class MainActivity : ComponentActivity() {
                     when (p) {
                         Page.CHAT -> ChatScreen(chat, health, models, vm.shownModel(models, chat), reasoning, suggestions,
                             openModelPicker, confirm, showMenuButton = !wide, actions = chatActions,
-                            update = update, onOpenUpdate = openUpdate, onDismissUpdate = vm::dismissUpdateBanner)
+                            update = update, onOpenUpdate = openUpdate, onDismissUpdate = vm::dismissUpdateBanner,
+                            projects = sessions.projects.filter { it.path != null })
                         Page.SETTINGS -> SettingsScreen(system, pairing, conn, update, settingsActions, onBack = { page = Page.CHAT })
                     }
                 }

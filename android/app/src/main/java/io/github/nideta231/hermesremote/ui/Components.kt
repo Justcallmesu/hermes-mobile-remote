@@ -101,6 +101,7 @@ object Glyphs {
     val Refresh = line("M20 11a8 8 0 1 0-2.3 5.7", "M20 4v7h-7")
     val Bolt = line("M13 2L4 14h7l-1 8 9-12h-7z")
     val Check = line("M5 12l5 5 9-10")
+    val Folder = line("M3 6h6l2 2h10v11H3z")
 }
 
 /** A status dot that breathes while [pulse] is on (live run, reconnecting). */

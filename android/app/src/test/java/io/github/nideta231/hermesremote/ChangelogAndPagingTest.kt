@@ -6,6 +6,7 @@ import io.github.nideta231.hermesremote.data.SessionView
 import io.github.nideta231.hermesremote.data.arrangeSessions
 import io.github.nideta231.hermesremote.data.changesBetween
 import io.github.nideta231.hermesremote.data.fullChangelog
+import io.github.nideta231.hermesremote.data.SESSION_PAGE
 import io.github.nideta231.hermesremote.data.pageGroups
 import io.github.nideta231.hermesremote.data.parseChangelog
 import io.github.nideta231.hermesremote.ui.MdBlock
@@ -81,6 +82,15 @@ class ChangelogAndPagingTest {
         val more = pageGroups(listOf(g), mapOf(g.key to 30), page = 15).single()
         assertEquals(30, more.items.size)
         assertEquals(10, more.remaining)
+    }
+
+    @Test fun defaultPagingShowsFiveThenTenMore() {
+        val g = SessionGroup("Today", (0 until 40).map { s("s$it") })
+        val first = pageGroups(listOf(g), emptyMap()).single()
+        assertEquals(5, first.items.size)
+        assertEquals(35, first.remaining)
+        val more = pageGroups(listOf(g), mapOf(g.key to first.items.size + SESSION_PAGE)).single()
+        assertEquals(15, more.items.size)
     }
 
     @Test fun theOpenChatIsNeverHiddenBehindShowMore() {

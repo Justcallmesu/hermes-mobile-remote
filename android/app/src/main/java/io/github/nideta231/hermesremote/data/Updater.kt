@@ -41,14 +41,27 @@ class Updater(private val context: Context, private val repo: String = REPO) {
     val installedVersion: String =
         runCatching { context.packageManager.getPackageInfo(context.packageName, 0).versionName }.getOrNull() ?: "0"
 
+    // Last answer and its ETag: a repeat check sends If-None-Match, and GitHub's 304 for an unchanged
+    // release does not count against the 60-requests-an-hour limit, so checking on every open is cheap.
+    @Volatile private var etag: String? = null
+    @Volatile private var lastRelease: AppUpdate? = null
+
     /** The latest release if it is newer than this build, else null. */
     suspend fun check(): AppUpdate? = runInterruptible(Dispatchers.IO) {
         val req = Request.Builder().url("https://api.github.com/repos/$repo/releases/latest")
-            .header("Accept", "application/vnd.github+json").build()
+            .header("Accept", "application/vnd.github+json")
+            .apply { etag?.let { header("If-None-Match", it) } }
+            .build()
         http.newCall(req).execute().use { r ->
-            if (r.code == 404) return@runInterruptible null  // no release published yet
-            if (!r.isSuccessful) throw IOException("GitHub answered ${r.code}")
-            parseRelease(JSONObject(r.body!!.string()))
+            when {
+                r.code == 304 -> lastRelease
+                r.code == 404 -> null  // no release published yet
+                !r.isSuccessful -> throw IOException("GitHub answered ${r.code}")
+                else -> parseRelease(JSONObject(r.body!!.string())).also {
+                    lastRelease = it
+                    etag = r.header("ETag")
+                }
+            }
         }?.takeIf { isNewer(it.version, installedVersion) }
     }
 

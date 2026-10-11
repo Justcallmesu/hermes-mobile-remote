@@ -87,6 +87,8 @@ data class ChatState(
     val reasoning: String? = null,
     /** Unsent composer text for this session; survives tab switches and process death. */
     val draft: String = "",
+    /** New chat only: the project it will be created in (its folder becomes the chat's working folder). */
+    val project: ProjectRef? = null,
 ) {
     val busy: Boolean get() = status != "idle"
     val waiting: Boolean get() = status == "waiting" || LiveReducer.openApproval(items) != null || LiveReducer.openClarify(items) != null
@@ -839,6 +841,7 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
         val params = JSONObject().put("source", "desktop").put("cols", 96).apply {
             choice?.let { put("model", it.id).put("provider", it.provider) }
             _reasoning.value?.let { put("reasoning_effort", it) }
+            _chat.value.project?.path?.let { put("cwd", it) }
         }
         val r = g.call("session.create", params, 60_000)
         val rid = r.getString("session_id")
@@ -906,7 +909,10 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
             val id = p.str("id") ?: return@mapNotNull null
             val ids = p.optJSONArray("sessionIds")
             val members = (0 until (ids?.length() ?: 0)).mapNotNull { ids?.optString(it)?.takeIf(String::isNotBlank) }.toSet()
-            ProjectRef(id, p.str("label") ?: id, members)
+            // Same root as desktop's projectRootCwd: the primary folder, else the first repo with one.
+            val path = p.str("path")?.takeIf(String::isNotBlank)
+                ?: p.optJSONArray("repos").objects().firstNotNullOfOrNull { r -> r.str("path")?.takeIf(String::isNotBlank) }
+            ProjectRef(id, p.str("label") ?: id, members, path)
         }
         if (projects != _sessions.value.projects) _sessions.update { it.copy(projects = projects) }
     }
@@ -927,11 +933,20 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
         }
     }
 
-    fun newChat() {
+    /** Starts a blank chat; with [project] it is created in that project, like desktop's "New session in". */
+    fun newChat(project: ProjectRef? = null) {
         openJob?.cancel()
         store.lastSessionId = null
-        _chat.value = ChatState(draft = drafts.get(null), link = _chat.value.link, reasoning = store.reasoningEffort)
+        _chat.value = ChatState(draft = drafts.get(null), link = _chat.value.link, reasoning = store.reasoningEffort,
+            project = project?.takeIf { it.path != null })
         _reasoning.value = store.reasoningEffort
+    }
+
+    /** Picks (or clears) the project of the new chat on screen. An opened chat keeps its folder. */
+    fun chooseProject(id: String?) {
+        if (_chat.value.sessionId != null) return
+        val project = id?.let { pid -> _sessions.value.projects.firstOrNull { it.id == pid && it.path != null } }
+        _chat.update { it.copy(project = project) }
     }
 
     /** Save unsent composer text. Called on every keystroke; cheap enough to be synchronous. */
@@ -1282,17 +1297,22 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
     private var lastUpdateCheck = 0L
 
     /**
-     * Automatic update checks while the app is on screen: at start and every [UPDATE_CHECK_EVERY].
-     * Opening the app again within that time does not ask GitHub again (its API is rate-limited).
+     * Automatic update checks: every time the app opens or comes back to the foreground, then every
+     * [UPDATE_CHECK_EVERY] while it stays on screen. Two opens within [UPDATE_CHECK_MIN_GAP] share
+     * one check; repeats are conditional requests (see [Updater.check]), so they stay off the rate limit.
      */
     private fun startUpdateChecks() {
         updateCheckJob?.cancel()
         updateCheckJob = viewModelScope.launch {
+            // Counted from the last attempt, failed ones too, so being offline never means a retry loop.
+            if (System.currentTimeMillis() - lastUpdateCheck >= UPDATE_CHECK_MIN_GAP) {
+                lastUpdateCheck = System.currentTimeMillis()
+                checkForUpdate(quiet = true)
+            }
             while (true) {
-                // Counted from the last attempt, failed ones too: offline must not mean a retry a minute.
-                val since = System.currentTimeMillis() - lastUpdateCheck
-                if (since >= UPDATE_CHECK_EVERY) { lastUpdateCheck = System.currentTimeMillis(); checkForUpdate(quiet = true) }
-                delay((UPDATE_CHECK_EVERY - since).coerceIn(60_000L, UPDATE_CHECK_EVERY))
+                delay(UPDATE_CHECK_EVERY)
+                lastUpdateCheck = System.currentTimeMillis()
+                checkForUpdate(quiet = true)
             }
         }
     }
@@ -1403,7 +1423,8 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
     private companion object {
         /** Bridge protocol this app speaks (the WebSocket relay). */
         const val MIN_BRIDGE_PROTOCOL = 2
-        const val UPDATE_CHECK_EVERY = 6 * 60 * 60 * 1000L
+        const val UPDATE_CHECK_EVERY = 60 * 60 * 1000L
+        const val UPDATE_CHECK_MIN_GAP = 60 * 1000L
         const val KEY_LAST_VERSION = "last_version"
         const val KEY_DISMISSED_UPDATE = "dismissed_update"
         /** The bridge caps one /v1/sessions page at 100. */

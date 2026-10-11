@@ -3,6 +3,16 @@
 Releases are git tags; the version in the app comes from the tag. `git log v0.9.0..vX.Y.Z` is the
 authoritative history — this file only summarises what is worth knowing before upgrading.
 
+## v1.7.0
+
+- New chat in a project: on a new chat, a "No project" pill above the model picks one of the
+  PC's projects. The chat starts in that project's folder and shows under it on the desktop.
+- Drawer groups now show 5 chats first, then 10 more per "Show more".
+- Updates are checked every time the app opens or comes back to the foreground (and hourly while
+  open). Repeat checks are conditional, so they don't eat GitHub's rate limit.
+- Thinking: Opus replies now carry their thinking text once the PC's Claude subscription plugin
+  is patched; the app shows it in the collapsible "Thought" block (no app change needed).
+
 ## v1.6.0
 
 - Messages you type on the PC now appear on the phone as soon as the turn starts, not only the

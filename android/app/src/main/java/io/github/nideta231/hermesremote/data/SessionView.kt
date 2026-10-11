@@ -20,8 +20,11 @@ enum class SessionStatus(val label: String, val order: Int) {
     WAITING("Needs input", 0), WORKING("Working", 1), UNREAD("Unread", 2), IDLE("Idle", 3)
 }
 
-/** A project from the backend's `projects.tree`; [sessionIds] is the membership desktop groups by. */
-data class ProjectRef(val id: String, val label: String, val sessionIds: Set<String>)
+/**
+ * A project from the backend's `projects.tree`; [sessionIds] is the membership desktop groups by.
+ * [path] is its working root (null for Home): a chat created there belongs to the project.
+ */
+data class ProjectRef(val id: String, val label: String, val sessionIds: Set<String>, val path: String? = null)
 
 data class SessionView(
     val grouping: SessionGrouping = SessionGrouping.DATE,
@@ -114,8 +117,11 @@ fun arrangeSessions(
     return if (pinned.isEmpty()) groups else listOf(SessionGroup("Pinned", pinned)) + groups
 }
 
-/** Chats a drawer group shows before "Show more", and how many each tap adds. */
-const val SESSION_PAGE = 15
+/** Chats a drawer group shows before "Show more". */
+const val SESSION_FIRST_PAGE = 5
+
+/** How many more chats each "Show more" tap adds. */
+const val SESSION_PAGE = 10
 
 /** A group as the drawer draws it: the first part of [group], and how many still wait behind "Show more". */
 data class GroupPage(val group: SessionGroup, val items: List<SessionSummary>, val remaining: Int)
@@ -126,7 +132,7 @@ data class GroupPage(val group: SessionGroup, val items: List<SessionSummary>, v
  * the groups the user expanded with "Show more" (group key -> rows). The open chat [currentId] is
  * never hidden behind "Show more".
  */
-fun pageGroups(groups: List<SessionGroup>, shown: Map<String, Int>, currentId: String? = null, page: Int = SESSION_PAGE): List<GroupPage> =
+fun pageGroups(groups: List<SessionGroup>, shown: Map<String, Int>, currentId: String? = null, page: Int = SESSION_FIRST_PAGE): List<GroupPage> =
     groups.map { g ->
         val current = currentId?.let { id -> g.items.indexOfFirst { it.id == id } } ?: -1
         val n = maxOf(shown[g.key] ?: page, current + 1).coerceAtMost(g.items.size)
