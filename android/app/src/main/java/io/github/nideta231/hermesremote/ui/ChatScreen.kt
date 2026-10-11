@@ -87,9 +87,6 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.isCtrlPressed
-import androidx.compose.ui.input.key.isShiftPressed
-import androidx.compose.ui.text.TextRange
-import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
@@ -765,35 +762,14 @@ private fun Composer(
         Column(Modifier.fillMaxWidth().navigationBarsPadding().padding(start = 10.dp, end = 10.dp, top = 6.dp, bottom = 8.dp)) {
             Surface(color = MaterialTheme.colorScheme.surfaceContainerHigh, shape = RoundedCornerShape(26.dp)) {
                 Column(Modifier.animateContentSize()) {
-                    // Local TextFieldValue so Shift+Enter can insert at the cursor; the draft String stays the
-                    // source of truth (the view model clears/restores it), so resync whenever it differs.
-                    var field by remember { mutableStateOf(TextFieldValue(text, TextRange(text.length))) }
-                    val shown = if (field.text == text) field else TextFieldValue(text, TextRange(text.length))
                     TextField(
-                        value = shown,
-                        onValueChange = { field = it; if (it.text != text) actions.draft(it.text) },
-                        // Hardware keyboard (tablet/desktop style): Enter sends, Shift+Enter inserts a newline,
-                        // Ctrl+Enter also sends. On-screen keyboards are left alone: their Enter stays a newline.
+                        value = text, onValueChange = actions.draft,
+                        // Hardware keyboard: Ctrl+Enter sends; Enter and Shift+Enter stay a newline.
                         modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp).onPreviewKeyEvent { e ->
                             val enter = e.key == Key.Enter || e.key == Key.NumPadEnter
-                            if (!enter) return@onPreviewKeyEvent false
-                            val hardware = e.nativeKeyEvent.device?.isVirtual == false
-                            when {
-                                e.isShiftPressed -> {
-                                    if (e.type == KeyEventType.KeyDown) {
-                                        val s = shown.selection
-                                        val next = shown.text.replaceRange(s.min, s.max, "\n")
-                                        field = TextFieldValue(next, TextRange(s.min + 1))
-                                        actions.draft(next)
-                                    }
-                                    true
-                                }
-                                e.isCtrlPressed || hardware -> {
-                                    if (e.type == KeyEventType.KeyDown && !state.sending && text.isNotBlank()) submit()
-                                    true
-                                }
-                                else -> false
-                            }
+                            if (!enter || !e.isCtrlPressed) return@onPreviewKeyEvent false
+                            if (e.type == KeyEventType.KeyDown && !state.sending && text.isNotBlank()) submit()
+                            true
                         },
                         placeholder = { Text(if (state.busy) "Steer the running task…" else "Message Hermes") },
                         maxLines = 7,

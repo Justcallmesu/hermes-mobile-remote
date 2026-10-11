@@ -3,6 +3,17 @@
 Releases are git tags; the version in the app comes from the tag. `git log v0.9.0..vX.Y.Z` is the
 authoritative history — this file only summarises what is worth knowing before upgrading.
 
+## v1.9.1
+
+- Enter on a hardware keyboard is a new line again (back to how it was before v1.9.0). Use the
+  send button to send.
+- The drawer shows 3 chats per date or project by default, like Hermes desktop, then "Show more".
+  Change it in Settings > Chat list (3, 5, 10 or All).
+- Settings regrouped into clear sections: Connection, Hermes on your PC, Appearance, Chat list,
+  About and This device. The accent grid is folded until you tap Accent.
+- Markdown: code fences are parsed line by line, so 4-backtick fences, ~~~ fences, indented
+  fences and inline triple backticks no longer break the rest of a message.
+
 ## v1.9.0
 
 - 30 accent colours, grouped by hue: several blues (sky, ocean, indigo, navy...), greens, reds,

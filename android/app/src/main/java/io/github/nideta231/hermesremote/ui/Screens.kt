@@ -104,6 +104,7 @@ import io.github.nideta231.hermesremote.data.SessionStatus
 import io.github.nideta231.hermesremote.data.SessionSummary
 import io.github.nideta231.hermesremote.data.SessionView
 import io.github.nideta231.hermesremote.data.SESSION_PAGE
+import io.github.nideta231.hermesremote.data.SESSION_FIRST_PAGE_CHOICES
 import io.github.nideta231.hermesremote.data.arrangeSessions
 import io.github.nideta231.hermesremote.data.pageGroups
 import io.github.nideta231.hermesremote.data.Transport
@@ -161,7 +162,8 @@ fun SessionsPane(
     // "Show more" per group: group key -> rows shown. Search, filters and paging are applied in that
     // order (see pageGroups), and a new query, view or PC starts every group back at one page.
     var shown by remember(query, view, pcs.firstOrNull { it.active }?.id) { mutableStateOf(mapOf<String, Int>()) }
-    val pages = remember(grouped, shown, currentId) { pageGroups(grouped, shown, currentId) }
+    val perGroup = ThemePrefs.sessionsPerGroup
+    val pages = remember(grouped, shown, currentId, perGroup) { pageGroups(grouped, shown, currentId, perGroup) }
 
     val haptics = LocalHapticFeedback.current
     Column(modifier.fillMaxHeight().statusBarsPadding().navigationBarsPadding()) {
@@ -627,32 +629,47 @@ fun SettingsScreen(
             Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).navigationBarsPadding()
                 .padding(horizontal = 16.dp, vertical = 4.dp)) {
                 UpdateBanner(update, actions.openUpdate)
-                SectionLabel("Connection")
-                ConnectionPanel(conn, state.error, actions)
-                SectionLabel("Your PC")
-                StatusPanel(state)
-                SectionLabel("Command approvals")
-                ApprovalPanel(state, actions.setApprovalMode)
-                SectionLabel("Default model")
-                DefaultModelPanel(state, models) { actions.loadModels(); modelSheet = true }
-                SectionLabel("Appearance")
-                ThemePanel()
-                SectionLabel("This device")
-                Panel {
-                    PanelRow("App version", update.installed.ifBlank { "?" }, Glyphs.Download, onClick = actions.checkUpdate) {
-                        when {
-                            update.checking -> TypingDots()
-                            update.available != null -> Pill("Update", tint = MaterialTheme.colorScheme.onPrimary, container = Gold, onClick = actions.openUpdate)
-                            update.checkedAt != null -> Text("Up to date", style = MaterialTheme.typography.labelMedium, color = Ok)
-                            else -> Text("Check", style = MaterialTheme.typography.labelMedium, color = Gold)
+                SettingsSection("Connection", "How this phone reaches your PC.") {
+                    ConnectionPanel(conn, state.error, actions)
+                }
+                SettingsSection("Hermes on your PC", "Shared with the desktop app and messaging.") {
+                    StatusPanel(state)
+                    Spacer(Modifier.size(10.dp))
+                    DefaultModelPanel(state, models) { actions.loadModels(); modelSheet = true }
+                    Spacer(Modifier.size(10.dp))
+                    ApprovalPanel(state, actions.setApprovalMode)
+                }
+                SettingsSection("Appearance", "Only changes this phone.") {
+                    ThemePanel()
+                }
+                SettingsSection("Chat list", "How the drawer lists your chats.") {
+                    DrawerPanel()
+                }
+                SettingsSection("About") {
+                    Panel {
+                        PanelRow("App version", update.installed.ifBlank { "?" }, Glyphs.Download, onClick = actions.checkUpdate) {
+                            when {
+                                update.checking -> TypingDots()
+                                update.available != null -> Pill("Update", tint = MaterialTheme.colorScheme.onPrimary, container = Gold, onClick = actions.openUpdate)
+                                update.checkedAt != null -> Text("Up to date", style = MaterialTheme.typography.labelMedium, color = Ok)
+                                else -> Text("Check", style = MaterialTheme.typography.labelMedium, color = Gold)
+                            }
                         }
+                        update.error?.let {
+                            Text(it, style = MaterialTheme.typography.bodySmall, color = Bad, modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp))
+                        }
+                        PanelDivider()
+                        PanelRow("Changelog", "What changed in every version", Glyphs.Doc, onClick = actions.openChangelog)
                     }
-                    update.error?.let {
-                        Text(it, style = MaterialTheme.typography.bodySmall, color = Bad, modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp))
+                }
+                SettingsSection("This device") {
+                    Panel {
+                        pairing?.let {
+                            PanelRow("Paired as “${it.device}”", it.url, Glyphs.Qr)
+                            PanelDivider()
+                        }
+                        PanelRow("Unpair this device", "Signs this phone out of your PC", icon = Glyphs.Close, iconTint = Bad, titleColor = Bad, onClick = { confirmUnpair = true })
                     }
-                    PanelRow("Changelog", "What changed in every version", Glyphs.Doc, onClick = actions.openChangelog)
-                    pairing?.let { PanelRow("Paired as “${it.device}”", it.url, Glyphs.Qr) }
-                    PanelRow("Unpair this device", icon = Glyphs.Close, iconTint = Bad, titleColor = Bad, onClick = { confirmUnpair = true })
                 }
                 Spacer(Modifier.size(24.dp))
             }
@@ -808,8 +825,8 @@ private val approvalModes = listOf(
 @Composable
 private fun ApprovalPanel(state: SystemState, onPick: (String) -> Unit) {
     Panel {
-        Text("Applies to Hermes everywhere: desktop, messaging and this app.", style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 10.dp))
+        Text("Command approvals", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold,
+            modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 12.dp))
         Segmented(
             options = approvalModes.map { it.second },
             selected = approvalModes.indexOfFirst { it.first == state.approvalMode },
@@ -835,11 +852,11 @@ private fun DefaultModelPanel(state: SystemState, models: ModelCatalog?, onOpen:
     val label = models?.options?.firstOrNull { it.id == state.defaultModel && it.provider == state.defaultProvider }?.label
         ?: state.defaultModel.substringAfterLast('/').ifBlank { null }
     Panel {
-        PanelRow(label ?: "Unknown", when {
+        PanelRow("Default model", when {
             state.defaultSaving -> "Saving…"
-            state.defaultProvider.isNotBlank() -> "${state.defaultProvider} · used by every new chat, on the desktop too"
-            else -> "Used by every new chat, on the desktop too"
-        }, onClick = onOpen) {
+            state.defaultProvider.isNotBlank() -> "${label ?: "Unknown"} · ${state.defaultProvider}"
+            else -> label ?: "Unknown"
+        }, Glyphs.Chip, onClick = onOpen) {
             Text("Change", style = MaterialTheme.typography.labelMedium, color = Gold)
         }
     }
@@ -850,9 +867,8 @@ private fun ThemePanel() {
     val mode = ThemePrefs.mode
     val accent = ThemePrefs.accent
     val systemDark = isSystemInDarkTheme()
-    Panel {
-        Text("Only changes this phone.", style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 10.dp))
+    var allAccents by remember { mutableStateOf(false) }
+    Panel(Modifier.animateContentSize()) {
         Text("Mode", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.padding(start = 16.dp, top = 12.dp))
         Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -864,11 +880,17 @@ private fun ThemePanel() {
                 }
             }
         }
-        Text("Accent", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(start = 16.dp, top = 4.dp))
-        // 30 accents: a wrapping grid of 5 per row, grouped by hue family (see Accent).
+        PanelDivider()
+        // 30 accents: collapsed to the current one so the page stays short; tap to open the grid.
+        val chevron by animateFloatAsState(if (allAccents) 90f else 0f, label = "accentChevron")
+        PanelRow("Accent", accent.label, onClick = { allAccents = !allAccents }) {
+            Box(Modifier.size(20.dp).clip(CircleShape).background(accent.color(mode, systemDark)))
+            Spacer(Modifier.width(10.dp))
+            Icon(Glyphs.Chevron, null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(16.dp).rotate(chevron))
+        }
+        // Grouped by hue family (see Accent), 5 per row.
         val bg = MaterialTheme.colorScheme.background
-        Column(Modifier.fillMaxWidth().padding(start = 12.dp, end = 12.dp, top = 8.dp, bottom = 12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        if (allAccents) Column(Modifier.fillMaxWidth().padding(start = 12.dp, end = 12.dp, top = 8.dp, bottom = 12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Accent.entries.chunked(5).forEach { row ->
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     row.forEach { a ->
@@ -880,6 +902,46 @@ private fun ThemePanel() {
         }
     }
 }
+
+/** Sessions shown per drawer group before "Show more" (Hermes desktop shows 3). */
+@Composable
+private fun DrawerPanel() {
+    val choices = SESSION_FIRST_PAGE_CHOICES
+    val current = ThemePrefs.sessionsPerGroup
+    Panel {
+        Text("Chats per group", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold,
+            modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 12.dp))
+        Segmented(
+            options = choices.map { if (it == 0) "All" else "$it" },
+            selected = choices.indexOf(current).coerceAtLeast(0),
+            enabled = choices.map { true },
+            onSelect = { ThemePrefs.pickSessionsPerGroup(choices[it]) },
+            modifier = Modifier.padding(16.dp),
+        )
+        Text(if (current == 0) "Every chat shows. No \"Show more\"."
+            else "Each date or project shows $current chats, then \"Show more\". The open chat always shows.",
+            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(start = 16.dp, end = 16.dp, bottom = 14.dp))
+    }
+}
+
+/** A titled settings group: header, one-line hint, then its panels, with even spacing between groups. */
+@Composable
+private fun SettingsSection(title: String, hint: String? = null, content: @Composable () -> Unit) {
+    Column(Modifier.fillMaxWidth().padding(top = 20.dp)) {
+        Text(title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold,
+            modifier = Modifier.padding(start = 4.dp))
+        if (hint != null) Text(hint, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(start = 4.dp, top = 2.dp))
+        Spacer(Modifier.size(10.dp))
+        content()
+    }
+}
+
+/** Hairline between rows inside a [Panel]. */
+@Composable
+private fun PanelDivider() =
+    HorizontalDivider(Modifier.padding(start = 16.dp, end = 16.dp), thickness = 0.5.dp, color = MaterialTheme.colorScheme.outlineVariant)
 
 @Composable
 private fun ThemeSwatch(label: String, selected: Boolean, bg: Color, dot: Color, modifier: Modifier,

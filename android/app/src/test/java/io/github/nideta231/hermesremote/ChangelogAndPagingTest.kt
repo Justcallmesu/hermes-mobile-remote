@@ -84,13 +84,20 @@ class ChangelogAndPagingTest {
         assertEquals(10, more.remaining)
     }
 
-    @Test fun defaultPagingShowsFiveThenTenMore() {
+    @Test fun defaultPagingShowsThreeThenTenMore() {
         val g = SessionGroup("Today", (0 until 40).map { s("s$it") })
         val first = pageGroups(listOf(g), emptyMap()).single()
-        assertEquals(5, first.items.size)
-        assertEquals(35, first.remaining)
+        assertEquals(3, first.items.size)
+        assertEquals(37, first.remaining)
         val more = pageGroups(listOf(g), mapOf(g.key to first.items.size + SESSION_PAGE)).single()
-        assertEquals(15, more.items.size)
+        assertEquals(13, more.items.size)
+    }
+
+    @Test fun zeroPerGroupShowsEveryChat() {
+        val g = SessionGroup("Today", (0 until 40).map { s("s$it") })
+        val all = pageGroups(listOf(g), emptyMap(), page = 0).single()
+        assertEquals(40, all.items.size)
+        assertEquals(0, all.remaining)
     }
 
     @Test fun theOpenChatIsNeverHiddenBehindShowMore() {

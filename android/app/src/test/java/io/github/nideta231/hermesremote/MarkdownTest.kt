@@ -3,6 +3,7 @@ package io.github.nideta231.hermesremote
 import io.github.nideta231.hermesremote.ui.CellAlign
 import io.github.nideta231.hermesremote.ui.MdBlock
 import io.github.nideta231.hermesremote.ui.parseMarkdown
+import io.github.nideta231.hermesremote.ui.reflow
 import io.github.nideta231.hermesremote.ui.splitRow
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -50,5 +51,33 @@ class MarkdownTest {
     @Test fun tableInsideCodeFenceStaysCode() {
         val blocks = parseMarkdown("```\n| a | b |\n|---|---|\n```")
         assertEquals(listOf(MdBlock.Code("| a | b |\n|---|---|")), blocks)
+    }
+
+    @Test fun longerFenceHoldsNestedFences() {
+        val md = "Intro\n\n````markdown\n# Guide\n\n```sh\necho hi\n```\n\nDone\n````\n\nAfter"
+        val blocks = parseMarkdown(md)
+        assertEquals(3, blocks.size)
+        assertEquals(MdBlock.Text("Intro"), blocks[0])
+        assertEquals(MdBlock.Code("# Guide\n\n```sh\necho hi\n```\n\nDone", "markdown"), blocks[1])
+        assertEquals(MdBlock.Text("After"), blocks[2])
+    }
+
+    @Test fun tildeFencesAndInfoWords() {
+        assertEquals(listOf(MdBlock.Code("x", "python")), parseMarkdown("~~~python title=a.py\nx\n~~~"))
+    }
+
+    @Test fun unclosedFenceRunsToTheEndWhileStreaming() {
+        assertEquals(listOf(MdBlock.Text("Hi"), MdBlock.Code("a\nb", "sh")), parseMarkdown("Hi\n```sh\na\nb"))
+    }
+
+    @Test fun inlineTripleBackticksInProseAreNotAFence() {
+        val blocks = parseMarkdown("use ```x``` here\nok")
+        assertEquals(1, blocks.size)
+        assertTrue(blocks[0] is MdBlock.Text)
+    }
+
+    @Test fun hardWrappedParagraphsReflowButStructureStays() {
+        val md = "A long line\nwrapped here.\n\n- item one\n  continued\n- item two\n# Head\nnext"
+        assertEquals("A long line wrapped here.\n\n- item one continued\n- item two\n# Head\nnext", reflow(md))
     }
 }

@@ -31,6 +31,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -47,20 +48,70 @@ enum class CellAlign { Start, Center, End }
 
 private val separatorCell = Regex("""^\s*:?-{1,}:?\s*$""")
 
-/** Splits markdown into code fences, GitHub-style tables and plain text, in order. */
+private val fenceOpen = Regex("""^ {0,3}(`{3,}|~{3,})(.*)$""")
+private val oneLineFence = Regex("""^ {0,3}```([^`]+)```\s*$""")
+
+/**
+ * Splits markdown into code fences, GitHub-style tables and plain text, in order.
+ * Fences follow CommonMark: a fence of N backticks (or tildes) closes only on a line of at least
+ * N of the same character, so a ````markdown block can hold ``` blocks inside it. An unclosed
+ * fence (a reply still streaming) runs to the end.
+ */
 fun parseMarkdown(text: String): List<MdBlock> {
     val out = mutableListOf<MdBlock>()
-    text.split("```").forEachIndexed { i, part ->
-        if (i % 2 == 1) {
-            // "```kotlin\ncode": the first line is the language. Text right after the fence on a
-            // one-line block ("```code```") has no newline and is code, not a language.
-            val hasInfo = '\n' in part
-            val lang = if (hasInfo) part.substringBefore('\n').trim().takeIf { ' ' !in it }.orEmpty() else ""
-            out += MdBlock.Code(part.substringAfter('\n', part).trimEnd('\n'), lang)
-        }
-        else splitTables(part, out)
+    val lines = text.split('\n')
+    val pending = mutableListOf<String>()
+    fun flush() {
+        if (pending.isNotEmpty()) splitTables(pending.joinToString("\n"), out)
+        pending.clear()
     }
+    var i = 0
+    while (i < lines.size) {
+        val line = lines[i]
+        val single = oneLineFence.find(line)
+        if (single != null) {
+            flush(); out += MdBlock.Code(single.groupValues[1].trim()); i++
+            continue
+        }
+        val open = fenceOpen.find(line)
+        // A backtick fence's info string may not contain a backtick (that is inline code).
+        if (open == null || (open.groupValues[1][0] == '`' && '`' in open.groupValues[2])) {
+            pending += line; i++
+            continue
+        }
+        flush()
+        val fence = open.groupValues[1]
+        val lang = open.groupValues[2].trim().substringBefore(' ')
+        val close = Regex("""^ {0,3}[${fence[0]}]{${fence.length},}\s*$""")
+        val body = mutableListOf<String>()
+        i++
+        while (i < lines.size && !close.matches(lines[i])) body += lines[i++]
+        i++  // the closing fence (past the end when unclosed)
+        out += MdBlock.Code(body.joinToString("\n").trimEnd('\n'), lang)
+    }
+    flush()
     return out
+}
+
+private val structuralLine = Regex("""^\s*(#{1,6}\s|>|[-*+]\s|\d{1,9}[.)]\s|[-*_]{3,}\s*$|\|)""")
+
+/**
+ * Joins soft-wrapped lines of one paragraph or list item with a space, as markdown renders them,
+ * so text hard-wrapped at 80-100 columns reflows to the screen instead of leaving ragged breaks.
+ * Blank lines, headings, list items, quotes and table rows still start a new line.
+ */
+internal fun reflow(text: String): String {
+    val out = StringBuilder()
+    var prev: String? = null
+    for (line in text.split('\n')) {
+        val joins = prev != null && prev.isNotBlank() && line.isNotBlank() &&
+            !structuralLine.containsMatchIn(line) && !prev.trimStart().startsWith('#') &&
+            !prev.endsWith("  ") && !prev.endsWith('\\')
+        if (prev != null) out.append(if (joins) ' ' else '\n')
+        out.append(if (joins) line.trim() else line)
+        prev = line
+    }
+    return out.toString()
 }
 
 private fun splitTables(text: String, out: MutableList<MdBlock>) {
@@ -147,7 +198,7 @@ fun MarkdownText(text: String, modifier: Modifier = Modifier) {
                     is MdBlock.Code -> CodeBlock(block)
                     is MdBlock.Table -> MarkdownTable(block)
                     is MdBlock.Text -> if (block.body.isNotBlank()) {
-                        Text(inline(block.body), style = MaterialTheme.typography.bodyMedium.copy(lineHeight = 21.sp))
+                        Text(inline(reflow(block.body)), style = MaterialTheme.typography.bodyMedium.copy(lineHeight = 21.sp))
                     }
                 }
             }
@@ -236,7 +287,7 @@ private fun TableRow(cells: List<String>, align: List<CellAlign>, widths: List<a
     }
 }
 
-private val inlineRe = Regex("""\*\*(.+?)\*\*|`([^`]+)`|(?<![*\w])\*(?!\s)(.+?)(?<!\s)\*(?![*\w])""")
+private val inlineRe = Regex("""\*\*(.+?)\*\*|`([^`]+)`|\[([^\]]+)\]\((?:[^)\s]+)\)|(?<![*\w])\*(?!\s)(.+?)(?<!\s)\*(?![*\w])""")
 
 private fun inline(src: String): AnnotatedString = buildAnnotatedString {
     src.lines().forEachIndexed { li, raw ->
@@ -245,6 +296,15 @@ private fun inline(src: String): AnnotatedString = buildAnnotatedString {
         val heading = Regex("^#{1,6}\\s+").find(line)
         if (heading != null) {
             withStyle(SpanStyle(fontWeight = FontWeight.Bold, fontSize = 16.sp)) { appendInline(line.substring(heading.range.last + 1)) }
+            return@forEachIndexed
+        }
+        if (Regex("^\\s{0,3}([-*_])\\s*(\\1\\s*){2,}$").matches(line)) {
+            withStyle(SpanStyle(color = Color(0x80808080))) { append("────────────") }
+            return@forEachIndexed
+        }
+        Regex("^\\s*>\\s?").find(line)?.let { m ->
+            withStyle(SpanStyle(color = Color(0x80808080))) { append("▎ ") }
+            withStyle(SpanStyle(fontStyle = FontStyle.Italic)) { appendInline(line.substring(m.range.last + 1)) }
             return@forEachIndexed
         }
         Regex("^(\\s*)[-*+]\\s+").find(line)?.let { m ->
@@ -262,7 +322,8 @@ private fun AnnotatedString.Builder.appendInline(s: String) {
         when {
             m.groups[1] != null -> withStyle(SpanStyle(fontWeight = FontWeight.Bold)) { append(m.groupValues[1]) }
             m.groups[2] != null -> withStyle(SpanStyle(fontFamily = FontFamily.Monospace, background = Color(0x33808080), fontSize = 13.sp)) { append(m.groupValues[2]) }
-            else -> withStyle(SpanStyle(fontStyle = FontStyle.Italic)) { append(m.groupValues[3]) }
+            m.groups[3] != null -> withStyle(SpanStyle(textDecoration = TextDecoration.Underline)) { append(m.groupValues[3]) }
+            else -> withStyle(SpanStyle(fontStyle = FontStyle.Italic)) { append(m.groupValues[4]) }
         }
         i = m.range.last + 1
     }

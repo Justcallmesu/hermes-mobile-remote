@@ -117,8 +117,11 @@ fun arrangeSessions(
     return if (pinned.isEmpty()) groups else listOf(SessionGroup("Pinned", pinned)) + groups
 }
 
-/** Chats a drawer group shows before "Show more". */
-const val SESSION_FIRST_PAGE = 5
+/** Chats a drawer group shows before "Show more" by default (Hermes desktop shows 3). Settings can change it. */
+const val SESSION_FIRST_PAGE = 3
+
+/** Choices offered in Settings for [SESSION_FIRST_PAGE]; 0 means show every chat. */
+val SESSION_FIRST_PAGE_CHOICES = listOf(3, 5, 10, 0)
 
 /** How many more chats each "Show more" tap adds. */
 const val SESSION_PAGE = 10
@@ -135,7 +138,8 @@ data class GroupPage(val group: SessionGroup, val items: List<SessionSummary>, v
 fun pageGroups(groups: List<SessionGroup>, shown: Map<String, Int>, currentId: String? = null, page: Int = SESSION_FIRST_PAGE): List<GroupPage> =
     groups.map { g ->
         val current = currentId?.let { id -> g.items.indexOfFirst { it.id == id } } ?: -1
-        val n = maxOf(shown[g.key] ?: page, current + 1).coerceAtMost(g.items.size)
+        val first = if (page <= 0) g.items.size else page
+        val n = maxOf(shown[g.key] ?: first, current + 1).coerceAtMost(g.items.size)
         GroupPage(g, g.items.take(n), g.items.size - n)
     }
 

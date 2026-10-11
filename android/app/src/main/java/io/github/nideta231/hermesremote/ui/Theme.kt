@@ -1,5 +1,6 @@
 package io.github.nideta231.hermesremote.ui
 
+import io.github.nideta231.hermesremote.data.SESSION_FIRST_PAGE
 import android.content.Context
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.ColorScheme
@@ -156,6 +157,16 @@ object ThemePrefs {
         accent = Accent.entries.firstOrNull { it.name == p.getString("accent", null) }
             ?: Accent.entries.firstOrNull { it.name == legacy } ?: Accent.GOLD
         collapsedGroups = p.getStringSet("collapsed_groups", null)?.toSet() ?: emptySet()
+        sessionsPerGroup = p.getInt("sessions_per_group", SESSION_FIRST_PAGE)
+    }
+
+    /** Chats each drawer group shows before "Show more"; 0 shows all of them. */
+    var sessionsPerGroup by mutableStateOf(SESSION_FIRST_PAGE)
+        private set
+
+    fun pickSessionsPerGroup(value: Int) {
+        sessionsPerGroup = value
+        ctx?.let { prefs(it).edit().putInt("sessions_per_group", value).apply() }
     }
 
     fun pickMode(value: ThemeMode) {
