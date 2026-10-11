@@ -3,6 +3,17 @@
 Releases are git tags; the version in the app comes from the tag. `git log v0.9.0..vX.Y.Z` is the
 authoritative history — this file only summarises what is worth knowing before upgrading.
 
+## v1.8.0
+
+- Theme picker in Settings.
+- Default model in Settings: one model the PC uses for every new chat, kept across restarts.
+  Picking a model inside a chat still only changes that chat.
+- Drawer: each project has a clear folder header and its chats are indented under a guide line,
+  so it is easy to see where a project's chats start and end.
+- Linux tray app (bridge/linux/tray.py), like the Windows one: status, checks,
+  start/stop/restart, networks, pair/revoke devices, logs, start at login. install.sh adds it to
+  the app menu.
+
 ## v1.7.0
 
 - New chat in a project: on a new chat, a "No project" pill above the model picks one of the
