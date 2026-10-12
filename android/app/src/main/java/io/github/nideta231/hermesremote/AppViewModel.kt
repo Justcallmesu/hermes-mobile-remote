@@ -825,7 +825,9 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
             val info = r.optJSONObject("info") ?: JSONObject()
             val running = r.optBoolean("running") || info.optBoolean("running")
             var items = HistoryMapper.map(r.optJSONArray("messages"))
-            if (running) items = withInflight(items, r.optJSONObject("inflight"))
+            val inflight = r.optJSONObject("inflight")
+            // A failed turn stays in `inflight` (with `error`) after it stops running: show it, as the desktop does.
+            if (running || inflight?.str("error")?.isNotBlank() == true) items = withInflight(items, inflight)
             var waiting = false
             r.optJSONArray("open_requests").objects().forEach { q ->
                 val id = q.str("id") ?: return@forEach

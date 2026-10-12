@@ -3,6 +3,12 @@
 Releases are git tags; the version in the app comes from the tag. `git log v0.9.0..vX.Y.Z` is the
 authoritative history — this file only summarises what is worth knowing before upgrading.
 
+## v1.9.3
+
+- A failed turn (for example "The conversation is too long for this model. Run /compress, then
+  /retry." with its details) now shows in red when you open the chat on the phone, like the
+  desktop's error banner. Before, it only showed if the phone was watching when it failed.
+
 ## v1.9.2
 
 - The drawer no longer jumps around while a reply streams. Live updates now re-read only the

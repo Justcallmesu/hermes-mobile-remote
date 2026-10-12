@@ -313,7 +313,11 @@ fun withInflight(history: List<ChatItem>, inflight: JSONObject?): List<ChatItem>
         }
     }
     val reply = inflight.str("assistant").orEmpty()
-    if (reply.isNotBlank()) out += ChatItem.Assistant("inflight-a", reply.trimStart(), streaming = inflight.optBoolean("streaming", true))
+    val error = inflight.str("error")?.trim().orEmpty()
+    // A retained failed turn (e.g. "The conversation is too long for this model", with its hint and details):
+    // the reply so far is final, and the failure shows the way the desktop's error banner does.
+    if (reply.isNotBlank()) out += ChatItem.Assistant("inflight-a", reply.trimStart(), streaming = error.isEmpty() && inflight.optBoolean("streaming", true))
+    if (error.isNotEmpty()) out += ChatItem.Notice("inflight-e", error, error = true)
     return out
 }
 

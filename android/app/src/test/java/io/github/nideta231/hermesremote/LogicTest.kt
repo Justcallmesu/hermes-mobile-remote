@@ -146,6 +146,17 @@ class LogicTest {
         assertTrue((items[3] as ChatItem.Assistant).streaming)
     }
 
+    @Test fun failedTurnShowsItsErrorOnResume() {
+        val history = listOf<ChatItem>(ChatItem.User("h1", "earlier"), ChatItem.Assistant("h2", "ok"))
+        val items = io.github.nideta231.hermesremote.data.withInflight(history,
+            JSONObject("""{"user":"long ask","assistant":"Part","streaming":false,"status":"error",
+              "error":"The conversation is too long for this model\nRun /compress, then /retry."}"""))
+        assertEquals("long ask", (items[2] as ChatItem.User).text)
+        assertTrue(!(items[3] as ChatItem.Assistant).streaming)
+        val n = items[4] as ChatItem.Notice
+        assertTrue(n.error && n.text.startsWith("The conversation is too long"))
+    }
+
     @Test fun desktopTurnShowsItsUserMessageLive() {
         val live: (List<ChatItem>, String?, JSONObject?) -> List<ChatItem> = { i, a, f -> io.github.nideta231.hermesremote.data.withLiveUser(i, a, f) }
         val history = listOf<ChatItem>(ChatItem.User("h1", "earlier"), ChatItem.Assistant("h2", "ok"))
