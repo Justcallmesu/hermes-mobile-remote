@@ -39,7 +39,8 @@ qt_python() {
 # Only replace a command in ~/.local/bin that this installer made (a symlink into this repo).
 link_command() {
   local target="$1" name="$2"
-  if [[ -e "$LOCAL_BIN/$name" && ! -L "$LOCAL_BIN/$name" ]]; then
+  if [[ -L "$LOCAL_BIN/$name" && "$(readlink "$LOCAL_BIN/$name")" != "$REPO"/* ]] ||
+     [[ -e "$LOCAL_BIN/$name" && ! -L "$LOCAL_BIN/$name" ]]; then
     info "Left $LOCAL_BIN/$name alone (not ours)."; return
   fi
   ln -sfn "$target" "$LOCAL_BIN/$name"
@@ -117,7 +118,7 @@ if [[ -n "${WAYLAND_DISPLAY:-}${DISPLAY:-}" ]]; then
       cp "$APPS_DIR/$DESKTOP_FILE" "$AUTOSTART_DIR/$DESKTOP_FILE"
       info "starts at login ($AUTOSTART_DIR/$DESKTOP_FILE)"
     fi
-    # Replace a running tray so it picks up this version; it exits by itself if one is running.
+    # Replace a running tray so it picks up this version (a second tray would exit by itself).
     pkill -f "$TRAY" 2>/dev/null && sleep 1 || true
     (setsid "$PY" "$TRAY" >/dev/null 2>&1 < /dev/null &)
   else
