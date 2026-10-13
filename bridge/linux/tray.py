@@ -370,11 +370,23 @@ class Tray(QObject):
 
 
 def desktop_entry() -> str:
+    # The interpreter running this file is one that has PyQt6. `python3` on the login PATH may
+    # be a different one (a tool-bundled Python, a virtualenv), so name this one explicitly.
+    # Not resolved: /usr/bin/python3 survives a Python upgrade, /usr/bin/python3.14 does not.
     return ("[Desktop Entry]\nType=Application\nName=Hermes Remote\n"
             "Comment=Tray for the Hermes Mobile Remote bridge\n"
-            f"Exec=/usr/bin/env python3 {Path(__file__).resolve()}\n"
-            "Icon=network-wireless\nTerminal=false\nCategories=Network;Utility;\n"
-            "X-GNOME-Autostart-enabled=true\n")
+            f'Exec="{sys.executable}" "{Path(__file__).resolve()}"\n'
+            "Icon=hermes-remote\nTerminal=false\nCategories=Network;Utility;\n"
+            "StartupNotify=false\nX-GNOME-Autostart-enabled=true\nX-GNOME-Autostart-Delay=5\n")
+
+
+def wait_for_tray(seconds: int = 60) -> bool:
+    """At login the tray can start before the panel does; wait for it instead of giving up."""
+    for _ in range(seconds):
+        if QSystemTrayIcon.isSystemTrayAvailable():
+            return True
+        QThread.sleep(1)
+    return QSystemTrayIcon.isSystemTrayAvailable()
 
 
 class PairDialog(QDialog):
@@ -418,7 +430,7 @@ def main() -> int:
     app.setApplicationName("Hermes Remote")
     app.setDesktopFileName("hermes-remote-tray")
     app.setQuitOnLastWindowClosed(False)
-    if not QSystemTrayIcon.isSystemTrayAvailable():
+    if not wait_for_tray():
         sys.stderr.write("No system tray found. On GNOME, install the 'AppIndicator and KStatusNotifierItem "
                          "Support' extension.\n")
         return 1

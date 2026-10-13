@@ -77,16 +77,22 @@ The app picks the best path on its own. You only need to care when it cannot.
 
 ## Tray app (Linux)
 
-`install.sh` adds **Hermes Remote** to the app menu and, if you say yes, shows its tray icon at
-login. It is the Linux version of the Windows tray: a coloured dot for bridge health
+`install.sh` installs **Hermes Remote** as a desktop app: an app-menu entry with its own icon, a
+`hermes-remote-tray` command in `~/.local/bin`, and (unless you say no) an autostart entry so the
+tray icon appears every time you log in. It is the Linux version of the Windows tray: a coloured dot for bridge health
 (green ok, amber warning, red failure, grey stopped), the doctor checks under **Details**,
 start/stop/restart, **Network** (trust or forget networks), **Devices** (pair with a QR, revoke),
 copying the log, the firewall fix, and **Start tray at login**.
 
-The bridge itself stays a systemd user service, so quitting the tray does not stop it. Start the
-tray by hand with `python3 bridge/linux/tray.py`. It needs PyQt6 (`sudo pacman -S python-pyqt6`,
-`sudo apt install python3-pyqt6` or `sudo dnf install python3-pyqt6`). GNOME also needs the
-*AppIndicator and KStatusNotifierItem Support* extension to show tray icons.
+The bridge itself stays a systemd user service, so quitting the tray does not stop it. Reopen the
+tray from the app menu or with `hermes-remote-tray`. It needs PyQt6 for the system Python
+(`sudo pacman -S python-pyqt6`, `sudo apt install python3-pyqt6` or `sudo dnf install
+python3-pyqt6`); the installer looks for a Python that has it and writes that interpreter's path
+into the menu and autostart entries, so a different `python3` earlier on your PATH does not matter.
+GNOME also needs the *AppIndicator and KStatusNotifierItem Support* extension to show tray icons.
+
+`install.sh` also links `hermes-remote-bridge` into `~/.local/bin`, so `hermes-remote-bridge pair
+phone` works from any directory (make sure `~/.local/bin` is on your PATH).
 
 ## Everyday commands
 
