@@ -14,7 +14,7 @@ import java.net.URLEncoder
 import java.util.concurrent.TimeUnit
 
 /**
- * The bridge's small REST surface (identity, status, the sidebar list, approval mode) plus the
+ * The bridge's small REST surface (identity, status, profiles, the sidebar list, approval mode) plus the
  * factory for the live [Gateway] socket. Everything conversational goes over the socket.
  */
 class BridgeClient(
@@ -104,33 +104,41 @@ class BridgeClient(
 
     suspend fun status(): List<ComponentStatus> = StatusMapper.map(call("GET", "/v1/status").getJSONObject("components"))
 
+    /** Hermes profiles the phone may use. Older bridges have no such route (404): treat as default only. */
+    suspend fun profiles(): List<HermesProfile> = parseProfiles(call("GET", "/v1/profiles"))
+
+    // Every call below acts on one Hermes profile: [profile] null (or "default") is the default profile.
+
     /** The desktop sidebar's list: same query, same order (newest activity first). */
-    suspend fun sessions(limit: Int = 50, offset: Int = 0): Pair<List<SessionSummary>, Boolean> {
-        val o = call("GET", "/v1/sessions", mapOf("limit" to limit, "offset" to offset))
+    suspend fun sessions(limit: Int = 50, offset: Int = 0, profile: String? = null): Pair<List<SessionSummary>, Boolean> {
+        val o = call("GET", "/v1/sessions", mapOf("limit" to limit, "offset" to offset) + scoped(profile))
         val list = o.optJSONArray("sessions").objects().map(::parseSession)
         val total = if (o.isNull("total")) null else o.optInt("total")
         return list to (if (total != null) offset + list.size < total else list.size >= limit)
     }
 
-    suspend fun renameSession(id: String, title: String) =
-        call("PATCH", "/v1/sessions/${enc(id)}", body = JSONObject().put("title", title))
+    suspend fun renameSession(id: String, title: String, profile: String? = null) =
+        call("PATCH", "/v1/sessions/${enc(id)}", scoped(profile), JSONObject().put("title", title))
 
-    suspend fun setPinned(id: String, pinned: Boolean) =
-        call("PATCH", "/v1/sessions/${enc(id)}", body = JSONObject().put("pinned", pinned))
+    suspend fun setPinned(id: String, pinned: Boolean, profile: String? = null) =
+        call("PATCH", "/v1/sessions/${enc(id)}", scoped(profile), JSONObject().put("pinned", pinned))
 
-    suspend fun approvalMode(): String = call("GET", "/v1/settings/approvals").getString("mode")
+    suspend fun approvalMode(profile: String? = null): String =
+        call("GET", "/v1/settings/approvals", scoped(profile)).getString("mode")
 
-    suspend fun setApprovalMode(mode: String): String =
-        call("PUT", "/v1/settings/approvals", body = JSONObject().put("mode", mode)).getString("mode")
+    suspend fun setApprovalMode(mode: String, profile: String? = null): String =
+        call("PUT", "/v1/settings/approvals", scoped(profile), JSONObject().put("mode", mode)).getString("mode")
 
     /** Hermes' profile default model (new chats); null on bridges older than this route. */
-    suspend fun defaultModel(): Pair<String, String> =
-        call("GET", "/v1/settings/model").let { it.optString("model") to it.optString("provider") }
+    suspend fun defaultModel(profile: String? = null): Pair<String, String> =
+        call("GET", "/v1/settings/model", scoped(profile)).let { it.optString("model") to it.optString("provider") }
 
     /** Returns the bridge's reply: either the applied model or `confirm_required` + `confirm_message`. */
-    suspend fun setDefaultModel(model: String, provider: String, confirmed: Boolean): JSONObject =
-        call("PUT", "/v1/settings/model", body = JSONObject().put("model", model).put("provider", provider)
+    suspend fun setDefaultModel(model: String, provider: String, confirmed: Boolean, profile: String? = null): JSONObject =
+        call("PUT", "/v1/settings/model", scoped(profile), JSONObject().put("model", model).put("provider", provider)
             .put("confirm_expensive_model", confirmed))
+
+    private fun scoped(profile: String?): Map<String, Any?> = mapOf("profile" to profileParam(profile))
 
     private fun enc(s: String) = URLEncoder.encode(s, "UTF-8").replace("+", "%20")
 }

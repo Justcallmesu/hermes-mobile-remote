@@ -89,6 +89,11 @@ class CredentialStore(context: Context, file: String = "pairing") {
         get() = prefs.getString("last_session", null)
         set(v) = prefs.edit().putString("last_session", v).apply()
 
+    /** The Hermes profile in use on this PC ("default" when never chosen). */
+    var hermesProfile: String
+        get() = prefs.getString("hermes_profile", null)?.takeIf { it.isNotBlank() } ?: DEFAULT_HERMES_PROFILE
+        set(v) = prefs.edit().putString("hermes_profile", v).apply()
+
     /** A send that may not have reached the bridge yet: retried with the same id (dedup-safe). */
     var pendingSend: Triple<String, String, String>?
         get() {

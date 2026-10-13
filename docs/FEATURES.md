@@ -25,6 +25,12 @@ right now — on any screen — shimmers in the list, like the desktop sidebar.
 
 **Pinned sessions.** Pins are shared with the Hermes desktop app; pin on either surface.
 
+**Hermes profiles.** If the PC has more than one Hermes profile (`hermes profile list`), the drawer
+shows the one in use under the PC name. Tap it to switch: the chat list, the settings (approval
+mode, default model) and every new chat then belong to that profile. Each paired PC remembers its
+own choice. A notification opens its chat in the profile it belongs to. The PC can limit which
+profiles the phone may use with `allowed_profiles` in the bridge's `config.toml`.
+
 ## Models and reasoning
 
 **Model picker.** Lists every model your configured providers can actually serve. Providers that
@@ -45,9 +51,9 @@ a text field appear in the same dock.
 
 - Limit: password, sudo and secret prompts are answered on the PC. The phone says one is waiting.
 
-**Approval mode.** Settings (System tab) switches Hermes' global `approvals.mode`: Manual, Smart
-or Off. This is Hermes' own setting and applies everywhere — desktop, messaging platforms and
-this app — not just to the phone.
+**Approval mode.** Settings (System tab) switches the `approvals.mode` of the Hermes profile in use:
+Manual, Smart or Off. This is Hermes' own setting and applies everywhere that profile runs —
+desktop, messaging platforms and this app — not just to the phone.
 
 ## Slash commands and skills
 

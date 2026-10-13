@@ -26,6 +26,8 @@ object Notifier {
 
     const val WATCH_ID = 1
     const val EXTRA_OPEN_SESSION = "open_session"
+    /** The Hermes profile that session belongs to (absent: the default profile). */
+    const val EXTRA_PROFILE = "open_profile"
 
     fun ensureChannels(context: Context) {
         val manager = context.getSystemService(NotificationManager::class.java) ?: return
@@ -51,10 +53,10 @@ object Notifier {
             .setSmallIcon(R.drawable.ic_stat_hermes)
             .setOngoing(true)
             .setSilent(true)
-            .setContentIntent(openApp(context, null, 0))
+            .setContentIntent(openApp(context, null, null, 0))
             .build()
 
-    fun postTurnFinished(context: Context, key: String, sessionId: String?, title: String?, status: String, reply: String?) {
+    fun postTurnFinished(context: Context, key: String, sessionId: String?, profile: String?, title: String?, status: String, reply: String?) {
         val where = title?.takeIf { it.isNotBlank() } ?: "Hermes"
         val (heading, fallback) = when (status) {
             "complete" -> where to "Finished."
@@ -64,21 +66,21 @@ object Notifier {
         }
         val body = reply?.let(::plain)?.takeIf { it.isNotBlank() }?.take(600) ?: fallback
         // One "finished" alert per session: a newer turn replaces the older one.
-        post(context, CHANNEL_RESULTS, resultId(sessionId ?: key), heading, body, sessionId, NotificationCompat.CATEGORY_MESSAGE)
+        post(context, CHANNEL_RESULTS, resultId(sessionId ?: key), heading, body, sessionId, profile, NotificationCompat.CATEGORY_MESSAGE)
     }
 
-    fun postApprovalNeeded(context: Context, requestId: String, sessionId: String?, title: String?, request: ApprovalRequest) {
+    fun postApprovalNeeded(context: Context, requestId: String, sessionId: String?, profile: String?, title: String?, request: ApprovalRequest) {
         val body = listOfNotNull(request.description?.takeIf { it.isNotBlank() }, request.command?.takeIf { it.isNotBlank() }?.let { "$ $it" })
             .joinToString("\n").ifBlank { "Hermes is waiting for your decision." }
         post(context, CHANNEL_APPROVALS, questionId(requestId),
             "Approval needed${title?.takeIf { it.isNotBlank() }?.let { " · $it" }.orEmpty()}",
-            body.take(600), sessionId, NotificationCompat.CATEGORY_REMINDER, requestId)
+            body.take(600), sessionId, profile, NotificationCompat.CATEGORY_REMINDER, requestId)
     }
 
-    fun postQuestion(context: Context, requestId: String, sessionId: String?, title: String?, question: String?) {
+    fun postQuestion(context: Context, requestId: String, sessionId: String?, profile: String?, title: String?, question: String?) {
         post(context, CHANNEL_APPROVALS, questionId(requestId),
             "Hermes has a question${title?.takeIf { it.isNotBlank() }?.let { " · $it" }.orEmpty()}",
-            (question ?: "Hermes is waiting for your answer.").take(600), sessionId, NotificationCompat.CATEGORY_REMINDER, requestId)
+            (question ?: "Hermes is waiting for your answer.").take(600), sessionId, profile, NotificationCompat.CATEGORY_REMINDER, requestId)
     }
 
     fun clearQuestion(context: Context, requestId: String) {
@@ -97,7 +99,7 @@ object Notifier {
     private val posted = java.util.concurrent.ConcurrentHashMap<String, String>()
 
     private fun post(context: Context, channel: String, id: Int, title: String, body: String,
-                     sessionId: String?, category: String, requestId: String? = null) {
+                     sessionId: String?, profile: String?, category: String, requestId: String? = null) {
         val nm = NotificationManagerCompat.from(context)
         if (!nm.areNotificationsEnabled()) return
         if (requestId != null && sessionId != null) posted[requestId] = sessionId
@@ -109,15 +111,18 @@ object Notifier {
             .setSmallIcon(R.drawable.ic_stat_hermes)
             .setCategory(category)
             .setAutoCancel(true)
-            .setContentIntent(openApp(context, sessionId, id))
+            .setContentIntent(openApp(context, sessionId, profile, id))
             .build()
         runCatching { nm.notify(id, n) } // SecurityException if permission was revoked mid-flight
     }
 
-    private fun openApp(context: Context, sessionId: String?, requestCode: Int): PendingIntent {
+    private fun openApp(context: Context, sessionId: String?, profile: String?, requestCode: Int): PendingIntent {
         val intent = Intent(context, MainActivity::class.java)
             .addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP)
-            .apply { if (sessionId != null) putExtra(EXTRA_OPEN_SESSION, sessionId) }
+            .apply {
+                if (sessionId != null) putExtra(EXTRA_OPEN_SESSION, sessionId)
+                if (profile != null) putExtra(EXTRA_PROFILE, profile)
+            }
         return PendingIntent.getActivity(context, requestCode, intent,
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
     }

@@ -92,6 +92,7 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.offset
 import io.github.nideta231.hermesremote.ConnectionState
 import io.github.nideta231.hermesremote.PairedPc
+import io.github.nideta231.hermesremote.ProfilesState
 import io.github.nideta231.hermesremote.SessionsState
 import io.github.nideta231.hermesremote.SystemState
 import io.github.nideta231.hermesremote.UpdateState
@@ -129,6 +130,7 @@ class SessionActions(
     val renamePc: (String, String) -> Unit = { _, _ -> },
     val forgetPc: (String) -> Unit = {},
     val setView: (SessionView) -> Unit = {},
+    val switchProfile: (String) -> Unit = {},
 )
 
 /** The session list. On phones it lives in the navigation drawer; on tablets beside the chat. */
@@ -140,6 +142,7 @@ fun SessionsPane(
     actions: SessionActions,
     modifier: Modifier = Modifier,
     pcs: List<PairedPc> = emptyList(),
+    profiles: ProfilesState = ProfilesState(),
     view: SessionView = SessionView(),
     update: UpdateState? = null,
     onOpenUpdate: () -> Unit = {},
@@ -147,6 +150,7 @@ fun SessionsPane(
     var query by remember { mutableStateOf("") }
     var filterSheet by remember { mutableStateOf(false) }
     var pcSheet by remember { mutableStateOf(false) }
+    var profileSheet by remember { mutableStateOf(false) }
     val activePc = pcs.firstOrNull { it.active }
     var menuFor by remember { mutableStateOf<SessionSummary?>(null) }
     var renaming by remember { mutableStateOf<SessionSummary?>(null) }
@@ -160,8 +164,8 @@ fun SessionsPane(
         arrangeSessions(state.items, view, state.live, state.projects, query)
     }
     // "Show more" per group: group key -> rows shown. Search, filters and paging are applied in that
-    // order (see pageGroups), and a new query, view or PC starts every group back at one page.
-    var shown by remember(query, view, pcs.firstOrNull { it.active }?.id) { mutableStateOf(mapOf<String, Int>()) }
+    // order (see pageGroups), and a new query, view, PC or profile starts every group back at one page.
+    var shown by remember(query, view, pcs.firstOrNull { it.active }?.id, profiles.active) { mutableStateOf(mapOf<String, Int>()) }
     val perGroup = ThemePrefs.sessionsPerGroup
     val pages = remember(grouped, shown, currentId, perGroup) { pageGroups(grouped, shown, currentId, perGroup) }
 
@@ -196,6 +200,10 @@ fun SessionsPane(
             IconButton(onClick = actions.refresh) { Icon(Glyphs.Refresh, "Refresh", modifier = Modifier.size(20.dp)) }
         }
         if (pcSheet) PcSheet(pcs, actions, onDismiss = { pcSheet = false })
+        // Only when the PC has more than one profile: with just the default there is nothing to pick.
+        if (profiles.items.size > 1) ProfileRow(profiles, onClick = { profileSheet = true })
+        if (profileSheet) ProfileSheet(profiles, onPick = { profileSheet = false; actions.switchProfile(it) },
+            onDismiss = { profileSheet = false })
         update?.let { DrawerUpdateRow(it, onOpenUpdate) }
         Button(onClick = actions.newChat, modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
             shape = RoundedCornerShape(16.dp), contentPadding = PaddingValues(vertical = 12.dp)) {
@@ -384,6 +392,61 @@ private fun nextPc(pcs: List<PairedPc>): PairedPc? {
     if (pcs.size < 2) return null
     val i = pcs.indexOfFirst { it.active }
     return pcs[(i + 1).mod(pcs.size)]
+}
+
+/** The Hermes profile in use, under the PC header: tap to pick another. */
+@Composable
+private fun ProfileRow(profiles: ProfilesState, onClick: () -> Unit) {
+    val current = profiles.current
+    Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 2.dp).clip(RoundedCornerShape(12.dp))
+        .background(MaterialTheme.colorScheme.surfaceContainerHigh).clickable(onClick = onClick)
+        .padding(horizontal = 12.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+        Icon(Glyphs.Person, null, tint = Gold, modifier = Modifier.size(18.dp))
+        Spacer(Modifier.width(10.dp))
+        Column(Modifier.weight(1f)) {
+            Text("Profile: ${current?.label ?: profiles.active}", style = MaterialTheme.typography.labelLarge,
+                fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            current?.model?.takeIf { it.isNotBlank() }?.let {
+                Text(it, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+        }
+        Icon(Glyphs.Chevron, "Switch profile", modifier = Modifier.size(16.dp))
+    }
+}
+
+/** Every Hermes profile on the PC: tap one to see its chats and start new chats in it. */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun ProfileSheet(profiles: ProfilesState, onPick: (String) -> Unit, onDismiss: () -> Unit) {
+    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+        containerColor = MaterialTheme.colorScheme.surfaceContainerLow) {
+        Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(bottom = 24.dp)) {
+            Text("Switch profile", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold,
+                modifier = Modifier.align(Alignment.CenterHorizontally).padding(bottom = 4.dp))
+            Text("Each profile has its own chats, model and skills", style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.align(Alignment.CenterHorizontally).padding(bottom = 12.dp))
+            HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.25f))
+            profiles.items.forEach { p ->
+                val active = p.name == profiles.active
+                Row(Modifier.fillMaxWidth().clickable { if (active) onDismiss() else onPick(p.name) }
+                    .padding(start = 20.dp, end = 20.dp, top = 10.dp, bottom = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+                    PcAvatar(p.label, 40.dp, ring = active)
+                    Spacer(Modifier.width(14.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text(p.label + if (p.isDefault) " (default)" else "", style = MaterialTheme.typography.bodyLarge,
+                            fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        val sub = listOf(p.model, p.description).filter { it.isNotBlank() }.joinToString(" · ")
+                        if (sub.isNotEmpty()) Text(sub, style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                    }
+                    Spacer(Modifier.width(8.dp))
+                    RadioMark(active)
+                }
+            }
+        }
+    }
 }
 
 private fun hostOf(url: String) = Uri.parse(url).host ?: url
