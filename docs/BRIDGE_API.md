@@ -67,15 +67,38 @@ on loopback; a desktop opened later attaches to that one through the same ledger
 
 ## REST endpoints
 
+Every endpoint marked *(profile)* takes an optional `?profile=<name>`: the Hermes profile it is
+for (see [Profiles](#profiles)). Without it, or with `default`, it is the default profile.
+
 | Method | Path | Notes |
 |---|---|---|
 | GET | `/healthz` | No auth. Liveness only. |
 | GET | `/v1/me` | `{device{id,name,created_at}, peer_node, via, port, addresses{lan[],tailnet[]}, lan_scheme, network, bridge_version, protocol}`. `via` is `lan` or `tailnet`; `addresses` lists every address served right now so the app can switch; `network` is `{id, name, interface, trusted}` or null. |
 | GET | `/v1/status` | `components.{bridge, hermes, tailscale}`. `hermes` is `{status, version, port, shared_with_desktop}`, or `{status: "down", error, starts_on_connect}`. |
-| GET | `/v1/sessions?limit&offset` | The desktop sidebar's own query (recent first, archived and cron excluded): `{sessions[], total, limit, offset}`. Rows carry `id, title, preview, source, message_count, last_active, model, pinned`. |
-| PATCH | `/v1/sessions/{id}` `{title?, pinned?, archived?}` | Rename and/or set the desktop-sidebar flags. At least one field required, else 400 `empty_patch`. |
-| GET | `/v1/settings/approvals` | `{mode, modes}`. Hermes' global `approvals.mode`: `manual`, `smart` or `off`. |
-| PUT | `/v1/settings/approvals` `{mode}` | Sets it via `hermes config set` (fixed argv, no shell), reads it back, audits the change. 400 `invalid_mode` for anything else. |
+| GET | `/v1/profiles` | `{profiles[]}`, each `{name, display_name, description, model, provider, is_default}`. Only profiles the phone may use. |
+| GET | `/v1/sessions?limit&offset` *(profile)* | The desktop sidebar's own query (recent first, archived and cron excluded): `{sessions[], total, limit, offset}`. Rows carry `id, title, preview, source, message_count, last_active, model, pinned`. |
+| PATCH | `/v1/sessions/{id}` `{title?, pinned?, archived?}` *(profile)* | Rename and/or set the desktop-sidebar flags. At least one field required, else 400 `empty_patch`. |
+| GET | `/v1/settings/approvals` *(profile)* | `{mode, modes}`. The profile's `approvals.mode`: `manual`, `smart` or `off`. |
+| PUT | `/v1/settings/approvals` `{mode}` *(profile)* | Sets it via `hermes [-p <profile>] config set` (fixed argv, no shell), reads it back, audits the change. 400 `invalid_mode` for anything else. |
+| GET | `/v1/settings/model` *(profile)* | `{model, provider}`: the profile's default for new chats. |
+| PUT | `/v1/settings/model` `{model, provider?, confirm_expensive_model?}` *(profile)* | Sets that default. May answer `{confirm_required, confirm_message}` first. |
+
+## Profiles
+
+Hermes can have several profiles (`hermes profile list`), each with its own sessions, model,
+skills and settings. The one `hermes serve` the desktop uses serves all of them; a call says which
+one it means. So the phone can switch profiles without the bridge starting anything new:
+
+- REST: the `?profile=` parameter above.
+- Live socket: Hermes' own `profile` param, e.g. `session.create {source: "desktop", profile:
+  "developer"}`, `session.resume {session_id, profile}`, `projects.tree {profile}`. The bridge
+  forwards it unchanged.
+
+The bridge checks every profile name, REST or socket, before it reaches Hermes: a malformed name is
+refused (400 `invalid_profile`, or JSON-RPC `-32602`), and so is a profile left out of
+`allowed_profiles` in `config.toml` (403 `profile_refused`, or `-32602`). An empty `allowed_profiles`
+allows every profile. The default profile is always allowed. A well-formed name Hermes does not know
+is Hermes' 404.
 
 ## The live socket: `GET /v1/ws`
 
@@ -86,6 +109,7 @@ same one the desktop app uses. The bridge adds only:
 - the auth and network checks above (close `4401` for a bad token, `4403` for a refused peer);
 - a method allowlist: anything the desktop's chat view does not do is answered with JSON-RPC error
   `-32601` without reaching Hermes;
+- a `profile` param is checked as described under [Profiles](#profiles);
 - `config.set` limited to the keys `model`, `reasoning`, `fast` and `yolo`;
 - replies to the agent's questions must carry a `srq-…` id;
 - frame size and rate limits (close `1009` / error), and close `1013` when Hermes is not reachable;

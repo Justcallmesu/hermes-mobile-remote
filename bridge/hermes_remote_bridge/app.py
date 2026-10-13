@@ -34,6 +34,7 @@ from .backend import SESSION_HEADER, Backend, BackendLocator, BackendUnavailable
 from .config import Config
 from .devices import Device, DeviceStore
 from .network import TrustStore, network_info, serving_lan_ips
+from .profiles import ProfileRefused, is_visible, resolve_profile
 from .relay import Relay
 from .tailnet import TailnetClient, is_loopback, is_private_lan_ip, is_tailnet_ip
 
@@ -168,6 +169,10 @@ def create_app(cfg: Config, *, locator: BackendLocator | None = None, tailnet: T
     @app.exception_handler(BackendUnavailable)
     async def _backend_down(_: Request, exc: BackendUnavailable):
         return _err(503, "hermes_unavailable", str(exc))
+
+    @app.exception_handler(ProfileRefused)
+    async def _profile_refused(_: Request, exc: ProfileRefused):
+        return _err(exc.status, "invalid_profile" if exc.status == 400 else "profile_refused", str(exc))
 
     @app.exception_handler(RequestValidationError)
     async def _validation_error(_: Request, exc: RequestValidationError):
@@ -307,57 +312,89 @@ def create_app(cfg: Config, *, locator: BackendLocator | None = None, tailnet: T
             components["tailscale"] = {"status": "unreachable"}
         return {"components": components, "checked_at": time.time()}
 
+    # ------------------------------------------------------------ Hermes profiles
+    # One `hermes serve` serves every profile. A REST call names the one it means with
+    # `?profile=`; leaving it out (or `default`) is the default profile, as before.
+
+    async def profile_param(profile: str | None = None) -> str | None:
+        return resolve_profile(profile, cfg.allowed_profiles)
+
+    def scoped(profile: str | None) -> dict[str, str]:
+        """Query params that point a Hermes REST call at `profile`."""
+        return {"profile": profile} if profile else {}
+
+    def cli_scoped(profile: str | None, *args: str) -> tuple[str, ...]:
+        """Hermes CLI argv for `profile` (its global `-p` flag)."""
+        return ("-p", profile, *args) if profile else args
+
+    @app.get("/v1/profiles")
+    async def list_profiles(_: Device = Depends(device_auth)):
+        """The profiles the phone may switch to, with what the picker shows for each."""
+        data = await hermes_http("GET", "/api/profiles")
+        rows = [p for p in data.get("profiles", []) if isinstance(p, dict) and isinstance(p.get("name"), str)]
+        return {"profiles": [
+            {"name": p["name"], "display_name": p.get("display_name") or "", "description": p.get("description") or "",
+             "model": p.get("model") or "", "provider": p.get("provider") or "", "is_default": bool(p.get("is_default"))}
+            for p in rows if is_visible(p["name"], cfg.allowed_profiles)]}
+
     # ------------------------------------------------------------ sessions (the sidebar list)
 
     @app.get("/v1/sessions")
-    async def list_sessions(limit: int = 40, offset: int = 0, _: Device = Depends(device_auth)):
+    async def list_sessions(limit: int = 40, offset: int = 0, profile: str | None = Depends(profile_param),
+                            _: Device = Depends(device_auth)):
         """The desktop sidebar's own query: newest activity first, pinned rows included."""
         params = {"limit": max(1, min(limit, 100)), "offset": max(0, offset), "min_messages": 0,
-                  "archived": "exclude", "order": "recent", "exclude_sources": "cron"}
+                  "archived": "exclude", "order": "recent", "exclude_sources": "cron", **scoped(profile)}
         data = await hermes_http("GET", "/api/sessions", params=params)
         return {"sessions": data.get("sessions", []), "total": data.get("total"),
                 "limit": data.get("limit"), "offset": data.get("offset")}
 
     @app.patch("/v1/sessions/{session_id}")
-    async def patch_session(session_id: str, body: PatchSession, _: Device = Depends(device_auth)):
+    async def patch_session(session_id: str, body: PatchSession, profile: str | None = Depends(profile_param),
+                            _: Device = Depends(device_auth)):
         payload = {k: v for k, v in body.model_dump().items() if v is not None}
         if not payload:
             raise ApiError(400, "empty_patch", "Provide at least one of: title, pinned, archived")
-        return await hermes_http("PATCH", f"/api/sessions/{_check_id(session_id, 'session id')}", json=payload)
+        # Hermes takes the owning profile in the body here, not the query.
+        return await hermes_http("PATCH", f"/api/sessions/{_check_id(session_id, 'session id')}",
+                                 json={**payload, **scoped(profile)})
 
     # ------------------------------------------------------------ settings
 
-    async def _approval_mode() -> str:
-        mode = (await cli("config", "get", "approvals.mode")).strip().strip('"').lower()
+    async def _approval_mode(profile: str | None) -> str:
+        mode = (await cli(*cli_scoped(profile, "config", "get", "approvals.mode"))).strip().strip('"').lower()
         return mode if mode in APPROVAL_MODES else "manual"
 
     @app.get("/v1/settings/approvals")
-    async def get_approvals(_: Device = Depends(device_auth)):
-        return {"mode": await _approval_mode(), "modes": list(APPROVAL_MODES)}
+    async def get_approvals(profile: str | None = Depends(profile_param), _: Device = Depends(device_auth)):
+        return {"mode": await _approval_mode(profile), "modes": list(APPROVAL_MODES)}
 
     @app.put("/v1/settings/approvals")
-    async def set_approvals(body: SetApprovalMode, device: Device = Depends(device_auth)):
+    async def set_approvals(body: SetApprovalMode, profile: str | None = Depends(profile_param),
+                            device: Device = Depends(device_auth)):
         if body.mode not in APPROVAL_MODES:
             raise ApiError(400, "invalid_mode", f"mode must be one of {list(APPROVAL_MODES)}")
-        before = await _approval_mode()
+        before = await _approval_mode(profile)
         if before != body.mode:
-            await cli("config", "set", "approvals.mode", body.mode)
-        after = await _approval_mode()
+            await cli(*cli_scoped(profile, "config", "set", "approvals.mode", body.mode))
+        after = await _approval_mode(profile)
         if after != body.mode:
             raise ApiError(502, "not_applied", f"Hermes still reports approvals.mode={after}")
-        audit_event({"event": "approval_mode_changed", "device": device.name, "from": before, "to": after})
+        audit_event({"event": "approval_mode_changed", "device": device.name, "profile": profile or "default",
+                     "from": before, "to": after})
         return {"mode": after, "modes": list(APPROVAL_MODES)}
 
     @app.get("/v1/settings/model")
-    async def get_default_model(_: Device = Depends(device_auth)):
-        info = await hermes_http("GET", "/api/model/info")
+    async def get_default_model(profile: str | None = Depends(profile_param), _: Device = Depends(device_auth)):
+        info = await hermes_http("GET", "/api/model/info", params=scoped(profile))
         return {"model": info.get("model") or "", "provider": info.get("provider") or ""}
 
     @app.put("/v1/settings/model")
-    async def set_default_model(body: SetDefaultModel, device: Device = Depends(device_auth)):
+    async def set_default_model(body: SetDefaultModel, profile: str | None = Depends(profile_param),
+                                device: Device = Depends(device_auth)):
         """The profile default for NEW chats (Hermes' own /api/model/set, scope=main).
         Open chats keep their model; they switch per session over the live connection."""
-        res = await hermes_http("POST", "/api/model/set", json={
+        res = await hermes_http("POST", "/api/model/set", params=scoped(profile), json={
             "scope": "main", "model": body.model, "provider": body.provider,
             "confirm_expensive_model": body.confirm_expensive_model})
         if res.get("confirm_required"):
@@ -365,8 +402,9 @@ def create_app(cfg: Config, *, locator: BackendLocator | None = None, tailnet: T
                     "model": body.model, "provider": body.provider}
         if res.get("ok") is False:
             raise ApiError(502, "not_applied", str(res.get("error") or res.get("detail") or "Hermes refused the model"))
-        info = await hermes_http("GET", "/api/model/info")
-        audit_event({"event": "default_model_changed", "device": device.name, "to": info.get("model")})
+        info = await hermes_http("GET", "/api/model/info", params=scoped(profile))
+        audit_event({"event": "default_model_changed", "device": device.name, "profile": profile or "default",
+                     "to": info.get("model")})
         return {"model": info.get("model") or body.model, "provider": info.get("provider") or body.provider}
 
     # ------------------------------------------------------------ the live connection
@@ -389,7 +427,8 @@ def create_app(cfg: Config, *, locator: BackendLocator | None = None, tailnet: T
         frames_key = f"frames:{device.id}:{id(ws)}"
         relay = Relay(locator, max_frame_bytes=cfg.max_frame_bytes,
                       allow_frame=lambda: limiter.allow(frames_key, cfg.frames_per_minute),
-                      audit=lambda e: audit_event({**e, "peer": node}))
+                      audit=lambda e: audit_event({**e, "peer": node}),
+                      allowed_profiles=cfg.allowed_profiles)
         await relay.run(ws, device.name)
 
     app.state.locator = locator
