@@ -5,10 +5,14 @@ authoritative history — this file only summarises what is worth knowing before
 
 ## Unreleased
 
-- Bridge: Hermes profiles. `GET /v1/profiles` lists them, and the sessions, approvals and default
-  model endpoints take `?profile=` so they act on one profile. The default profile works exactly
-  as before. A new `allowed_profiles` key in `config.toml` limits which profiles the phone may use
-  (empty: all). The app's profile picker comes next.
+- Hermes profiles. If your PC has more than one Hermes profile, the drawer shows the one in use
+  under the PC name; tap it to switch. The chat list, Settings (approval mode, default model) and
+  new chats then belong to that profile. Each PC remembers its choice, and a notification opens
+  its chat in the right profile. Needs the updated bridge (run `./install.sh` on the PC); with an
+  older bridge the app stays on the default profile as before.
+- Bridge: `GET /v1/profiles` lists them, and the sessions, approvals and default model endpoints
+  take `?profile=` so they act on one profile. The default profile works exactly as before. A new
+  `allowed_profiles` key in `config.toml` limits which profiles the phone may use (empty: all).
 
 ## v1.9.3
 

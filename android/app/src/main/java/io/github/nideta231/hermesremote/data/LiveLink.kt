@@ -29,7 +29,8 @@ object LiveLink {
     @Volatile var gateway: Gateway? = null
         private set
 
-    data class Watched(val storedId: String, val title: String?)
+    /** [profile]: the Hermes profile the session belongs to, so a notification opens it there. */
+    data class Watched(val storedId: String, val title: String?, val profile: String? = null)
 
     /** Runtime id → session the phone has open or started. Only these notify. */
     private val watched = ConcurrentHashMap<String, Watched>()
@@ -60,8 +61,8 @@ object LiveLink {
         _busy.value = emptySet()
     }
 
-    fun watch(runtimeId: String, storedId: String, title: String?) {
-        watched[runtimeId] = Watched(storedId, title)
+    fun watch(runtimeId: String, storedId: String, title: String?, profile: String? = null) {
+        watched[runtimeId] = Watched(storedId, title, profile)
     }
 
     fun retitle(runtimeId: String, title: String) {
@@ -85,7 +86,7 @@ object LiveLink {
                         setBusy(sid, false)
                         val w = watched[sid] ?: return
                         if (!visible()) {
-                            Notifier.postTurnFinished(app, "$sid:${inc.seq ?: System.nanoTime()}", w.storedId, w.title,
+                            Notifier.postTurnFinished(app, "$sid:${inc.seq ?: System.nanoTime()}", w.storedId, w.profile, w.title,
                                 inc.payload.str("status") ?: "complete",
                                 inc.payload.str("text") ?: inc.payload.str("error"))
                         }
@@ -99,8 +100,8 @@ object LiveLink {
                 val w = watched[sid] ?: return
                 if (visible()) return
                 when (inc.method) {
-                    "approval" -> Notifier.postApprovalNeeded(app, inc.id, w.storedId, w.title, parseApproval(inc.id, inc.params))
-                    "clarify" -> Notifier.postQuestion(app, inc.id, w.storedId, w.title,
+                    "approval" -> Notifier.postApprovalNeeded(app, inc.id, w.storedId, w.profile, w.title, parseApproval(inc.id, inc.params))
+                    "clarify" -> Notifier.postQuestion(app, inc.id, w.storedId, w.profile, w.title,
                         parseClarify(inc.id, inc.params).questions.firstOrNull()?.question)
                 }
             }

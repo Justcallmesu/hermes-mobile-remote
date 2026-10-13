@@ -53,6 +53,7 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import com.journeyapps.barcodescanner.ScanContract
 import com.journeyapps.barcodescanner.ScanOptions
+import io.github.nideta231.hermesremote.data.DEFAULT_HERMES_PROFILE
 import io.github.nideta231.hermesremote.data.Notifier
 import io.github.nideta231.hermesremote.ui.ChatActions
 import io.github.nideta231.hermesremote.ui.ChatScreen
@@ -143,7 +144,9 @@ class MainActivity : ComponentActivity() {
         // Tapped a notification: go straight to the chat it is about.
         intent?.getStringExtra(Notifier.EXTRA_OPEN_SESSION)?.let { sid ->
             intent.removeExtra(Notifier.EXTRA_OPEN_SESSION)
-            vm.openSession(sid)
+            val profile = intent.getStringExtra(Notifier.EXTRA_PROFILE) ?: DEFAULT_HERMES_PROFILE
+            intent.removeExtra(Notifier.EXTRA_PROFILE)
+            vm.openSession(sid, profile)
             showChat.value = true
         }
         val data = intent?.data ?: return
@@ -200,6 +203,7 @@ class MainActivity : ComponentActivity() {
         val update by vm.update.collectAsState()
         val toast by vm.toast.collectAsState()
         val pcs by vm.pcs.collectAsState()
+        val hermesProfiles by vm.hermesProfiles.collectAsState()
         var updateSheet by rememberSaveable { mutableStateOf(false) }
         var changelogSheet by rememberSaveable { mutableStateOf(false) }
 
@@ -236,6 +240,7 @@ class MainActivity : ComponentActivity() {
             addPc = { scope.launch { drawer.close() }; vm.startAddingPc() },
             renamePc = vm::renamePc,
             forgetPc = vm::forgetPc,
+            switchProfile = { vm.switchProfile(it); go(Page.CHAT) },
         )
         val chatActions = ChatActions(
             send = vm::send, stop = vm::stop, steer = vm::steer, approve = vm::answerApproval,
@@ -287,7 +292,7 @@ class MainActivity : ComponentActivity() {
         if (wide) {
             Row(Modifier.fillMaxSize()) {
                 Surface(color = MaterialTheme.colorScheme.surfaceContainerLow, modifier = Modifier.width(320.dp).fillMaxHeight()) {
-                    SessionsPane(sessions, chat.sessionId, sessionActions, pcs = pcs, view = sessionView, update = update, onOpenUpdate = openUpdate)
+                    SessionsPane(sessions, chat.sessionId, sessionActions, pcs = pcs, profiles = hermesProfiles, view = sessionView, update = update, onOpenUpdate = openUpdate)
                 }
                 VerticalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f))
                 Box(Modifier.weight(1f)) { content() }
@@ -295,7 +300,7 @@ class MainActivity : ComponentActivity() {
         } else {
             ModalNavigationDrawer(drawerState = drawer, gesturesEnabled = page == Page.CHAT || drawer.isOpen, drawerContent = {
                 ModalDrawerSheet(drawerContainerColor = MaterialTheme.colorScheme.surfaceContainerLow, modifier = Modifier.width(320.dp)) {
-                    SessionsPane(sessions, chat.sessionId, sessionActions, pcs = pcs, view = sessionView, update = update, onOpenUpdate = openUpdate)
+                    SessionsPane(sessions, chat.sessionId, sessionActions, pcs = pcs, profiles = hermesProfiles, view = sessionView, update = update, onOpenUpdate = openUpdate)
                 }
             }) { content() }
         }

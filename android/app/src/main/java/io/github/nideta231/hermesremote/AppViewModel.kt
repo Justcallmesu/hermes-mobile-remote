@@ -25,6 +25,8 @@ import io.github.nideta231.hermesremote.data.Endpoint
 import io.github.nideta231.hermesremote.data.EndpointResolver
 import io.github.nideta231.hermesremote.data.Gateway
 import io.github.nideta231.hermesremote.data.GatewayState
+import io.github.nideta231.hermesremote.data.DEFAULT_HERMES_PROFILE
+import io.github.nideta231.hermesremote.data.HermesProfile
 import io.github.nideta231.hermesremote.data.HistoryMapper
 import io.github.nideta231.hermesremote.data.Incoming
 import io.github.nideta231.hermesremote.data.LanDiscovery
@@ -52,6 +54,7 @@ import io.github.nideta231.hermesremote.data.parseCatalog
 import io.github.nideta231.hermesremote.data.parseClarify
 import io.github.nideta231.hermesremote.data.parseDispatch
 import io.github.nideta231.hermesremote.data.parseSuggestions
+import io.github.nideta231.hermesremote.data.profileParam
 import io.github.nideta231.hermesremote.data.reuseKeys
 import io.github.nideta231.hermesremote.data.str
 import io.github.nideta231.hermesremote.data.strings
@@ -108,6 +111,17 @@ data class SessionsState(
 
 /** A paired PC in the switcher. [name] is the PC's computer name, or the host it was paired at. */
 data class PairedPc(val id: String, val name: String, val url: String, val active: Boolean)
+
+/**
+ * The Hermes profiles on the PC in use, and which one the app talks to. [items] is empty until
+ * the bridge answers, and stays empty on a bridge too old to list them (the picker then hides).
+ */
+data class ProfilesState(
+    val items: List<HermesProfile> = emptyList(),
+    val active: String = DEFAULT_HERMES_PROFILE,
+) {
+    val current: HermesProfile? get() = items.firstOrNull { it.name == active }
+}
 
 /** Which address the app is using, and what else it could use. */
 data class ConnectionState(
@@ -187,6 +201,15 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
 
     private val _sessions = MutableStateFlow(SessionsState())
     val sessions: StateFlow<SessionsState> = _sessions.asStateFlow()
+
+    private val _hermesProfiles = MutableStateFlow(ProfilesState(active = store.hermesProfile))
+    val hermesProfiles: StateFlow<ProfilesState> = _hermesProfiles.asStateFlow()
+
+    /** The Hermes profile every request goes to (saved per paired PC). */
+    private val profile: String get() = _hermesProfiles.value.active
+
+    /** [params] for a socket call that acts on the profile in use. */
+    private fun scoped(params: JSONObject): JSONObject = params.apply { profileParam(profile)?.let { put("profile", it) } }
 
     /** How the drawer groups, sorts and filters sessions; persisted across launches. */
     private val viewStore = SessionViewStore(app)
@@ -373,6 +396,7 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
             transport = EndpointResolver.transportOf(EndpointResolver.hostOf(p.url).orEmpty())) }
         useClient(BridgeClient(p))
         store.lastSessionId?.let { openSession(it) }
+        refreshProfiles()
         refreshSessions()
         refreshStatus()
         discoverEndpoints()
@@ -629,6 +653,7 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
         drafts = DraftStore(app, ProfileStore.draftsFile(id))
         _reasoning.value = store.reasoningEffort
         _chat.value = ChatState(draft = drafts.get(null), reasoning = store.reasoningEffort)
+        _hermesProfiles.value = ProfilesState(active = store.hermesProfile)
     }
 
     /** Drop every link and screen state of the current PC (its saved files stay). */
@@ -667,6 +692,7 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
         client ?: return
         gateway?.nudge()
         discoverEndpoints()
+        refreshProfiles()
         refreshSessions()
         refreshStatus()
         val sid = _chat.value.sessionId
@@ -796,9 +822,11 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
     private fun refreshSessionsHead() {
         val c = client ?: return
         if (_sessions.value.items.isEmpty()) return refreshSessions(quiet = true)
+        val asked = profile
         viewModelScope.launch {
             try {
-                val (page, _) = c.sessions(SESSIONS_PER_REQUEST, 0)
+                val (page, _) = c.sessions(SESSIONS_PER_REQUEST, 0, asked)
+                if (!stillOn(asked)) return@launch
                 val merged = mergeSessionHead(_sessions.value.items, page)
                 if (merged != _sessions.value.items) _sessions.update { it.copy(items = merged, error = null) }
                 val open = page.firstOrNull { it.id == _chat.value.sessionId }
@@ -819,7 +847,7 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
     private suspend fun resume(storedId: String): Boolean {
         val g = gateway ?: return false
         return try {
-            val r = g.call("session.resume", JSONObject().put("session_id", storedId).put("cols", 96), 60_000)
+            val r = g.call("session.resume", scoped(JSONObject().put("session_id", storedId).put("cols", 96)), 60_000)
             if (_chat.value.sessionId != storedId) return false
             val rid = r.getString("session_id")
             val info = r.optJSONObject("info") ?: JSONObject()
@@ -838,7 +866,7 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
                 }
             }
             val title = info.str("title")?.takeIf { it.isNotBlank() }
-            LiveLink.watch(rid, storedId, title ?: _chat.value.title)
+            LiveLink.watch(rid, storedId, title ?: _chat.value.title, profileParam(profile))
             pendingEvents.clear()
             _chat.update { st ->
                 st.copy(runtimeId = rid, items = reuseKeys(st.items, items), loading = false,
@@ -871,7 +899,7 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
             throw IOException("Couldn't open this chat on the PC")
         }
         val choice = _modelChoice.value
-        val params = JSONObject().put("source", "desktop").put("cols", 96).apply {
+        val params = scoped(JSONObject().put("source", "desktop").put("cols", 96)).apply {
             choice?.let { put("model", it.id).put("provider", it.provider) }
             _reasoning.value?.let { put("reasoning_effort", it) }
             _chat.value.project?.path?.let { put("cwd", it) }
@@ -885,7 +913,7 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
         val carried = _chat.value.draft
         if (carried.isNotEmpty() && carried.trim() != firstText?.trim()) drafts.put(stored, carried)
         drafts.clear(null)
-        LiveLink.watch(rid, stored, null)
+        LiveLink.watch(rid, stored, null, profileParam(profile))
         _chat.update { it.copy(sessionId = stored, runtimeId = rid, model = info.str("model") ?: it.model,
             provider = info.str("provider") ?: it.provider) }
         _modelChoice.value = null
@@ -906,10 +934,50 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
         }
     }
 
+    // ------------------------------------------------------------ Hermes profiles
+
+    /** Which profiles the PC has. A bridge too old to list them leaves the app on the default profile. */
+    fun refreshProfiles() {
+        val c = client ?: return
+        viewModelScope.launch {
+            val items = try {
+                c.profiles()
+            } catch (t: Throwable) {
+                if (t is CancellationException) throw t
+                if (t !is BridgeException || t.httpCode != 404) return@launch  // offline: keep what we have
+                emptyList()
+            }
+            _hermesProfiles.update { it.copy(items = items) }
+            // The chosen profile was deleted (or this bridge can't scope requests): fall back to the default.
+            if (profile != DEFAULT_HERMES_PROFILE && items.none { it.name == profile }) switchProfile(DEFAULT_HERMES_PROFILE)
+        }
+    }
+
+    /**
+     * Talk to another Hermes profile on the same PC. Like switching PCs, but the link stays up:
+     * the drawer, settings and the next new chat all move to [name]; open chats stay on the PC.
+     */
+    fun switchProfile(name: String) {
+        if (name == profile) return
+        store.hermesProfile = name
+        _hermesProfiles.update { it.copy(active = name) }
+        newChat()
+        _sessions.value = SessionsState(loading = true, live = _sessions.value.live)
+        _models.value = null
+        _modelChoice.value = null
+        _system.update { it.copy(approvalMode = null, defaultModel = "", defaultProvider = "", defaultConfirm = null) }
+        refreshSessions()
+        refreshStatus()
+    }
+
+    /** False once the user moved to another profile while a request for [asked] was in flight. */
+    private fun stillOn(asked: String) = profile == asked
+
     // ------------------------------------------------------------ sessions
 
     fun refreshSessions(quiet: Boolean = false) {
         val c = client ?: return
+        val asked = profile
         if (!quiet) _sessions.update { it.copy(loading = true, error = null) }
         viewModelScope.launch {
             try {
@@ -918,17 +986,18 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
                 val list = ArrayList<SessionSummary>()
                 var more = true
                 while (more && list.size < MAX_SESSIONS) {
-                    val (page, next) = c.sessions(SESSIONS_PER_REQUEST, list.size)
+                    val (page, next) = c.sessions(SESSIONS_PER_REQUEST, list.size, asked)
                     list += page
                     more = next && page.isNotEmpty()
                 }
+                if (!stillOn(asked)) return@launch
                 _sessions.update { it.copy(items = list.distinctBy { s -> s.id }, loading = false, hasMore = more, error = null) }
                 val open = list.firstOrNull { it.id == _chat.value.sessionId }
                 if (open != null) _chat.update { it.copy(pinned = open.pinned, title = if (it.title == "New chat") open.displayTitle else it.title) }
                 refreshProjects()
             } catch (t: Throwable) {
                 if (t is CancellationException) throw t
-                _sessions.update { it.copy(loading = false, error = describe(t)) }
+                if (stillOn(asked)) _sessions.update { it.copy(loading = false, error = describe(t)) }
             }
         }
     }
@@ -937,7 +1006,9 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
     private suspend fun refreshProjects() {
         val g = gateway ?: return
         if (g.state.value != GatewayState.OPEN) return
-        val tree = runCatching { g.call("projects.tree", JSONObject(), 15_000) }.getOrNull() ?: return
+        val asked = profile
+        val tree = runCatching { g.call("projects.tree", scoped(JSONObject()), 15_000) }.getOrNull() ?: return
+        if (!stillOn(asked)) return
         val projects = tree.optJSONArray("projects").objects().mapNotNull { p ->
             val id = p.str("id") ?: return@mapNotNull null
             val ids = p.optJSONArray("sessionIds")
@@ -955,9 +1026,11 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
         val cur = _sessions.value
         if (cur.loading || !cur.hasMore) return
         _sessions.update { it.copy(loading = true) }
+        val asked = profile
         viewModelScope.launch {
             try {
-                val (list, more) = c.sessions(SESSIONS_PER_REQUEST, cur.items.size)
+                val (list, more) = c.sessions(SESSIONS_PER_REQUEST, cur.items.size, asked)
+                if (!stillOn(asked)) return@launch
                 _sessions.update { s -> s.copy(items = (s.items + list).distinctBy { it.id }, loading = false, hasMore = more) }
             } catch (t: Throwable) {
                 if (t is CancellationException) throw t
@@ -990,7 +1063,7 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             val g = gateway
             if (g == null || g.state.value != GatewayState.OPEN) { done("Not connected to the PC."); return@launch }
-            val params = JSONObject().put("name", name.trim())
+            val params = scoped(JSONObject().put("name", name.trim()))
             if (path.isNotBlank()) params.put("primary_path", path.trim())
             val result = runCatching { g.call("projects.create", params, 15_000) }
             result.exceptionOrNull()?.let { t ->
@@ -1011,7 +1084,9 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
         updateSuggestions(text)
     }
 
-    fun openSession(id: String) {
+    fun openSession(id: String, inProfile: String? = null) {
+        // A notification names the chat's profile: move there first, so the chat and drawer match.
+        inProfile?.let { switchProfile(it) }
         Notifier.clearSession(app, id)
         if (_chat.value.sessionId == id && _chat.value.runtimeId != null) return
         openJob?.cancel()
@@ -1041,7 +1116,7 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
         apply(pinned)
         viewModelScope.launch {
             try {
-                c.setPinned(id, pinned)
+                c.setPinned(id, pinned, profile)
             } catch (t: Throwable) {
                 if (t is CancellationException) throw t
                 apply(!pinned)
@@ -1054,7 +1129,7 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
         val c = client ?: return
         viewModelScope.launch {
             try {
-                c.renameSession(id, title)
+                c.renameSession(id, title, profile)
                 if (_chat.value.sessionId == id) _chat.update { it.copy(title = title) }
                 refreshSessions(quiet = true)
             } catch (t: Throwable) { say(t) }
@@ -1070,7 +1145,7 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
                     _chat.value.runtimeId?.let { rid -> runCatching { g.call("session.close", JSONObject().put("session_id", rid)) } }
                     newChat()
                 }
-                g.call("session.delete", JSONObject().put("session_id", id))
+                g.call("session.delete", scoped(JSONObject().put("session_id", id)))
                 _sessions.update { s -> s.copy(items = s.items.filterNot { it.id == id }) }
                 drafts.clear(id)
                 refreshSessions(quiet = true)
@@ -1182,7 +1257,8 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
         val g = gateway ?: return
         viewModelScope.launch {
             try {
-                val params = JSONObject().apply { _chat.value.runtimeId?.let { put("session_id", it) } }
+                // With a chat open, its own profile decides; otherwise the one in use.
+                val params = _chat.value.runtimeId?.let { JSONObject().put("session_id", it) } ?: scoped(JSONObject())
                 _models.value = parseCatalog(g.call("model.options", params, 30_000))
             } catch (t: Throwable) {
                 if (t is CancellationException) throw t
@@ -1253,7 +1329,8 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
         val g = gateway ?: return
         suggestJob = viewModelScope.launch {
             delay(90)
-            val params = JSONObject().put("text", text).apply { _chat.value.runtimeId?.let { put("session_id", it) } }
+            val params = _chat.value.runtimeId?.let { JSONObject().put("session_id", it) } ?: scoped(JSONObject())
+            params.put("text", text)
             val res = runCatching { g.call("complete.slash", params, 8_000) }.getOrNull() ?: return@launch
             _suggestions.value = parseSuggestions(res).take(40)
         }
@@ -1446,12 +1523,14 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
 
     fun refreshStatus() {
         val c = client ?: return
+        val asked = profile
         _system.update { it.copy(loading = true) }
         viewModelScope.launch {
             try {
                 val comps = c.status()
-                val mode = runCatching { c.approvalMode() }.getOrNull()
-                val def = runCatching { c.defaultModel() }.getOrNull()
+                val mode = runCatching { c.approvalMode(asked) }.getOrNull()
+                val def = runCatching { c.defaultModel(asked) }.getOrNull()
+                if (!stillOn(asked)) return@launch
                 _system.update {
                     it.copy(components = comps, loading = false, error = null, checkedAt = System.currentTimeMillis(),
                         approvalMode = mode ?: it.approvalMode,
@@ -1470,7 +1549,7 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
         _system.update { it.copy(approvalSaving = true) }
         viewModelScope.launch {
             try {
-                val applied = c.setApprovalMode(mode)
+                val applied = c.setApprovalMode(mode, profile)
                 _system.update { it.copy(approvalMode = applied, approvalSaving = false) }
             } catch (t: Throwable) {
                 if (t is CancellationException) throw t
@@ -1487,7 +1566,7 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
         _system.update { it.copy(defaultSaving = true, defaultConfirm = null) }
         viewModelScope.launch {
             try {
-                val res = c.setDefaultModel(option.id, option.provider, confirmed)
+                val res = c.setDefaultModel(option.id, option.provider, confirmed, profile)
                 if (res.optBoolean("confirm_required")) {
                     val msg = res.optString("confirm_message").ifBlank { "This model is expensive. Make it the default anyway?" }
                     _system.update { it.copy(defaultSaving = false, defaultConfirm = ModelConfirm(option, msg)) }
