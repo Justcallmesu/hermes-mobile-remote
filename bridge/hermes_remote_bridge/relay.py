@@ -17,12 +17,14 @@ import contextlib
 import json
 import logging
 import re
+from collections.abc import Iterable
 from typing import Any, Awaitable, Callable
 
 import websockets
 from starlette.websockets import WebSocket, WebSocketDisconnect, WebSocketState
 
 from .backend import BackendLocator, BackendUnavailable
+from .profiles import ProfileRefused, resolve_profile
 
 log = logging.getLogger(__name__)
 
@@ -60,7 +62,7 @@ def _error(rid: Any, code: int, message: str) -> str:
     return json.dumps({"jsonrpc": "2.0", "id": rid, "error": {"code": code, "message": message}})
 
 
-def check_frame(raw: str, max_bytes: int) -> tuple[str | None, str | None]:
+def check_frame(raw: str, max_bytes: int, allowed_profiles: Iterable[str] = ()) -> tuple[str | None, str | None]:
     """Validate one phone→Hermes frame. Returns (frame to forward, error reply to send back)."""
     if len(raw.encode()) > max_bytes:
         return None, _error(None, -32600, "Frame too large")
@@ -79,8 +81,14 @@ def check_frame(raw: str, max_bytes: int) -> tuple[str | None, str | None]:
         return None, None  # nothing to answer a stray response with
     if not isinstance(method, str) or method not in ALLOWED_METHODS:
         return None, _error(rid, -32601, f"Method not available from the phone: {method}")
+    params = frame.get("params")
+    if isinstance(params, dict) and params.get("profile") is not None:
+        try:
+            resolve_profile(params["profile"] if isinstance(params["profile"], str) else "?", allowed_profiles)
+        except ProfileRefused as exc:
+            return None, _error(rid, -32602, str(exc))
     if method == "config.set":
-        key = (frame.get("params") or {}).get("key")
+        key = (params or {}).get("key") if isinstance(params, dict) else None
         if key not in ALLOWED_CONFIG_KEYS:
             return None, _error(rid, -32602, f"config key not available from the phone: {key}")
     return raw, None
@@ -90,11 +98,13 @@ class Relay:
     """One phone connection ↔ one Hermes connection."""
 
     def __init__(self, locator: BackendLocator, *, max_frame_bytes: int,
-                 allow_frame: Callable[[], bool], audit: Callable[[dict], None]):
+                 allow_frame: Callable[[], bool], audit: Callable[[dict], None],
+                 allowed_profiles: Iterable[str] = ()):
         self.locator = locator
         self.max_frame_bytes = max_frame_bytes
         self.allow_frame = allow_frame
         self.audit = audit
+        self.allowed_profiles = frozenset(allowed_profiles)
 
     async def run(self, phone: WebSocket, device_name: str) -> None:
         try:
@@ -127,7 +137,7 @@ class Relay:
                 if not self.allow_frame():
                     await phone.send_text(_error(None, -32000, "Too many requests"))
                     continue
-                forward, reply = check_frame(raw, self.max_frame_bytes)
+                forward, reply = check_frame(raw, self.max_frame_bytes, self.allowed_profiles)
                 if reply:
                     await phone.send_text(reply)
                 if forward:

@@ -268,6 +268,111 @@ def test_frame_filter():
     assert json.loads(check_frame("not json", 1000)[1])["error"]["code"] == -32700
 
 
+def test_frame_filter_checks_the_profile_a_call_names():
+    def frame(profile):
+        return json.dumps({"jsonrpc": "2.0", "id": 9, "method": "session.create", "params": {"profile": profile}})
+
+    # Every profile when the bridge does not restrict them.
+    assert check_frame(frame("developer"), 1000)[0]
+    # Only the listed ones (and the default) when it does.
+    assert check_frame(frame("developer"), 1000, ["developer"])[0]
+    assert check_frame(frame("default"), 1000, ["developer"])[0]
+    assert check_frame(frame(None), 1000, ["developer"])[0]  # null is Hermes' "default" too
+    ok, err = check_frame(frame("bkm-reports-bot"), 1000, ["developer"])
+    assert ok is None and json.loads(err)["error"]["code"] == -32602
+    # A malformed name never reaches Hermes, restricted or not.
+    for bad in ("../x", 7, ["pm"]):
+        ok, err = check_frame(frame(bad), 1000)
+        assert ok is None and json.loads(err)["error"]["code"] == -32602
+
+
+# ---------------------------------------------------------------- Hermes profiles
+
+PROFILES = {"profiles": [
+    {"name": "default", "is_default": True, "model": "opus", "provider": "anthropic", "display_name": "",
+     "description": "", "path": "/home/u/.hermes", "has_env": True},
+    {"name": "developer", "is_default": False, "model": "sonnet", "provider": "anthropic",
+     "display_name": "Dev", "description": "Engineer", "path": "/home/u/.hermes/profiles/developer"},
+    {"name": "bkm-reports-bot", "is_default": False, "model": "qwen", "provider": "local", "display_name": "",
+     "description": "", "path": "/home/u/.hermes/profiles/bkm-reports-bot"},
+]}
+
+
+def _profile_app(tmp_path, calls, cli=None, **cfg_kw):
+    cfg = Config(devices_file=tmp_path / "d.json", audit_log=tmp_path / "a.log", **cfg_kw)
+    store = DeviceStore(cfg.devices_file)
+    _, token = store.pair("phone")
+    http = fake_http({("GET", "/api/profiles"): PROFILES,
+                      ("GET", "/api/sessions"): {"sessions": [], "total": 0, "limit": 40, "offset": 0},
+                      ("GET", "/api/model/info"): {"model": "sonnet", "provider": "anthropic"}}, calls)
+    app = create_app(cfg, locator=FakeLocator(), http=http, tailnet=FakeTailnet({PHONE: "me@x"}),
+                     devices=store, owner_login="me@x", hermes_cli=cli)
+    return client(app, PHONE), token
+
+
+def test_profiles_lists_only_what_the_picker_needs(tmp_path):
+    c, token = _profile_app(tmp_path, [])
+    body = c.get("/v1/profiles", headers=auth(token)).json()
+    assert [p["name"] for p in body["profiles"]] == ["default", "developer", "bkm-reports-bot"]
+    assert body["profiles"][1] == {"name": "developer", "display_name": "Dev", "description": "Engineer",
+                                   "model": "sonnet", "provider": "anthropic", "is_default": False}
+    assert "path" not in json.dumps(body)  # no filesystem layout leaves the PC
+    assert c.get("/v1/profiles").status_code == 401
+
+
+def test_profiles_hides_what_the_allowlist_excludes(tmp_path):
+    c, token = _profile_app(tmp_path, [], allowed_profiles=["developer"])
+    names = [p["name"] for p in c.get("/v1/profiles", headers=auth(token)).json()["profiles"]]
+    assert names == ["default", "developer"]
+
+
+def test_rest_calls_carry_the_profile_to_hermes(tmp_path):
+    calls = []
+    c, token = _profile_app(tmp_path, calls)
+    c.get("/v1/sessions?profile=developer", headers=auth(token))
+    assert dict(calls[-1].url.params)["profile"] == "developer"
+    c.get("/v1/settings/model?profile=developer", headers=auth(token))
+    assert calls[-1].url.path == "/api/model/info" and dict(calls[-1].url.params)["profile"] == "developer"
+    c.patch("/v1/sessions/s1?profile=developer", headers=auth(token), json={"pinned": True})
+    assert json.loads(calls[-1].content) == {"pinned": True, "profile": "developer"}
+    # No profile (or "default") is exactly the old request: nothing extra reaches Hermes.
+    for query in ("", "?profile=default"):
+        c.get(f"/v1/sessions{query}", headers=auth(token))
+        assert "profile" not in dict(calls[-1].url.params)
+    c.patch("/v1/sessions/s1", headers=auth(token), json={"pinned": True})
+    assert json.loads(calls[-1].content) == {"pinned": True}
+
+
+def test_rest_refuses_bad_or_disallowed_profiles_before_hermes(tmp_path):
+    calls = []
+    c, token = _profile_app(tmp_path, calls, allowed_profiles=["developer"])
+    r = c.get("/v1/sessions?profile=../../etc", headers=auth(token))
+    assert r.status_code == 400 and r.json()["error"]["code"] == "invalid_profile"
+    r = c.get("/v1/sessions?profile=bkm-reports-bot", headers=auth(token))
+    assert r.status_code == 403 and r.json()["error"]["code"] == "profile_refused"
+    assert calls == []
+
+
+def test_approval_mode_is_per_profile(tmp_path):
+    modes = {None: "smart", "developer": "manual"}
+    seen = []
+
+    async def fake_cli(*argv):
+        seen.append(argv)
+        profile, rest = (argv[1], argv[2:]) if argv[:1] == ("-p",) else (None, argv)
+        if rest[:2] == ("config", "get"):
+            return modes[profile] + "\n"
+        modes[profile] = rest[3]
+        return "ok\n"
+
+    c, token = _profile_app(tmp_path, [], cli=fake_cli)
+    assert c.get("/v1/settings/approvals?profile=developer", headers=auth(token)).json()["mode"] == "manual"
+    assert c.put("/v1/settings/approvals?profile=developer", headers=auth(token), json={"mode": "off"}).json()["mode"] == "off"
+    assert ("-p", "developer", "config", "set", "approvals.mode", "off") in seen
+    assert modes == {None: "smart", "developer": "off"}  # the default profile was not touched
+    assert '"profile": "developer"' in (tmp_path / "a.log").read_text()
+
+
 @pytest.fixture
 def fake_hermes():
     """A real WebSocket server playing `hermes serve`'s /api/ws: checks the token, echoes calls

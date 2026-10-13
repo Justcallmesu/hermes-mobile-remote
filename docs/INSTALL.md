@@ -143,6 +143,8 @@ lan = true                      # serve the local network on trusted networks
 mdns = true                     # announce over mDNS so the app finds a changed IP
 start_hermes = true             # start `hermes serve` when the desktop app isn't running
 allowed_logins = []             # Tailscale logins allowed; empty means this node's owner
+allowed_profiles = []           # Hermes profiles the phone may switch to; empty means all
+                                #   (the default profile is always available)
 max_body_bytes = 1_000_000
 requests_per_minute = 240
 frames_per_minute = 600         # per live connection

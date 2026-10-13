@@ -48,6 +48,9 @@ class Config:
     backend_log: Path = STATE_DIR / "hermes-serve.log"
     # Tailscale login names allowed to connect. Empty means "the owner of this node".
     allowed_logins: list[str] = field(default_factory=list)
+    # Named Hermes profiles the phone may switch to. Empty means all of them; the default
+    # profile is always available.
+    allowed_profiles: list[str] = field(default_factory=list)
     devices_file: Path = CONFIG_DIR / "devices.json"
     audit_log: Path = STATE_DIR / "audit.log"
     max_body_bytes: int = 1_000_000

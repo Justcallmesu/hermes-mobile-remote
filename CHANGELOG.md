@@ -3,6 +3,13 @@
 Releases are git tags; the version in the app comes from the tag. `git log v0.9.0..vX.Y.Z` is the
 authoritative history — this file only summarises what is worth knowing before upgrading.
 
+## Unreleased
+
+- Bridge: Hermes profiles. `GET /v1/profiles` lists them, and the sessions, approvals and default
+  model endpoints take `?profile=` so they act on one profile. The default profile works exactly
+  as before. A new `allowed_profiles` key in `config.toml` limits which profiles the phone may use
+  (empty: all). The app's profile picker comes next.
+
 ## v1.9.3
 
 - A failed turn (for example "The conversation is too long for this model. Run /compress, then
