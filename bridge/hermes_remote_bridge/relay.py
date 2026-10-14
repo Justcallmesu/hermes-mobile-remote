@@ -47,6 +47,9 @@ ALLOWED_METHODS = frozenset({
     "approval.respond", "approval.pending", "approval.received", "clarify.lock",
     # attachments
     "image.attach_bytes", "image.detach", "file.attach",
+    # the vault page: list (metadata only, never a secret), add, remove. Unlocking a password manager
+    # (its master password) stays on the PC.
+    "vault.list", "vault.sources", "vault.add", "vault.remove",
 })
 
 # config.set keys the phone may change: the chat's model, reasoning and fast mode.

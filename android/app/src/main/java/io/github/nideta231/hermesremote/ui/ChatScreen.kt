@@ -166,7 +166,12 @@ class ChatActions(
     val loadImage: suspend (String) -> ByteArray? = { null },
     /** Answer the open masked prompt: (identifier for a login, value); empty value = skip. */
     val answerSecret: (String, String) -> Unit = { _, _ -> },
+    /** Edit a sent message: Hermes drops it and what followed, then answers the new text. */
+    val edit: (ChatItem.User, String) -> Unit = { _, _ -> },
 )
+
+/** The long-press menu of a sent message; provided by [ChatScreen]. */
+private val LocalEditMessage = staticCompositionLocalOf<((ChatItem.User, String) -> Unit)?> { null }
 
 /** Loads a chat image's bytes; provided once by [ChatScreen] so every bubble can draw pictures. */
 private val LocalImageLoader = staticCompositionLocalOf<suspend (String) -> ByteArray?> { { null } }
@@ -212,7 +217,7 @@ fun ChatScreen(
     val clarify = LiveReducer.openClarify(state.items)
     val secret = LiveReducer.openSecret(state.items)
 
-    CompositionLocalProvider(LocalImageLoader provides actions.loadImage) {
+    CompositionLocalProvider(LocalImageLoader provides actions.loadImage, LocalEditMessage provides actions.edit) {
     Column(Modifier.fillMaxSize().imePadding()) {
         ChatTopBar(state, health, showMenuButton, actions, profile)
         ConnectionBanner(state, health, actions.openSettings)
@@ -506,9 +511,15 @@ private fun copyable(text: String): Modifier {
     })
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun UserBubble(item: ChatItem.User) {
     val alpha by animateFloatAsState(if (item.pending) 0.10f else 0.17f, label = "bubble")
+    val edit = LocalEditMessage.current
+    val clipboard = LocalClipboardManager.current
+    val haptics = LocalHapticFeedback.current
+    var menu by remember { mutableStateOf(false) }
+    var editing by remember { mutableStateOf(false) }
     if (item.images.isNotEmpty()) {
         Box(Modifier.fillMaxWidth().padding(bottom = if (item.text.isBlank()) 0.dp else 6.dp), contentAlignment = Alignment.CenterEnd) {
             ImageStrip(item.images, Modifier.padding(start = 40.dp))
@@ -517,12 +528,37 @@ private fun UserBubble(item: ChatItem.User) {
     if (item.text.isBlank()) return
     Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.CenterEnd) {
         Surface(color = Gold.copy(alpha = alpha), shape = RoundedCornerShape(20.dp, 20.dp, 6.dp, 20.dp),
-            modifier = Modifier.widthIn(max = 560.dp).padding(start = 40.dp).clip(RoundedCornerShape(20.dp, 20.dp, 6.dp, 20.dp)).then(copyable(item.text))) {
+            modifier = Modifier.widthIn(max = 560.dp).padding(start = 40.dp).clip(RoundedCornerShape(20.dp, 20.dp, 6.dp, 20.dp))
+                .combinedClickable(onClick = {}, onLongClick = { haptics.performHapticFeedback(HapticFeedbackType.LongPress); menu = true })) {
             Text(remember(item.text) { clipForDisplay(item.text) }, modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
                 style = MaterialTheme.typography.bodyMedium.copy(lineHeight = 21.sp),
                 color = if (item.pending) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurface)
         }
+        androidx.compose.material3.DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+            androidx.compose.material3.DropdownMenuItem(text = { Text("Copy") }, leadingIcon = { Icon(Glyphs.Copy, null, Modifier.size(18.dp)) },
+                onClick = { clipboard.setText(AnnotatedString(item.text)); menu = false })
+            if (edit != null && !item.pending) androidx.compose.material3.DropdownMenuItem(text = { Text("Edit") },
+                leadingIcon = { Icon(Glyphs.Edit, null, Modifier.size(18.dp)) }, onClick = { menu = false; editing = true })
+        }
     }
+    if (editing && edit != null) EditMessageDialog(item, onSave = { edit(item, it); editing = false }, onClose = { editing = false })
+}
+
+@Composable
+private fun EditMessageDialog(item: ChatItem.User, onSave: (String) -> Unit, onClose: () -> Unit) {
+    var text by remember { mutableStateOf(item.text) }
+    AlertDialog(onDismissRequest = onClose, title = { Text("Edit message") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(text, { text = it }, minLines = 3, maxLines = 10, shape = RoundedCornerShape(14.dp),
+                    modifier = Modifier.fillMaxWidth())
+                Text("Hermes forgets this message and everything after it, then answers the edited one. " +
+                    "Pictures and files sent with it aren't sent again.",
+                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        },
+        confirmButton = { TextButton(enabled = text.isNotBlank() && text.trim() != item.text.trim(), onClick = { onSave(text) }) { Text("Send", color = Gold) } },
+        dismissButton = { TextButton(onClick = onClose) { Text("Cancel") } })
 }
 
 @Composable

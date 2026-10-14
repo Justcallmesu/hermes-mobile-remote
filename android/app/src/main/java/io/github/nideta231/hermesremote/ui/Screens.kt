@@ -132,6 +132,7 @@ class SessionActions(
     val setView: (SessionView) -> Unit = {},
     val switchProfile: (String) -> Unit = {},
     val openScheduled: () -> Unit = {},
+    val openVault: () -> Unit = {},
 )
 
 /** The session list. On phones it lives in the navigation drawer; on tablets beside the chat. */
@@ -279,6 +280,7 @@ fun SessionsPane(
         }
         HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f))
         PanelRow("Scheduled", icon = Glyphs.Clock, onClick = actions.openScheduled)
+        PanelRow("Vault", icon = Glyphs.Shield, onClick = actions.openVault)
         PanelRow("Settings", icon = Glyphs.Settings, onClick = actions.openSettings)
     }
 

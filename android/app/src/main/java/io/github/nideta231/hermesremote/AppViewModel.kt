@@ -63,6 +63,7 @@ import io.github.nideta231.hermesremote.data.reuseKeys
 import io.github.nideta231.hermesremote.data.str
 import io.github.nideta231.hermesremote.data.strings
 import io.github.nideta231.hermesremote.data.withInflight
+import io.github.nideta231.hermesremote.data.turnPromptKey
 import io.github.nideta231.hermesremote.data.withLiveUser
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
@@ -228,6 +229,10 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
 
     /** The Scheduled page: cron jobs of the profile in use. */
     val cron = CronJobs(viewModelScope, client = { client }, profile = { profile },
+        describe = ::describe, say = { _toast.value = it })
+    /** The Vault page: saved logins, cards and addresses on the PC (metadata; secrets stay there). */
+    val vault = io.github.nideta231.hermesremote.data.Vault(viewModelScope,
+        call = { method, params -> (gateway ?: throw IOException("Not connected to your PC")).call(method, scoped(params), 30_000) },
         describe = ::describe, say = { _toast.value = it })
     /** Settings > PC: the bridge's health, and the profile's approval mode and default model. */
     val settings = SystemSettings(viewModelScope, client = { client }, profile = { profile },
@@ -636,6 +641,7 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
         _sessions.value = SessionsState()
         settings.clear()
         cron.clear()
+        vault.clear()
         _models.value = null
         _modelChoice.value = null
         _confirm.value = null
@@ -662,8 +668,34 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
         refreshProfiles()
         refreshSessions()
         settings.refresh()
-        val sid = _chat.value.sessionId
-        if (sid != null && gateway?.state?.value == GatewayState.OPEN) viewModelScope.launch { resume(sid) }
+        val g = gateway ?: return
+        if (g.state.value != GatewayState.OPEN) return // the reopen emits Incoming.Open, which resumes
+        viewModelScope.launch {
+            // A socket that looks open may have died while the phone slept: its events (the rest of the
+            // reply) were lost. Ping it; a dead one is dropped and the reconnect re-reads the chat.
+            val alive = try { g.call("ping", JSONObject(), 5_000); true } catch (t: Throwable) {
+                if (t is CancellationException) throw t
+                false
+            }
+            if (!alive) return@launch g.forceReconnect()
+            _chat.value.sessionId?.let { resume(it) }
+        }
+    }
+
+    private var resyncJob: Job? = null
+
+    /**
+     * A turn ended: re-read the chat from the PC. Streamed events can be lost (screen off, a socket
+     * that dropped and came back mid-reply); the stored transcript is complete, so the chat always
+     * ends up exactly as the PC has it, without pulling to refresh.
+     */
+    private fun resyncAfterTurn() {
+        val sid = _chat.value.sessionId ?: return
+        resyncJob?.cancel()
+        resyncJob = viewModelScope.launch {
+            delay(700)
+            if (_chat.value.sessionId == sid && !_chat.value.sending) resume(sid, quiet = true)
+        }
     }
 
     // ------------------------------------------------------------ the live socket
@@ -754,7 +786,7 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
             st.copy(items = items, status = status, title = title, model = model, provider = provider, reasoning = reasoning)
         }
         _reasoning.value = _chat.value.reasoning ?: _reasoning.value
-        if (finished) { scheduleSessionsRefresh(); viewModelScope.launch { refreshActive() } }
+        if (finished) { scheduleSessionsRefresh(); viewModelScope.launch { refreshActive() }; resyncAfterTurn() }
     }
 
     /**
@@ -813,7 +845,7 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
      * the turn in flight (if the desktop or the phone is running one) and any open question.
      * Hermes then streams every further event of this session to us, wherever it was started.
      */
-    private suspend fun resume(storedId: String): Boolean {
+    private suspend fun resume(storedId: String, quiet: Boolean = false): Boolean {
         val g = gateway ?: return false
         return try {
             val r = g.call("session.resume", scoped(JSONObject().put("session_id", storedId).put("cols", 96)), 60_000)
@@ -821,10 +853,14 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
             val rid = r.getString("session_id")
             val info = r.optJSONObject("info") ?: JSONObject()
             val running = r.optBoolean("running") || info.optBoolean("running")
-            var items = HistoryMapper.map(r.optJSONArray("messages"))
+            val messages = r.optJSONArray("messages")
+            var items = HistoryMapper.map(messages)
             val inflight = r.optJSONObject("inflight")
             // A failed turn stays in `inflight` (with `error`) after it stops running: show it, as the desktop does.
-            if (running || inflight?.str("error")?.isNotBlank() == true) items = withInflight(items, inflight)
+            if (running || inflight?.str("error")?.isNotBlank() == true) {
+                val started = if (r.has("turn_started_at") && !r.isNull("turn_started_at")) r.optDouble("turn_started_at") else null
+                items = withInflight(items, inflight, turnPromptKey(messages, started))
+            }
             var waiting = false
             r.optJSONArray("open_requests").objects().forEach { q ->
                 val id = q.str("id") ?: return@forEach
@@ -841,7 +877,10 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
             LiveLink.watch(rid, storedId, title ?: _chat.value.title, profileParam(profile))
             pendingEvents.clear()
             _chat.update { st ->
-                st.copy(runtimeId = rid, items = reuseKeys(st.items, items), loading = false,
+                // A message still being sent isn't on the PC yet: keep its bubble through the re-read.
+                val fresh = reuseKeys(st.items, items)
+                val keys = fresh.mapTo(HashSet()) { it.key }
+                st.copy(runtimeId = rid, items = fresh + st.items.filter { it is ChatItem.User && it.pending && it.key !in keys }, loading = false,
                     status = when { waiting -> "waiting"; running -> "working"; else -> "idle" },
                     title = title ?: st.title, model = info.str("model") ?: st.model, provider = info.str("provider") ?: st.provider,
                     reasoning = info.str("reasoning_effort")?.ifBlank { null } ?: st.reasoning)
@@ -851,6 +890,7 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
         } catch (t: Throwable) {
             if (t is CancellationException) throw t
             _chat.update { it.copy(loading = false) }
+            if (quiet) return false // a background re-sync: the chat as shown stays
             if (t is RpcException && _chat.value.sessionId == storedId) {
                 // Deleted elsewhere: forget it instead of retrying forever.
                 store.lastSessionId = null
@@ -939,6 +979,7 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
         _modelChoice.value = null
         settings.forgetProfileValues()
         cron.clear()
+        vault.clear()
         refreshSessions()
         settings.refresh()
     }
@@ -1198,6 +1239,39 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
                 }
                 drafts.put(_chat.value.sessionId, _chat.value.draft)
                 say(t)
+            }
+        }
+    }
+
+    /**
+     * Edit a sent message, like the desktop's edit: Hermes drops [item] and everything after it,
+     * then answers [newText] in its place. Needs the message's row on the PC (known once the chat
+     * was read back, i.e. after its reply finished).
+     */
+    fun editMessage(item: ChatItem.User, newText: String) {
+        val text = newText.trim()
+        if (text.isEmpty()) return
+        if (_chat.value.busy || _chat.value.sending) { _toast.value = "Wait for the current reply to finish, then edit."; return }
+        val rowId = item.rowId ?: run { _toast.value = "This message isn't saved on the PC yet. Try again in a moment."; return }
+        val before = _chat.value.items
+        val at = before.indexOfFirst { it.key == item.key }.takeIf { it >= 0 } ?: return
+        val first = before.take(at).none { it is ChatItem.User }
+        val key = "u-${System.nanoTime()}"
+        _chat.update { it.copy(sending = true, items = before.take(at) + ChatItem.User(key, text, pending = true)) }
+        viewModelScope.launch {
+            try {
+                rpc("prompt.submit", { rid -> JSONObject().put("session_id", rid).put("text", text)
+                    .put("confirm_truncate", true).put("truncate_before_row_id", rowId)
+                    .apply { if (first) put("confirm_empty_truncate", true) } }, 30_000)
+                _chat.update { st -> st.copy(sending = false, status = if (st.status == "idle") "working" else st.status,
+                    items = st.items.map { if (it is ChatItem.User && it.key == key) it.copy(pending = false) else it }) }
+            } catch (t: Throwable) {
+                if (t is CancellationException) throw t
+                _chat.update { it.copy(sending = false, items = before) }
+                if (t is RpcException && t.code == 4018) {
+                    _toast.value = "That message changed on the PC. The chat was reloaded; try again."
+                    _chat.value.sessionId?.let { resume(it, quiet = true) }
+                } else say(t)
             }
         }
     }

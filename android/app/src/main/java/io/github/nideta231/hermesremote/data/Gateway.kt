@@ -112,6 +112,9 @@ class Gateway(
         if (_state.value != GatewayState.OPEN) socket?.cancel()
     }
 
+    /** Drop the socket even if it looks open (it may be half-dead after the phone slept); the loop reconnects. */
+    fun forceReconnect() { socket?.cancel() }
+
     fun close() {
         closed = true
         socket?.close(1000, "bye")

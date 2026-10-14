@@ -3,6 +3,23 @@
 Releases are git tags; the version in the app comes from the tag. `git log v0.9.0..vX.Y.Z` is the
 authoritative history — this file only summarises what is worth knowing before upgrading.
 
+## v1.13.0
+
+- Chat stays in sync. Opening (or coming back to) a chat while Hermes is still replying no longer
+  shows the prompt a second time at the bottom with part of the reply under it: the running turn
+  is matched to the prompt Hermes already stored, and only the not-yet-stored part of the reply
+  is added.
+- Leaving the app or turning the screen off mid-reply no longer leaves the reply cut off. Coming
+  back pings the link and reconnects if it went stale, every finished turn re-reads the chat from
+  the PC, and the final reply text replaces a partial one. No pull-to-refresh needed.
+- Edit a sent message: long-press it → Edit. Like the desktop, Hermes drops that message and
+  everything after it and answers the edited text. Available once the message's reply finished.
+- Vault page (drawer → Vault): see the logins, cards and addresses Hermes can fill in, add new
+  ones, edit (re-enter the secret; the new version replaces the old) and delete. Secrets are never
+  shown on the phone. Password-manager items are listed read-only; unlocking them stays on the PC.
+- Bridge: `vault.list`, `vault.sources`, `vault.add`, `vault.remove` on the relay allowlist.
+  Update the PC bridge for the vault page.
+
 ## v1.12.0
 
 - Files in chat. The paperclip next to the picture button opens the system file picker (any

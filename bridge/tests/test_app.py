@@ -254,6 +254,12 @@ def test_frame_filter():
         assert ok and err is None
     ok, err = check_frame(json.dumps({"jsonrpc": "2.0", "id": 6, "method": "projects.delete"}), 1000)
     assert ok is None and json.loads(err)["error"]["code"] == -32601
+    # The vault page: list/add/remove; unlocking a password manager or turning sources on/off stays on the PC.
+    for method in ("vault.list", "vault.sources", "vault.add", "vault.remove"):
+        assert check_frame(json.dumps({"jsonrpc": "2.0", "id": 8, "method": method, "params": {}}), 1000)[0]
+    for method in ("vault.unlock", "vault.lock", "vault.source.set"):
+        ok, err = check_frame(json.dumps({"jsonrpc": "2.0", "id": 9, "method": method}), 1000)
+        assert ok is None and json.loads(err)["error"]["code"] == -32601
     # config.set only for the chat's own settings.
     ok, err = check_frame(json.dumps({"jsonrpc": "2.0", "id": 3, "method": "config.set",
                                       "params": {"key": "model", "value": "x"}}), 1000)

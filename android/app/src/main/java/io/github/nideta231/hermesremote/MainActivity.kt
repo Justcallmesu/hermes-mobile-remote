@@ -61,6 +61,8 @@ import io.github.nideta231.hermesremote.data.Notifier
 import io.github.nideta231.hermesremote.ui.ChatActions
 import io.github.nideta231.hermesremote.ui.CronActions
 import io.github.nideta231.hermesremote.ui.CronScreen
+import io.github.nideta231.hermesremote.ui.VaultActions
+import io.github.nideta231.hermesremote.ui.VaultScreen
 import io.github.nideta231.hermesremote.ui.ChatScreen
 import io.github.nideta231.hermesremote.ui.HermesTheme
 import io.github.nideta231.hermesremote.ui.ThemePrefs
@@ -83,7 +85,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 /** Chat is home; the others are pages pushed on top of it. */
-enum class Page { CHAT, SCHEDULED, SETTINGS }
+enum class Page { CHAT, SCHEDULED, VAULT, SETTINGS }
 
 class MainActivity : ComponentActivity() {
     private val vm: AppViewModel by viewModels()
@@ -221,6 +223,7 @@ class MainActivity : ComponentActivity() {
         val pcs by vm.pcs.collectAsState()
         val hermesProfiles by vm.hermesProfiles.collectAsState()
         val cron by vm.cron.state.collectAsState()
+        val vaultState by vm.vault.state.collectAsState()
         var updateSheet by rememberSaveable { mutableStateOf(false) }
         var changelogSheet by rememberSaveable { mutableStateOf(false) }
 
@@ -259,6 +262,7 @@ class MainActivity : ComponentActivity() {
             forgetPc = vm::forgetPc,
             switchProfile = { vm.switchProfile(it); go(Page.CHAT) },
             openScheduled = { go(Page.SCHEDULED) },
+            openVault = { go(Page.VAULT) },
         )
         val chatActions = ChatActions(
             send = vm::send, stop = vm::stop, steer = vm::steer, approve = vm::answerApproval,
@@ -272,6 +276,7 @@ class MainActivity : ComponentActivity() {
             pickImages = { runCatching { chatPicker.launch(PickVisualMediaRequest(PickVisualMedia.ImageOnly)) } },
             pickFiles = { runCatching { filePicker.launch(arrayOf("*/*")) } }, removeFile = vm::removeFile,
             removeAttachment = vm::removeAttachment, loadImage = vm::loadImage, answerSecret = vm::answerSecret,
+            edit = vm::editMessage,
         )
         val settingsActions = SettingsActions(
             refresh = vm.settings::refresh, unpair = vm::unpair, setApprovalMode = vm.settings::setApprovalMode,
@@ -299,6 +304,8 @@ class MainActivity : ComponentActivity() {
                             projects = sessions.projects.filter { it.path != null },
                             profile = hermesProfiles.headerLabel)
                         Page.SCHEDULED -> CronScreen(cron, hermesProfiles.active.takeIf { hermesProfiles.items.size > 1 }, cronActions, onBack = { page = Page.CHAT })
+                        Page.VAULT -> VaultScreen(vaultState, VaultActions(refresh = vm.vault::refresh, save = vm.vault::save,
+                            remove = vm.vault::remove), onBack = { page = Page.CHAT })
                         Page.SETTINGS -> SettingsScreen(system, pairing, conn, update, settingsActions, onBack = { page = Page.CHAT }, models = models)
                     }
                 }

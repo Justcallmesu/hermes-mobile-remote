@@ -9,8 +9,9 @@ sealed interface ChatItem {
     val key: String
 
     /** [images]: the pictures sent with it, as PC paths (or a phone `content://` uri while it is still sending). */
+    /** [rowId]: Hermes' durable row id, known once the message is read back from the PC (edit needs it). */
     data class User(override val key: String, val text: String, val pending: Boolean = false,
-                    val images: List<String> = emptyList()) : ChatItem
+                    val images: List<String> = emptyList(), val rowId: Long? = null) : ChatItem
     data class Assistant(override val key: String, val text: String, val streaming: Boolean = false) : ChatItem
     /** The model's reasoning for the reply that follows; shown collapsed. */
     data class Thinking(override val key: String, val text: String, val streaming: Boolean = false) : ChatItem
@@ -201,7 +202,8 @@ object HistoryMapper {
                     is SyntheticRow.Notice -> items += ChatItem.Notice("h-$id", s.text)
                     null -> {
                         val (body, images) = splitUserImages(text)
-                        items += ChatItem.User("h-$id", displayUserText(body), images = images)
+                        items += ChatItem.User("h-$id", displayUserText(body), images = images,
+                            rowId = if (m.has("row_id") && !m.isNull("row_id")) m.optLong("row_id") else null)
                     }
                 }
                 "assistant" -> {
@@ -298,9 +300,11 @@ object LiveReducer {
                 seal()
                 val text = p.str("text")?.trim().orEmpty()
                 val sinceUser = out.subList(out.indexOfLast { it is ChatItem.User } + 1, out.size)
-                if (text.isNotEmpty() && sinceUser.none { it is ChatItem.Assistant && it.text.trim() == text } &&
-                    out.lastOrNull() !is ChatItem.Assistant) {
-                    out += ChatItem.Assistant("live-$key", text)
+                val last = out.lastOrNull()
+                if (text.isNotEmpty() && sinceUser.none { it is ChatItem.Assistant && sameText(it.text, text) }) {
+                    if (last !is ChatItem.Assistant) out += ChatItem.Assistant("live-$key", text)
+                    // The streamed reply missed pieces (screen off, a reconnect): the final text is authoritative.
+                    else if (coversReply(text, last.text)) out[out.lastIndex] = last.copy(text = text, streaming = false)
                 }
                 when (p.str("status")) {
                     "error" -> {
@@ -354,30 +358,84 @@ object LiveReducer {
     }
 }
 
+/** Whitespace-insensitive equality: the same message as typed, stored and replayed. */
+fun sameText(a: String, b: String): Boolean = squash(a) == squash(b)
+
+private fun squash(s: String) = s.trim().replace(Regex("\\s+"), " ")
+
+/** [final] is the whole of a reply [partial] showed only part of (its start, or its end). */
+fun coversReply(final: String, partial: String): Boolean {
+    val f = squash(final)
+    val p = squash(partial)
+    if (p.isEmpty() || f.length <= p.length) return false
+    val k = minOf(40, p.length)
+    return f.startsWith(p.take(k)) || f.endsWith(p.takeLast(k))
+}
+
+/**
+ * Key of the running turn's prompt in a resumed transcript: the first user row stored at or after
+ * the turn started. Null when the PC sent no timestamps or hasn't stored the prompt yet.
+ */
+fun turnPromptKey(messages: JSONArray?, turnStartedAt: Double?): String? {
+    turnStartedAt ?: return null
+    messages.objects().forEach { m ->
+        if (m.optString("role") != "user" || m.str("display_kind") == "steer" || m.str("display_kind") == "hidden") return@forEach
+        val ts = m.optDouble("timestamp", Double.NaN)
+        if (ts.isNaN() || !m.has("row_id") || m.isNull("row_id")) return@forEach
+        if (ts >= turnStartedAt - 2.0) return "h-r${m.optLong("row_id")}"
+    }
+    return null
+}
+
+/** What [reply] (everything streamed this turn) adds past the [persisted] pieces already in the transcript. */
+fun replyRemainder(reply: String, persisted: List<String>): String {
+    var cursor = 0
+    for (chunk in persisted) {
+        val c = chunk.trim()
+        if (c.isEmpty()) continue
+        val at = reply.indexOf(c, cursor)
+        if (at >= 0) cursor = at + c.length
+    }
+    return reply.substring(cursor)
+}
+
 /**
  * The in-flight turn of a session the phone attaches to mid-run (`inflight` from session.resume):
- * the user's message and the reply so far, appended after the persisted history.
+ * the user's message and the reply so far, after the persisted history. Hermes stores the prompt
+ * and each finished step while the turn runs, so only what isn't in the transcript yet is added;
+ * re-adding it put the prompt (and its reply) a second time at the bottom of the chat.
+ * [promptKey]: the prompt's item when [turnPromptKey] found it.
  */
-fun withInflight(history: List<ChatItem>, inflight: JSONObject?): List<ChatItem> {
+fun withInflight(history: List<ChatItem>, inflight: JSONObject?, promptKey: String? = null): List<ChatItem> {
     inflight ?: return history
     val out = history.toMutableList()
     val raw = inflight.str("user").orEmpty()
-    when (val s = syntheticUserRow(raw, inflight.str("display_kind"), inflight.opt("display_metadata"))) {
+    var at = promptKey?.let { k -> out.indexOfFirst { it.key == k } } ?: -1
+    if (at < 0) when (val s = syntheticUserRow(raw, inflight.str("display_kind"), inflight.opt("display_metadata"))) {
         SyntheticRow.Drop -> {}
-        is SyntheticRow.Notice -> if ((out.lastOrNull() as? ChatItem.Notice)?.text != s.text) out += ChatItem.Notice("inflight-u", s.text)
+        is SyntheticRow.Notice -> {
+            if ((out.lastOrNull() as? ChatItem.Notice)?.text != s.text) out += ChatItem.Notice("inflight-u", s.text)
+            at = out.lastIndex
+        }
         null -> {
             val (body, images) = splitUserImages(raw)
             val user = displayUserText(body).trim()
-            if ((user.isNotEmpty() || images.isNotEmpty()) && (out.lastOrNull { it is ChatItem.User } as? ChatItem.User)?.text?.trim() != user) {
+            val lastUser = out.indexOfLast { it is ChatItem.User }
+            val shown = out.getOrNull(lastUser) as? ChatItem.User
+            if (shown != null && sameText(shown.text, user)) at = lastUser
+            else if (user.isNotEmpty() || images.isNotEmpty()) {
                 out += ChatItem.User("inflight-u", user, images = images)
+                at = out.lastIndex
             }
         }
     }
     val reply = inflight.str("assistant").orEmpty()
+    val persisted = if (at >= 0) out.drop(at + 1).filterIsInstance<ChatItem.Assistant>().map { it.text } else emptyList()
+    val rest = replyRemainder(reply, persisted)
     val error = inflight.str("error")?.trim().orEmpty()
     // A retained failed turn (e.g. "The conversation is too long for this model", with its hint and details):
     // the reply so far is final, and the failure shows the way the desktop's error banner does.
-    if (reply.isNotBlank()) out += ChatItem.Assistant("inflight-a", reply.trimStart(), streaming = error.isEmpty() && inflight.optBoolean("streaming", true))
+    if (rest.isNotBlank()) out += ChatItem.Assistant("inflight-a", rest.trimStart(), streaming = error.isEmpty() && inflight.optBoolean("streaming", true))
     if (error.isNotEmpty()) out += ChatItem.Notice("inflight-e", error, error = true)
     return out
 }
@@ -407,9 +465,9 @@ fun withLiveUser(items: List<ChatItem>, anchorKey: String?, inflight: JSONObject
             val text = displayUserText(body).trim()
             if (text.isEmpty() && images.isEmpty()) return items
             // From the anchor on: the anchor itself is the phone's own bubble when it sent this turn.
-            if (items.drop(maxOf(at - 1, 0)).any { it is ChatItem.User && it.text.trim() == text }) return items
+            if (items.drop(maxOf(at - 1, 0)).any { it is ChatItem.User && sameText(it.text, text) }) return items
             val lastUser = items.indexOfLast { it is ChatItem.User }
-            if (lastUser >= 0 && (items[lastUser] as ChatItem.User).text.trim() == text &&
+            if (lastUser >= 0 && sameText((items[lastUser] as ChatItem.User).text, text) &&
                 items.drop(lastUser + 1).none { it is ChatItem.Assistant }) return items
             ChatItem.User(key, text, images = images)
         }
