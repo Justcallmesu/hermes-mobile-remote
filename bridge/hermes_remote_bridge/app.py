@@ -316,7 +316,8 @@ def create_app(cfg: Config, *, locator: BackendLocator | None = None, tailnet: T
     # One `hermes serve` serves every profile. A REST call names the one it means with
     # `?profile=`; leaving it out (or `default`) is the default profile, as before.
 
-    async def profile_param(profile: str | None = None) -> str | None:
+    async def profile_param(profile: str | None = None, _: Device = Depends(device_auth)) -> str | None:
+        # Authenticate first, so an unpaired caller gets 401 and learns nothing about profile names.
         return resolve_profile(profile, cfg.allowed_profiles)
 
     def scoped(profile: str | None) -> dict[str, str]:

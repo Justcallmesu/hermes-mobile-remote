@@ -326,6 +326,12 @@ def test_profiles_hides_what_the_allowlist_excludes(tmp_path):
     assert names == ["default", "developer"]
 
 
+def test_profile_names_are_not_probed_without_auth(tmp_path):
+    c, _ = _profile_app(tmp_path, [], allowed_profiles=["developer"])
+    for name in ("secret", "BAD!!", "developer"):
+        assert c.get(f"/v1/sessions?profile={name}").status_code == 401
+
+
 def test_rest_calls_carry_the_profile_to_hermes(tmp_path):
     calls = []
     c, token = _profile_app(tmp_path, calls)
