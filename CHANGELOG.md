@@ -3,7 +3,7 @@
 Releases are git tags; the version in the app comes from the tag. `git log v0.9.0..vX.Y.Z` is the
 authoritative history — this file only summarises what is worth knowing before upgrading.
 
-## Unreleased
+## v1.10.0
 
 - Hermes profiles. If your PC has more than one Hermes profile, the drawer shows the one in use
   under the PC name; tap it to switch. The chat list, Settings (approval mode, default model) and
@@ -20,6 +20,9 @@ authoritative history — this file only summarises what is worth knowing before
   resume work from the phone; creating and editing jobs stays on the PC.
 - Bridge: `GET /v1/cron/jobs`, `GET /v1/cron/jobs/{id}/runs` and `POST /v1/cron/jobs/{id}/pause|resume|trigger`,
   all per profile. Prompts, scripts and delivery targets are not sent to the phone.
+- Bridge: a request naming a profile is authenticated first, so an unpaired caller gets 401 and
+  learns nothing about which profiles exist.
+- Linux tray: a revoked device no longer stays in the Devices menu.
 
 ## v1.9.3
 
