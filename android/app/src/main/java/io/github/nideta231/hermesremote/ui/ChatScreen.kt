@@ -107,6 +107,26 @@ import io.github.nideta231.hermesremote.data.ModelConfirm
 import io.github.nideta231.hermesremote.data.ProjectRef
 import io.github.nideta231.hermesremote.data.ChatItem
 import io.github.nideta231.hermesremote.data.LiveReducer
+import io.github.nideta231.hermesremote.data.splitReplyImages
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.gestures.detectTransformGestures
+import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.produceState
+import androidx.compose.runtime.staticCompositionLocalOf
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import io.github.nideta231.hermesremote.data.ModelCatalog
 import io.github.nideta231.hermesremote.data.ModelOption
 import io.github.nideta231.hermesremote.data.REASONING_LEVELS
@@ -136,7 +156,17 @@ class ChatActions(
     val chooseProject: (String?) -> Unit = {},
     /** Create a project on the PC (name, folder); callback gets null or an error message. */
     val createProject: (String, String, (String?) -> Unit) -> Unit = { _, _, _ -> },
+    /** Open the phone's photo picker; picks land in [ChatState.attachments]. */
+    val pickImages: () -> Unit = {},
+    val removeAttachment: (String) -> Unit = {},
+    /** Bytes of a chat image (phone uri or PC path); null when it can't be had. */
+    val loadImage: suspend (String) -> ByteArray? = { null },
+    /** Answer the open masked prompt: (identifier for a login, value); empty value = skip. */
+    val answerSecret: (String, String) -> Unit = { _, _ -> },
 )
+
+/** Loads a chat image's bytes; provided once by [ChatScreen] so every bubble can draw pictures. */
+private val LocalImageLoader = staticCompositionLocalOf<suspend (String) -> ByteArray?> { { null } }
 
 /** How the phone reaches the PC right now, reduced to what the top bar shows. */
 enum class LinkHealth { LAN, TAILNET, SEARCHING, OFFLINE }
@@ -177,7 +207,9 @@ fun ChatScreen(
     }
     val approval = LiveReducer.openApproval(state.items)
     val clarify = LiveReducer.openClarify(state.items)
+    val secret = LiveReducer.openSecret(state.items)
 
+    CompositionLocalProvider(LocalImageLoader provides actions.loadImage) {
     Column(Modifier.fillMaxSize().imePadding()) {
         ChatTopBar(state, health, showMenuButton, actions, profile)
         ConnectionBanner(state, health, actions.openSettings)
@@ -210,11 +242,17 @@ fun ChatScreen(
             exit = slideOutVertically(tween(180)) { it } + fadeOut(tween(180))) {
             clarify?.let { ClarifyDock(it, actions.answerClarify) }
         }
+        AnimatedVisibility(secret != null && approval == null && clarify == null,
+            enter = slideInVertically(spring(dampingRatio = 0.8f, stiffness = Spring.StiffnessMediumLow)) { it } + fadeIn(),
+            exit = slideOutVertically(tween(180)) { it } + fadeOut(tween(180))) {
+            secret?.let { SecretDock(it, actions.answerSecret) }
+        }
         SlashSuggestions(state, suggestions, actions.draft)
         Composer(state, catalog, model, reasoning, actions,
             onModel = { actions.loadModels(); modelSheet = true },
             onReasoning = { actions.loadModels(); reasoningSheet = true },
             onProject = if (state.sessionId == null && projects.isNotEmpty()) ({ projectSheet = true }) else null)
+    }
     }
 
     if (modelSheet) ModelSheet(catalog, model, state.sessionId == null, onDismiss = { modelSheet = false }, onPick = {
@@ -408,6 +446,7 @@ private fun MessageList(state: ChatState) {
                         is ChatItem.Tool -> ToolRow(item)
                         is ChatItem.Approval -> if (item.decided != null) ApprovalRecord(item)
                         is ChatItem.Clarify -> if (item.answer != null) ClarifyRecord(item)
+                        is ChatItem.Secret -> if (item.outcome != null) SecretRecord(item)
                         is ChatItem.Notice -> NoticeLine(item)
                         is ChatItem.CommandOutput -> CommandOutputCard(item)
                     }
@@ -467,6 +506,12 @@ private fun copyable(text: String): Modifier {
 @Composable
 private fun UserBubble(item: ChatItem.User) {
     val alpha by animateFloatAsState(if (item.pending) 0.10f else 0.17f, label = "bubble")
+    if (item.images.isNotEmpty()) {
+        Box(Modifier.fillMaxWidth().padding(bottom = if (item.text.isBlank()) 0.dp else 6.dp), contentAlignment = Alignment.CenterEnd) {
+            ImageStrip(item.images, Modifier.padding(start = 40.dp))
+        }
+    }
+    if (item.text.isBlank()) return
     Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.CenterEnd) {
         Surface(color = Gold.copy(alpha = alpha), shape = RoundedCornerShape(20.dp, 20.dp, 6.dp, 20.dp),
             modifier = Modifier.widthIn(max = 560.dp).padding(start = 40.dp).clip(RoundedCornerShape(20.dp, 20.dp, 6.dp, 20.dp)).then(copyable(item.text))) {
@@ -481,8 +526,10 @@ private fun UserBubble(item: ChatItem.User) {
 private fun AssistantBlock(item: ChatItem.Assistant) {
     val shown = rememberSmoothText(item.text, item.streaming)
     val caretOn by animateFloatAsState(if (item.streaming) 1f else 0f, tween(250), label = "caret")
+    val (body, images) = remember(shown, item.streaming) { if (item.streaming) shown to emptyList() else splitReplyImages(shown) }
     Column(Modifier.fillMaxWidth().padding(end = 8.dp)) {
-        MarkdownText(if (caretOn > 0.01f) "$shown ▍" else shown)
+        MarkdownText(if (caretOn > 0.01f) "$body ▍" else body)
+        if (images.isNotEmpty()) ImageStrip(images, Modifier.padding(top = 8.dp))
         // Copy the whole reply as markdown, like the desktop's copy action under each answer.
         if (!item.streaming && item.text.isNotBlank()) CopyButton(item.text, Modifier.offset(x = (-6).dp))
     }
@@ -769,19 +816,35 @@ private fun Composer(
         haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
         // The view model clears the draft only when the send is accepted, so a
         // refused send keeps its text here instead of losing it.
-        if (state.busy && !text.trimStart().startsWith("/")) actions.steer(text) else actions.send(text)
+        // Pictures can't ride a steer: with any attached, the message is queued as its own turn.
+        if (state.busy && state.attachments.isEmpty() && !text.trimStart().startsWith("/")) actions.steer(text) else actions.send(text)
     }
     Surface(color = MaterialTheme.colorScheme.surface) {
         Column(Modifier.fillMaxWidth().navigationBarsPadding().padding(start = 10.dp, end = 10.dp, top = 6.dp, bottom = 8.dp)) {
             Surface(color = MaterialTheme.colorScheme.surfaceContainerHigh, shape = RoundedCornerShape(26.dp)) {
                 Column(Modifier.animateContentSize()) {
+                    if (state.attachments.isNotEmpty()) {
+                        LazyRow(Modifier.fillMaxWidth().padding(start = 12.dp, end = 12.dp, top = 10.dp),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            items(state.attachments, key = { it }) { uri ->
+                                Box(Modifier.animateItem()) {
+                                    ChatImage(uri, Modifier.size(64.dp).clip(RoundedCornerShape(12.dp)), crop = true)
+                                    Box(Modifier.align(Alignment.TopEnd).padding(3.dp).size(20.dp).clip(CircleShape)
+                                        .background(Color.Black.copy(alpha = 0.6f)).clickable { actions.removeAttachment(uri) },
+                                        contentAlignment = Alignment.Center) {
+                                        Icon(Glyphs.Close, "Remove picture", tint = Color.White, modifier = Modifier.size(12.dp))
+                                    }
+                                }
+                            }
+                        }
+                    }
                     TextField(
                         value = text, onValueChange = actions.draft,
                         // Hardware keyboard: Ctrl+Enter sends; Enter and Shift+Enter stay a newline.
                         modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp).onPreviewKeyEvent { e ->
                             val enter = e.key == Key.Enter || e.key == Key.NumPadEnter
                             if (!enter || !e.isCtrlPressed) return@onPreviewKeyEvent false
-                            if (e.type == KeyEventType.KeyDown && !state.sending && text.isNotBlank()) submit()
+                            if (e.type == KeyEventType.KeyDown && !state.sending && (text.isNotBlank() || state.attachments.isNotEmpty())) submit()
                             true
                         },
                         placeholder = { Text(if (state.busy) "Steer the running task…" else "Message Hermes") },
@@ -800,6 +863,11 @@ private fun Composer(
                     }
                     Row(Modifier.fillMaxWidth().padding(start = 10.dp, end = 6.dp, bottom = 6.dp), verticalAlignment = Alignment.CenterVertically) {
                         val modelLabel = model?.label ?: catalog?.currentModel?.substringAfterLast('/') ?: "Model"
+                        IconButton(onClick = actions.pickImages, enabled = !state.sending, modifier = Modifier.size(36.dp)) {
+                            Icon(Glyphs.Image, "Attach a picture", tint = if (state.attachments.isNotEmpty()) Gold else MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.size(20.dp))
+                        }
+                        Spacer(Modifier.width(4.dp))
                         Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
                             Pill(modelLabel, Glyphs.Chip, modifier = Modifier.weight(1f, fill = false),
                                 tint = if (model != null) Gold else MaterialTheme.colorScheme.onSurfaceVariant, onClick = onModel)
@@ -822,12 +890,14 @@ private enum class SendMode { SEND, STEER, STOP, SENDING }
 private fun SendButton(state: ChatState, text: String, onSend: () -> Unit, onStop: () -> Unit) {
     val mode = when {
         state.sending -> SendMode.SENDING
-        state.busy && text.isBlank() -> SendMode.STOP
+        state.busy && text.isBlank() && state.attachments.isEmpty() -> SendMode.STOP
+        state.busy && state.attachments.isNotEmpty() -> SendMode.SEND
         state.busy && !text.trimStart().startsWith("/") -> SendMode.STEER
         else -> SendMode.SEND
     }
     val enabled = when (mode) {
-        SendMode.SEND, SendMode.STEER -> text.isNotBlank()
+        SendMode.SEND -> text.isNotBlank() || state.attachments.isNotEmpty()
+        SendMode.STEER -> text.isNotBlank()
         SendMode.STOP -> true
         SendMode.SENDING -> false
     }
@@ -1009,5 +1079,135 @@ fun SearchField(value: String, onChange: (String) -> Unit, hint: String, modifie
             colors = TextFieldDefaults.colors(
                 focusedContainerColor = Color.Transparent, unfocusedContainerColor = Color.Transparent,
                 focusedIndicatorColor = Color.Transparent, unfocusedIndicatorColor = Color.Transparent))
+    }
+}
+
+
+// ------------------------------------------------------------------ pictures
+
+/** One chat picture, decoded off the main thread; a quiet placeholder while it loads or if it can't. */
+@Composable
+private fun ChatImage(ref: String, modifier: Modifier, crop: Boolean = false, onClick: (() -> Unit)? = null) {
+    val load = LocalImageLoader.current
+    val bitmap by produceState<ImageBitmap?>(null, ref) {
+        value = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
+            load(ref)?.let { b -> runCatching { android.graphics.BitmapFactory.decodeByteArray(b, 0, b.size)?.asImageBitmap() }.getOrNull() }
+        }
+    }
+    val bmp = bitmap
+    if (bmp == null) {
+        Box(modifier.background(MaterialTheme.colorScheme.surfaceContainerHighest), contentAlignment = Alignment.Center) {
+            Icon(Glyphs.Image, null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(20.dp))
+        }
+    } else {
+        Image(bmp, "Picture", contentScale = if (crop) ContentScale.Crop else ContentScale.Fit,
+            modifier = modifier.then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier))
+    }
+}
+
+/** Pictures of one message: a single one large, several as a scrolling row. Tap opens it full screen. */
+@Composable
+private fun ImageStrip(refs: List<String>, modifier: Modifier = Modifier) {
+    var open by remember { mutableStateOf<String?>(null) }
+    if (refs.size == 1) {
+        ChatImage(refs[0], modifier.widthIn(max = 260.dp).heightIn(max = 320.dp).clip(RoundedCornerShape(16.dp)),
+            onClick = { open = refs[0] })
+    } else {
+        LazyRow(modifier, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            items(refs, key = { it }) { r ->
+                ChatImage(r, Modifier.size(132.dp).clip(RoundedCornerShape(14.dp)), crop = true, onClick = { open = r })
+            }
+        }
+    }
+    open?.let { ImageViewer(it) { open = null } }
+}
+
+/** Full-screen picture: pinch to zoom, drag to pan, tap the X (or back) to close. */
+@Composable
+private fun ImageViewer(ref: String, onClose: () -> Unit) {
+    Dialog(onDismissRequest = onClose, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+        var scale by remember { mutableFloatStateOf(1f) }
+        var dx by remember { mutableFloatStateOf(0f) }
+        var dy by remember { mutableFloatStateOf(0f) }
+        Box(Modifier.fillMaxSize().background(Color.Black)) {
+            ChatImage(ref, Modifier.fillMaxSize().pointerInput(ref) {
+                detectTransformGestures { _, pan, zoom, _ ->
+                    scale = (scale * zoom).coerceIn(1f, 6f)
+                    if (scale == 1f) { dx = 0f; dy = 0f } else { dx += pan.x; dy += pan.y }
+                }
+            }.graphicsLayer { scaleX = scale; scaleY = scale; translationX = dx; translationY = dy })
+            IconButton(onClick = onClose, modifier = Modifier.align(Alignment.TopEnd).statusBarsPadding().padding(8.dp)) {
+                Icon(Glyphs.Close, "Close", tint = Color.White)
+            }
+        }
+    }
+}
+
+// ------------------------------------------------------------------ masked prompts
+
+/** How a masked prompt stays in the transcript: what was asked, and "sent" or "skipped" (never the value). */
+@Composable
+private fun SecretRecord(item: ChatItem.Secret) {
+    Surface(color = MaterialTheme.colorScheme.surfaceContainer, shape = RoundedCornerShape(14.dp), modifier = Modifier.fillMaxWidth()) {
+        Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+            Icon(Glyphs.Shield, null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(16.dp))
+            Spacer(Modifier.width(8.dp))
+            Text("${item.request.title}: ${item.outcome}", style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 2, overflow = TextOverflow.Ellipsis)
+        }
+    }
+}
+
+/**
+ * Sudo / secret / password-manager prompts, answered from the phone like the desktop's masked card.
+ * The value is sent once over the paired, encrypted link and not stored on the phone.
+ */
+@Composable
+private fun SecretDock(item: ChatItem.Secret, onAnswer: (String, String) -> Unit) {
+    val haptics = LocalHapticFeedback.current
+    LaunchedEffect(item.key) { haptics.performHapticFeedback(HapticFeedbackType.LongPress) }
+    val r = item.request
+    var identifier by remember(item.key) { mutableStateOf("") }
+    var value by remember(item.key) { mutableStateOf("") }
+    var shown by remember(item.key) { mutableStateOf(!r.masked) }
+    Surface(color = MaterialTheme.colorScheme.surfaceContainerHigh, shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp),
+        tonalElevation = 2.dp) {
+        Column(Modifier.fillMaxWidth().padding(16.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(Modifier.size(32.dp).background(Warn.copy(alpha = 0.18f), CircleShape), contentAlignment = Alignment.Center) {
+                    Icon(Glyphs.Shield, null, tint = Warn, modifier = Modifier.size(18.dp))
+                }
+                Spacer(Modifier.width(12.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(r.title, fontWeight = FontWeight.SemiBold)
+                    r.detail?.let {
+                        Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 3, overflow = TextOverflow.Ellipsis,
+                            fontFamily = if (r.method == "sudo") FontFamily.Monospace else null)
+                    }
+                }
+            }
+            if (r.login) {
+                OutlinedTextField(identifier, { identifier = it }, label = { Text("Username or email") }, singleLine = true,
+                    modifier = Modifier.fillMaxWidth().padding(top = 12.dp), shape = RoundedCornerShape(14.dp),
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email))
+            }
+            OutlinedTextField(value, { value = it }, label = { Text(r.label) }, singleLine = true,
+                modifier = Modifier.fillMaxWidth().padding(top = if (r.login) 8.dp else 12.dp), shape = RoundedCornerShape(14.dp),
+                visualTransformation = if (shown) VisualTransformation.None else PasswordVisualTransformation(),
+                keyboardOptions = KeyboardOptions(keyboardType = when {
+                    r.method == "vault.code" -> KeyboardType.Number
+                    shown -> KeyboardType.Text
+                    else -> KeyboardType.Password
+                }),
+                trailingIcon = if (r.masked) ({
+                    TextButton(onClick = { shown = !shown }) { Text(if (shown) "Hide" else "Show") }
+                }) else null)
+            Row(Modifier.fillMaxWidth().padding(top = 12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(onClick = { onAnswer("", "") }, modifier = Modifier.weight(1f)) { Text("Skip") }
+                Button(onClick = { onAnswer(identifier, value) }, modifier = Modifier.weight(1f),
+                    enabled = value.isNotEmpty() && (!r.login || identifier.isNotBlank())) { Text(if (r.login) "Save" else "Send") }
+            }
+        }
     }
 }

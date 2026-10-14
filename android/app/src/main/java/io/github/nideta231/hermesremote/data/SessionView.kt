@@ -24,7 +24,9 @@ enum class SessionStatus(val label: String, val order: Int) {
  * A project from the backend's `projects.tree`; [sessionIds] is the membership desktop groups by.
  * [path] is its working root (null for Home): a chat created there belongs to the project.
  */
-data class ProjectRef(val id: String, val label: String, val sessionIds: Set<String>, val path: String? = null)
+data class ProjectRef(val id: String, val label: String, val sessionIds: Set<String>, val path: String? = null,
+                      /** An auto project (a repo Hermes found from chats' folders), not one the user created. */
+                      val auto: Boolean = false)
 
 data class SessionView(
     val grouping: SessionGrouping = SessionGrouping.DATE,
@@ -110,10 +112,18 @@ fun arrangeSessions(
         }
         SessionGrouping.STATUS -> rest.groupBy { statusOf(it, live) }.toSortedMap(compareBy { it.order })
             .map { (k, v) -> SessionGroup(k.label, v) }
-        // Groups keep the first-appearance order of the already-sorted list; Home goes last.
-        SessionGrouping.PROJECT -> rest.groupBy { projectOf[it.id]?.takeIf { p -> p.id != SessionView.NO_PROJECT } }
-            .entries.sortedBy { it.key == null }
-            .map { (k, v) -> SessionGroup(k?.label ?: SessionView.NO_PROJECT_LABEL, v, "p-" + (k?.id ?: SessionView.NO_PROJECT)) }
+        // A fixed order, never recency: sorting groups by their newest chat made a project jump to the
+        // top every time one of its chats got a reply. Created projects keep the backend's order (which
+        // is creation order), auto projects follow A-Z (the backend lists those by recency), Home last.
+        SessionGrouping.PROJECT -> {
+            val rank = projects.withIndex().associate { (i, p) -> p.id to i }
+            rest.groupBy { projectOf[it.id]?.takeIf { p -> p.id != SessionView.NO_PROJECT } }
+                .entries.sortedWith(compareBy<Map.Entry<ProjectRef?, List<SessionSummary>>>(
+                    { it.key == null }, { it.key?.auto == true },
+                    { if (it.key?.auto == true) 0 else rank[it.key?.id] ?: Int.MAX_VALUE },
+                    { it.key?.label?.lowercase().orEmpty() }, { it.key?.id.orEmpty() }))
+                .map { (k, v) -> SessionGroup(k?.label ?: SessionView.NO_PROJECT_LABEL, v, "p-" + (k?.id ?: SessionView.NO_PROJECT)) }
+        }
     }
     return if (pinned.isEmpty()) groups else listOf(SessionGroup("Pinned", pinned)) + groups
 }

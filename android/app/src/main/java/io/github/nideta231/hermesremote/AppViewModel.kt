@@ -51,6 +51,9 @@ import io.github.nideta231.hermesremote.data.objects
 import io.github.nideta231.hermesremote.data.parseApproval
 import io.github.nideta231.hermesremote.data.parseCatalog
 import io.github.nideta231.hermesremote.data.parseClarify
+import io.github.nideta231.hermesremote.data.parseSecret
+import io.github.nideta231.hermesremote.data.secretAnswer
+import io.github.nideta231.hermesremote.data.ImageAttachments
 import io.github.nideta231.hermesremote.data.parseDispatch
 import io.github.nideta231.hermesremote.data.parseSuggestions
 import io.github.nideta231.hermesremote.data.profileParam
@@ -92,9 +95,12 @@ data class ChatState(
     val draft: String = "",
     /** New chat only: the project it will be created in (its folder becomes the chat's working folder). */
     val project: ProjectRef? = null,
+    /** Pictures picked for the next message (phone `content://` uris), sent with it. */
+    val attachments: List<String> = emptyList(),
 ) {
     val busy: Boolean get() = status != "idle"
-    val waiting: Boolean get() = status == "waiting" || LiveReducer.openApproval(items) != null || LiveReducer.openClarify(items) != null
+    val waiting: Boolean get() = status == "waiting" || LiveReducer.openApproval(items) != null ||
+        LiveReducer.openClarify(items) != null || LiveReducer.openSecret(items) != null
 }
 
 data class SessionsState(
@@ -688,9 +694,11 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
                 when (inc.method) {
                     "approval" -> _chat.update { it.copy(items = LiveReducer.withApproval(it.items, parseApproval(inc.id, inc.params)), status = "waiting") }
                     "clarify" -> _chat.update { it.copy(items = LiveReducer.withClarify(it.items, parseClarify(inc.id, inc.params)), status = "waiting") }
-                    // Secrets, sudo passwords and vault prompts are answered on the PC, never typed on a phone.
-                    else -> _chat.update { it.copy(items = it.items + ChatItem.Notice("ask-${inc.id}",
-                        "Hermes is asking for something only the PC can answer (${inc.method}). Answer it in the desktop app.")) }
+                    // Sudo, secrets and password-manager prompts: a masked field, like the desktop's card.
+                    // The value goes straight back over the encrypted link and is never kept on the phone.
+                    else -> parseSecret(inc.id, inc.method, inc.params)?.let { r ->
+                        _chat.update { it.copy(items = LiveReducer.withSecret(it.items, r), status = "waiting") }
+                    }
                 }
             }
         }
@@ -820,6 +828,9 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
                 when (q.str("method")) {
                     "approval" -> { items = LiveReducer.withApproval(items, parseApproval(id, params)); waiting = true }
                     "clarify" -> { items = LiveReducer.withClarify(items, parseClarify(id, params)); waiting = true }
+                    else -> parseSecret(id, q.str("method").orEmpty(), params)?.let {
+                        items = LiveReducer.withSecret(items, it); waiting = true
+                    }
                 }
             }
             val title = info.str("title")?.takeIf { it.isNotBlank() }
@@ -974,7 +985,7 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
             // Same root as desktop's projectRootCwd: the primary folder, else the first repo with one.
             val path = p.str("path")?.takeIf(String::isNotBlank)
                 ?: p.optJSONArray("repos").objects().firstNotNullOfOrNull { r -> r.str("path")?.takeIf(String::isNotBlank) }
-            ProjectRef(id, p.str("label") ?: id, members, path)
+            ProjectRef(id, p.str("label") ?: id, members, path, auto = p.optBoolean("isAuto"))
         }
         if (projects != _sessions.value.projects) _sessions.update { it.copy(projects = projects) }
     }
@@ -1115,6 +1126,7 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
 
     fun send(text: String) {
         val trimmed = text.trim()
+        if (_chat.value.attachments.isNotEmpty() && !trimmed.startsWith("/")) return sendMessage(trimmed, trimmed)
         if (trimmed.isEmpty()) return
         if (trimmed.startsWith("/") && !trimmed.startsWith("//")) return runSlash(trimmed)
         sendMessage(trimmed.removePrefix("/"), trimmed.removePrefix("/"))
@@ -1123,7 +1135,8 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
     /** Submits [text]; the chat shows [display] (what the user typed) for it. */
     private fun sendMessage(text: String, display: String) {
         val trimmed = text.trim()
-        if (trimmed.isEmpty()) return
+        val pictures = _chat.value.attachments
+        if (trimmed.isEmpty() && pictures.isEmpty()) return
         if (_chat.value.sending) {
             // Never drop a send silently: the text stays in the composer and the snackbar says why.
             _toast.value = "Still sending your last message…"
@@ -1132,11 +1145,22 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
         val key = "u-${System.nanoTime()}"
         _suggestions.value = emptyList()
         _chat.update { it.copy(sending = true, draft = if (it.draft.trim() == display.trim()) "" else it.draft,
-            items = it.items + ChatItem.User(key, display, pending = true)) }
+            attachments = emptyList(), items = it.items + ChatItem.User(key, display, pending = true, images = pictures)) }
         drafts.put(_chat.value.sessionId, _chat.value.draft)
         viewModelScope.launch {
             try {
-                val res = rpc("prompt.submit", { rid -> JSONObject().put("session_id", rid).put("text", trimmed) }, 30_000)
+                // Pictures first: Hermes queues each on the session and the next prompt.submit takes them.
+                val sent = pictures.map { uri ->
+                    val (bytes, name) = ImageAttachments.read(app, uri)
+                    val r = rpc("image.attach_bytes", { rid -> JSONObject().put("session_id", rid)
+                        .put("content_base64", android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP))
+                        .put("filename", name) }, 90_000)
+                    r.str("path") ?: uri
+                }
+                if (sent.isNotEmpty()) _chat.update { st -> st.copy(items = st.items.map {
+                    if (it is ChatItem.User && it.key == key) it.copy(images = sent) else it }) }
+                val res = rpc("prompt.submit", { rid -> JSONObject().put("session_id", rid)
+                    .put("text", trimmed.ifEmpty { "What do you see in this image?" }) }, 30_000)
                 val status = res.str("status")
                 _chat.update { st ->
                     st.copy(sending = false, status = if (st.status == "idle") "working" else st.status,
@@ -1155,7 +1179,8 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
                 // The text goes back to the composer rather than vanishing with the failed bubble.
                 _chat.update { st ->
                     st.copy(sending = false, items = st.items.filterNot { it.key == key },
-                        draft = if (st.draft.isNotEmpty()) st.draft else display)
+                        draft = if (st.draft.isNotEmpty()) st.draft else display,
+                        attachments = (pictures + st.attachments).distinct())
                 }
                 drafts.put(_chat.value.sessionId, _chat.value.draft)
                 say(t)
@@ -1208,6 +1233,30 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
         LiveLink.answered(app, r.id)
         _chat.update { it.copy(items = LiveReducer.resolve(it.items, r.id, answers.joinToString(" · ").ifBlank { "(skipped)" }), status = "working") }
     }
+
+    /** Answer the open masked prompt. Empty [value] skips it (Hermes treats that as declined). */
+    fun answerSecret(identifier: String, value: String) {
+        val g = gateway ?: return
+        val open = LiveReducer.openSecret(_chat.value.items) ?: return
+        val r = open.request
+        if (!g.reply(r.id, secretAnswer(r, identifier, value))) return say(IOException("Not connected to your PC"))
+        LiveLink.answered(app, r.id)
+        _chat.update { it.copy(items = LiveReducer.resolve(it.items, r.id, if (value.isEmpty()) "skipped" else "sent"), status = "working") }
+    }
+
+    /** Pictures picked in the composer; they go with the next message. */
+    fun addAttachments(uris: List<String>) {
+        if (uris.isEmpty()) return
+        val room = ImageAttachments.MAX_PER_MESSAGE - _chat.value.attachments.size
+        if (room <= 0) { _toast.value = "Up to ${ImageAttachments.MAX_PER_MESSAGE} pictures per message."; return }
+        if (uris.size > room) _toast.value = "Up to ${ImageAttachments.MAX_PER_MESSAGE} pictures per message."
+        _chat.update { it.copy(attachments = (it.attachments + uris.take(room)).distinct()) }
+    }
+
+    fun removeAttachment(uri: String) = _chat.update { it.copy(attachments = it.attachments - uri) }
+
+    /** Bytes of a chat image: a phone uri (still sending) or a PC path, fetched over the bridge and cached. */
+    suspend fun loadImage(ref: String): ByteArray? = ImageAttachments.load(app, ref) { path -> client?.media(path) }
 
     // ------------------------------------------------------------ models + reasoning
 

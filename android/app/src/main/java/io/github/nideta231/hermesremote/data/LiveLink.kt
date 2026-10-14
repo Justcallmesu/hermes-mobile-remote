@@ -103,6 +103,9 @@ object LiveLink {
                     "approval" -> Notifier.postApprovalNeeded(app, inc.id, w.storedId, w.profile, w.title, parseApproval(inc.id, inc.params))
                     "clarify" -> Notifier.postQuestion(app, inc.id, w.storedId, w.profile, w.title,
                         parseClarify(inc.id, inc.params).questions.firstOrNull()?.question)
+                    else -> parseSecret(inc.id, inc.method, inc.params)?.let { r ->
+                        Notifier.postQuestion(app, inc.id, w.storedId, w.profile, w.title, "${r.title}: open the chat to answer.")
+                    }
                 }
             }
         }

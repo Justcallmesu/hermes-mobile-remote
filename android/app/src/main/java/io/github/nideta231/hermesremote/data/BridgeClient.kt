@@ -93,6 +93,14 @@ class BridgeClient(
 
     suspend fun me() = call("GET", "/v1/me")
 
+    /** An image a chat shows, by the PC path Hermes stored for it (`/v1/media`; bridges before 1.11 answer 404). */
+    suspend fun media(path: String): ByteArray = runInterruptible(Dispatchers.IO) {
+        http.newCall(Request.Builder().url(url("/v1/media", mapOf("path" to path))).build()).execute().use { resp ->
+            if (!resp.isSuccessful) throw parseError(resp, resp.body?.string().orEmpty())
+            resp.body?.bytes() ?: ByteArray(0)
+        }
+    }
+
     /** Cheap reachability check with a short timeout: an absent LAN must not stall switching. */
     suspend fun reachable(): Boolean = runInterruptible(Dispatchers.IO) {
         runCatching {

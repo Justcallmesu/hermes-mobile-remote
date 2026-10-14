@@ -50,6 +50,21 @@ class SessionViewTest {
         assertEquals("p-proj1", g[1].key)
     }
 
+    @Test fun projectGroupsKeepTheirPlaceWhenAChatGetsAReply() {
+        val tree = listOf(
+            ProjectRef("p1", "Website", setOf("w")), ProjectRef("p2", "Api", setOf("x")),
+            ProjectRef("/r/zeta", "zeta", setOf("z"), auto = true), ProjectRef("/r/alpha", "alpha", setOf("y"), auto = true),
+        )
+        val view = SessionView(grouping = SessionGrouping.PROJECT)
+        val before = arrangeSessions(listOf(s("w", 10.0), s("x", 20.0), s("y", 30.0), s("z", 40.0)), view, projects = tree, now = now)
+        // Every chat but the oldest just got a reply, and the backend now lists the auto projects the other way round.
+        val after = arrangeSessions(listOf(s("w", 90.0), s("x", 1.0), s("y", 80.0), s("z", 2.0)), view,
+            projects = listOf(tree[0], tree[1], tree[3], tree[2]), now = now)
+        val order = listOf("Website", "Api", "alpha", "zeta")
+        assertEquals(order, before.map { it.label })
+        assertEquals(order, after.map { it.label })
+    }
+
     @Test fun sessionsMissingFromTreeLandInHome() {
         val g = arrangeSessions(items + s("z", 10.0), SessionView(grouping = SessionGrouping.PROJECT), projects = projects, now = now)
         assertEquals(listOf("z", "a"), g.last().items.map { it.id })

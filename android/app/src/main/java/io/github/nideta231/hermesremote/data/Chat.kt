@@ -8,7 +8,9 @@ enum class ToolStatus { RUNNING, OK, FAILED }
 sealed interface ChatItem {
     val key: String
 
-    data class User(override val key: String, val text: String, val pending: Boolean = false) : ChatItem
+    /** [images]: the pictures sent with it, as PC paths (or a phone `content://` uri while it is still sending). */
+    data class User(override val key: String, val text: String, val pending: Boolean = false,
+                    val images: List<String> = emptyList()) : ChatItem
     data class Assistant(override val key: String, val text: String, val streaming: Boolean = false) : ChatItem
     /** The model's reasoning for the reply that follows; shown collapsed. */
     data class Thinking(override val key: String, val text: String, val streaming: Boolean = false) : ChatItem
@@ -24,6 +26,8 @@ sealed interface ChatItem {
     /** [decided]: the choice made (here or on another screen), null while it waits. */
     data class Approval(override val key: String, val request: ApprovalRequest, val decided: String? = null) : ChatItem
     data class Clarify(override val key: String, val request: ClarifyRequest, val answer: String? = null) : ChatItem
+    /** A masked prompt (sudo, a secret, a password-manager unlock, a login to save, a 2FA code). [outcome] never holds the value. */
+    data class Secret(override val key: String, val request: SecretRequest, val outcome: String? = null) : ChatItem
     data class Notice(override val key: String, val text: String, val error: Boolean = false) : ChatItem
     /** Output of a slash command or a /btw side answer. Local to the app; not part of the transcript. */
     data class CommandOutput(override val key: String, val command: String, val text: String) : ChatItem
@@ -59,6 +63,40 @@ fun displayUserText(text: String): String {
         if (bodyEnd >= 0) return text.substring(bodyStart, bodyEnd).trim()
     }
     return text
+}
+
+private val imageRefRe = Regex("""^@image:(?:`([^`]+)`|"([^"]+)"|'([^']+)'|(\S+))\s*$""")
+private val visionHintRe = Regex("""^\[Examine it with the vision_analyze tool using image_url: (.+)]$""")
+private val attachedNoteRe = Regex("""^\[(?:The user attached an image|User attached image): [^\]]*]$""")
+private val mediaLineRe = Regex("""^\s*MEDIA:\s*(\S.*?)\s*$""")
+private val imageExt = Regex("""\.(png|jpe?g|gif|webp|bmp)$""", RegexOption.IGNORE_CASE)
+
+/**
+ * A user message with its pictures taken out: Hermes stores an attached image as an `@image:<path>`
+ * line (the model-facing form names it in a vision_analyze hint instead). Returns the text left and
+ * the image paths, in order.
+ */
+fun splitUserImages(text: String): Pair<String, List<String>> {
+    if (!text.contains("@image:") && !text.contains("image_url: ") && !text.contains("attached")) return text to emptyList()
+    val images = mutableListOf<String>()
+    val kept = text.lines().filter { line ->
+        val t = line.trim()
+        imageRefRe.matchEntire(t)?.let { m -> images += m.groupValues.drop(1).first { it.isNotEmpty() }; return@filter false }
+        visionHintRe.matchEntire(t)?.let { m -> images += m.groupValues[1].trim(); return@filter false }
+        !attachedNoteRe.matches(t)
+    }
+    return kept.joinToString("\n").trim() to images.distinct()
+}
+
+/** A reply with its `MEDIA:/path/to/image.png` lines (how Hermes hands over a file) taken out as images. */
+fun splitReplyImages(text: String): Pair<String, List<String>> {
+    if (!text.contains("MEDIA:")) return text to emptyList()
+    val images = mutableListOf<String>()
+    val kept = text.lines().filter { line ->
+        val path = mediaLineRe.matchEntire(line)?.groupValues?.get(1)?.trim('`', '"', '\'')
+        if (path != null && imageExt.containsMatchIn(path)) { images += path; false } else true
+    }
+    return kept.joinToString("\n").trim() to images
 }
 
 /** Human-sized summary of a tool call's arguments (the command for terminal, else compact JSON). */
@@ -147,7 +185,10 @@ object HistoryMapper {
                 "user" -> if (text.isNotBlank()) when (val s = syntheticUserRow(text, m.str("display_kind"), m.opt("display_metadata"))) {
                     SyntheticRow.Drop -> {}
                     is SyntheticRow.Notice -> items += ChatItem.Notice("h-$id", s.text)
-                    null -> items += ChatItem.User("h-$id", displayUserText(text))
+                    null -> {
+                        val (body, images) = splitUserImages(text)
+                        items += ChatItem.User("h-$id", displayUserText(body), images = images)
+                    }
                 }
                 "assistant" -> {
                     m.str("reasoning")?.takeIf { it.isNotBlank() }?.let { items += ChatItem.Thinking("h-$id-r", it.trim()) }
@@ -272,11 +313,15 @@ object LiveReducer {
     fun withClarify(items: List<ChatItem>, r: ClarifyRequest): List<ChatItem> =
         if (items.any { it is ChatItem.Clarify && it.request.id == r.id }) items else sealAll(items) + ChatItem.Clarify("ask-${r.id}", r)
 
+    fun withSecret(items: List<ChatItem>, r: SecretRequest): List<ChatItem> =
+        if (items.any { it is ChatItem.Secret && it.request.id == r.id }) items else sealAll(items) + ChatItem.Secret("ask-${r.id}", r)
+
     /** The question [id] was answered (here, on the desktop) or withdrawn. */
     fun resolve(items: List<ChatItem>, id: String, outcome: String): List<ChatItem> = items.map {
         when {
             it is ChatItem.Approval && it.request.id == id && it.decided == null -> it.copy(decided = outcome)
             it is ChatItem.Clarify && it.request.id == id && it.answer == null -> it.copy(answer = outcome)
+            it is ChatItem.Secret && it.request.id == id && it.outcome == null -> it.copy(outcome = outcome)
             else -> it
         }
     }
@@ -284,6 +329,7 @@ object LiveReducer {
     /** Questions still open: what the dock shows. */
     fun openApproval(items: List<ChatItem>) = items.lastOrNull { it is ChatItem.Approval && it.decided == null } as ChatItem.Approval?
     fun openClarify(items: List<ChatItem>) = items.lastOrNull { it is ChatItem.Clarify && it.answer == null } as ChatItem.Clarify?
+    fun openSecret(items: List<ChatItem>) = items.lastOrNull { it is ChatItem.Secret && it.outcome == null } as ChatItem.Secret?
 
     private fun sealAll(items: List<ChatItem>) = items.map {
         when (it) {
@@ -306,9 +352,10 @@ fun withInflight(history: List<ChatItem>, inflight: JSONObject?): List<ChatItem>
         SyntheticRow.Drop -> {}
         is SyntheticRow.Notice -> if ((out.lastOrNull() as? ChatItem.Notice)?.text != s.text) out += ChatItem.Notice("inflight-u", s.text)
         null -> {
-            val user = displayUserText(raw).trim()
-            if (user.isNotEmpty() && (out.lastOrNull { it is ChatItem.User } as? ChatItem.User)?.text?.trim() != user) {
-                out += ChatItem.User("inflight-u", user)
+            val (body, images) = splitUserImages(raw)
+            val user = displayUserText(body).trim()
+            if ((user.isNotEmpty() || images.isNotEmpty()) && (out.lastOrNull { it is ChatItem.User } as? ChatItem.User)?.text?.trim() != user) {
+                out += ChatItem.User("inflight-u", user, images = images)
             }
         }
     }
@@ -342,13 +389,15 @@ fun withLiveUser(items: List<ChatItem>, anchorKey: String?, inflight: JSONObject
             ChatItem.Notice(key, s.text)
         }
         null -> {
-            val text = displayUserText(raw).trim().takeIf { it.isNotEmpty() } ?: return items
+            val (body, images) = splitUserImages(raw)
+            val text = displayUserText(body).trim()
+            if (text.isEmpty() && images.isEmpty()) return items
             // From the anchor on: the anchor itself is the phone's own bubble when it sent this turn.
             if (items.drop(maxOf(at - 1, 0)).any { it is ChatItem.User && it.text.trim() == text }) return items
             val lastUser = items.indexOfLast { it is ChatItem.User }
             if (lastUser >= 0 && (items[lastUser] as ChatItem.User).text.trim() == text &&
                 items.drop(lastUser + 1).none { it is ChatItem.Assistant }) return items
-            ChatItem.User(key, text)
+            ChatItem.User(key, text, images = images)
         }
     }
     return items.toMutableList().apply { add(at, row) }

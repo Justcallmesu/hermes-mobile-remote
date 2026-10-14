@@ -67,6 +67,51 @@ data class ClarifyRequest(val id: String, val sessionId: String?, val questions:
     val batch: Boolean get() = questions.size > 1 || questions.firstOrNull()?.qid != null
 }
 
+/**
+ * A masked prompt Hermes raises mid-turn: [method] is the server request (`sudo`, `secret`,
+ * `vault.unlock_prompt`, `vault.save_login`, `vault.code`). [login] asks for an identifier and a
+ * password together (saving a site login); otherwise one value. [masked] hides what is typed.
+ */
+data class SecretRequest(
+    val id: String,
+    val method: String,
+    val sessionId: String?,
+    val title: String,
+    val detail: String?,
+    val label: String,
+    val masked: Boolean = true,
+    val login: Boolean = false,
+)
+
+/** The masked prompts the phone can answer; null for any other server request (desktop-only bridges). */
+fun parseSecret(id: String, method: String, p: JSONObject): SecretRequest? {
+    val sid = p.str("session_id")
+    return when (method) {
+        "sudo" -> SecretRequest(id, method, sid, "Sudo password", p.str("command")?.takeIf { it.isNotBlank() }, "Password")
+        "secret" -> SecretRequest(id, method, sid, p.str("prompt")?.takeIf { it.isNotBlank() } ?: "Hermes needs a secret",
+            p.str("env_var")?.let { "Saved on the PC as $it" }, "Value")
+        "vault.unlock_prompt" -> {
+            val name = p.str("display_name")?.takeIf { it.isNotBlank() } ?: p.str("backend") ?: "password manager"
+            SecretRequest(id, method, sid, "Unlock $name", "Master password, used once on the PC to unlock it for this chat.", "Master password")
+        }
+        "vault.save_login" -> {
+            val site = p.str("site")?.takeIf { it.isNotBlank() } ?: p.str("origin") ?: "this site"
+            SecretRequest(id, method, sid, "Save a login for $site", p.str("origin")?.takeIf { it != site },
+                "Password", login = true)
+        }
+        "vault.code" -> {
+            val site = p.str("site")?.takeIf { it.isNotBlank() }
+            SecretRequest(id, method, sid, if (site != null) "Verification code for $site" else "Verification code",
+                p.str("hint")?.takeIf { it.isNotBlank() }, "Code", masked = false)
+        }
+        else -> null
+    }
+}
+
+/** The answer a masked prompt sends back: one string, or the identifier + password pair as JSON for a login. */
+fun secretAnswer(r: SecretRequest, identifier: String, value: String): JSONObject = JSONObject().put("value",
+    if (r.login) JSONObject().put("identifier", identifier.trim()).put("password", value).toString() else value)
+
 data class ComponentStatus(val key: String, val label: String, val ok: Boolean, val summary: String, val detail: String?)
 
 /** Error returned by the bridge with its stable error code (never an IOException: not retried). */

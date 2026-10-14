@@ -625,3 +625,31 @@ def test_retired_config_keys_still_load(tmp_path):
     p.write_text("bogus = 1\n")
     with pytest.raises(ValueError):
         Config.load(p)
+
+
+def test_media_serves_only_images_in_hermes_image_folders(tmp_path):
+    home = tmp_path / "hermes"
+    (home / "images").mkdir(parents=True)
+    (home / "images" / "upload_1.png").write_bytes(b"\x89PNG\r\n\x1a\nimg")
+    (home / "images" / "notes.txt").write_text("secret")
+    (home / "profiles" / "developer" / "images").mkdir(parents=True)
+    (home / "profiles" / "developer" / "images" / "d.jpg").write_bytes(b"\xff\xd8\xffjpg")
+    (home / "profiles" / "bkm" / "images").mkdir(parents=True)
+    (home / "profiles" / "bkm" / "images" / "b.png").write_bytes(b"png")
+    (home / ".env.png").write_text("not in an image folder")
+    (home / "images" / "link.png").symlink_to(home / ".env.png")
+    c, token = _profile_app(tmp_path, [], hermes_home=home, allowed_profiles=["developer"])
+
+    def get(path, **kw):
+        return c.get("/v1/media", params={"path": str(path)}, **kw)
+
+    r = get(home / "images" / "upload_1.png", headers=auth(token))
+    assert r.status_code == 200 and r.headers["content-type"] == "image/png" and r.content.endswith(b"img")
+    assert get(home / "profiles" / "developer" / "images" / "d.jpg", headers=auth(token)).status_code == 200
+    assert get(home / "images" / "upload_1.png").status_code == 401
+    assert get(home / "images" / "notes.txt", headers=auth(token)).status_code == 415
+    assert get(home / ".env.png", headers=auth(token)).status_code == 403
+    assert get(home / "images" / "link.png", headers=auth(token)).status_code == 403  # symlink out of the folder
+    assert get(home / "images" / ".." / ".env.png", headers=auth(token)).status_code == 403
+    assert get(home / "profiles" / "bkm" / "images" / "b.png", headers=auth(token)).status_code == 403  # not allowed
+    assert get(home / "images" / "missing.png", headers=auth(token)).status_code == 404

@@ -10,6 +10,9 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.SystemBarStyle
 import androidx.activity.result.contract.ActivityResultContracts.GetContent
+import androidx.activity.result.contract.ActivityResultContracts.PickMultipleVisualMedia
+import androidx.activity.result.contract.ActivityResultContracts.PickVisualMedia
+import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts.RequestPermission
 import androidx.activity.viewModels
 import androidx.lifecycle.lifecycleScope
@@ -105,6 +108,12 @@ class MainActivity : ComponentActivity() {
                 else -> pairUri.value = text
             }
         }
+    }
+
+    // Pictures for the chat: the system photo picker (no storage permission needed). The uris stay
+    // readable while the app runs, which covers picking then sending.
+    private val chatPicker = registerForActivityResult(PickMultipleVisualMedia(io.github.nideta231.hermesremote.data.ImageAttachments.MAX_PER_MESSAGE)) { uris ->
+        vm.addAttachments(uris.map { it.toString() })
     }
 
     // Asked right after pairing: without it a run still works, but the app can't say it
@@ -255,6 +264,8 @@ class MainActivity : ComponentActivity() {
             loadModels = vm::loadModels, chooseModel = vm::chooseModel, dismissConfirm = vm::dismissConfirm,
             setReasoning = vm::setReasoning, modelPickerOpened = vm::modelPickerOpened,
             chooseProject = vm::chooseProject, createProject = vm::createProject,
+            pickImages = { runCatching { chatPicker.launch(PickVisualMediaRequest(PickVisualMedia.ImageOnly)) } },
+            removeAttachment = vm::removeAttachment, loadImage = vm::loadImage, answerSecret = vm::answerSecret,
         )
         val settingsActions = SettingsActions(
             refresh = vm.settings::refresh, unpair = vm::unpair, setApprovalMode = vm.settings::setApprovalMode,

@@ -25,7 +25,7 @@ from typing import Any
 import httpx
 from fastapi import Depends, FastAPI, Request, WebSocket
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
@@ -34,7 +34,7 @@ from .backend import SESSION_HEADER, Backend, BackendLocator, BackendUnavailable
 from .config import Config
 from .devices import Device, DeviceStore
 from .network import TrustStore, network_info, serving_lan_ips
-from .profiles import ProfileRefused, is_visible, resolve_profile
+from .profiles import ProfileRefused, is_visible, media_roots, resolve_profile
 from .relay import Relay
 from .tailnet import TailnetClient, is_loopback, is_private_lan_ip, is_tailnet_ip
 
@@ -42,6 +42,10 @@ log = logging.getLogger("hermes_remote_bridge")
 
 ID_RE = re.compile(r"^[A-Za-z0-9_.:-]{1,128}$")
 APPROVAL_MODES = ("manual", "smart", "off")
+# Images the phone may fetch for a chat (same set and cap as Hermes' own /api/media, minus SVG: script).
+MEDIA_TYPES = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif",
+               ".webp": "image/webp", ".bmp": "image/bmp"}
+MEDIA_MAX_BYTES = 25 * 1024 * 1024
 # The wire contract between this bridge and the app. 2 = the WebSocket relay (v1.0.0).
 PROTOCOL = 2
 
@@ -467,6 +471,29 @@ def create_app(cfg: Config, *, locator: BackendLocator | None = None, tailnet: T
         audit_event({"event": "default_model_changed", "device": device.name, "profile": profile or "default",
                      "to": info.get("model")})
         return {"model": info.get("model") or body.model, "provider": info.get("provider") or body.provider}
+
+    # ------------------------------------------------------------ media (images in a chat)
+
+    @app.get("/v1/media")
+    async def get_media(path: str, _: Device = Depends(device_auth)):
+        """An image a chat shows (one the phone or the desktop attached, a screenshot, a generated
+        image), by the path Hermes stored in the message. Only image files inside a served profile's
+        images/screenshots/cache folders: never an arbitrary file from the PC."""
+        try:
+            target = await asyncio.to_thread(lambda: os.path.realpath(os.path.expanduser(path)))
+        except (OSError, ValueError):
+            raise ApiError(400, "invalid_path", "Invalid path")
+        mime = MEDIA_TYPES.get(os.path.splitext(target)[1].lower())
+        if mime is None:
+            raise ApiError(415, "unsupported_media", "Not an image")
+        roots = media_roots(cfg.hermes_home, cfg.allowed_profiles)
+        if not any(target.startswith(root + os.sep) for root in roots):
+            raise ApiError(403, "outside_media_roots", "Not one of Hermes' image folders")
+        if not os.path.isfile(target):
+            raise ApiError(404, "not_found", "Image not found")
+        if os.path.getsize(target) > MEDIA_MAX_BYTES:
+            raise ApiError(413, "too_large", "Image too large")
+        return FileResponse(target, media_type=mime, headers={"Cache-Control": "private, max-age=86400"})
 
     # ------------------------------------------------------------ the live connection
 

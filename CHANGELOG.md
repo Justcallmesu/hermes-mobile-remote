@@ -3,6 +3,24 @@
 Releases are git tags; the version in the app comes from the tag. `git log v0.9.0..vX.Y.Z` is the
 authoritative history — this file only summarises what is worth knowing before upgrading.
 
+## v1.11.0
+
+- Pictures in chat. The picture button in the composer opens the photo picker (up to 6 per
+  message, no storage permission). They are sent with the message, scaled to 2048 px JPEG first,
+  and Hermes looks at them with its vision tool as on the desktop. A picture-only message works.
+- Pictures show in the chat: yours (also ones sent from the desktop), and images Hermes hands back
+  as `MEDIA:` lines. Tap one to open it full screen; pinch to zoom.
+- Sudo, secret and password-manager prompts can be answered on the phone: unlocking a vault
+  (1Password, Bitwarden), saving a site login, a 2FA code, a sudo password or a setup secret. A
+  masked card slides up like the desktop's. The value goes once over the paired link and is never
+  stored on the phone; the transcript only says "sent" or "skipped". A notification says when one
+  waits.
+- The drawer grouped by project no longer reorders while a reply streams. Projects you created keep
+  their order, auto-found repos follow A-Z, Home last.
+- Bridge: `GET /v1/media?path=` returns an image a chat shows. Only image files inside the
+  `images/`, `screenshots/` or `cache/` folders of the profiles the phone may use; symlinks out
+  and `..` are refused. Needs the updated bridge (run `./install.sh` on the PC).
+
 ## v1.10.0
 
 - Hermes profiles. If your PC has more than one Hermes profile, the drawer shows the one in use
