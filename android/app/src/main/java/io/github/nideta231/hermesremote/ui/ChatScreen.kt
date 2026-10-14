@@ -165,6 +165,8 @@ fun ChatScreen(
     onDismissUpdate: () -> Unit = {},
     /** Projects a new chat can start in (only those with a folder). */
     projects: List<ProjectRef> = emptyList(),
+    /** The Hermes profile this chat runs in; null when the PC has only the default one. */
+    profile: String? = null,
 ) {
     var modelSheet by remember { mutableStateOf(false) }
     var projectSheet by remember { mutableStateOf(false) }
@@ -177,7 +179,7 @@ fun ChatScreen(
     val clarify = LiveReducer.openClarify(state.items)
 
     Column(Modifier.fillMaxSize().imePadding()) {
-        ChatTopBar(state, health, showMenuButton, actions)
+        ChatTopBar(state, health, showMenuButton, actions, profile)
         ConnectionBanner(state, health, actions.openSettings)
         update?.let { UpdateStrip(it, onOpenUpdate, onDismissUpdate) }
         Box(Modifier.weight(1f).fillMaxWidth()) {
@@ -234,7 +236,7 @@ fun ChatScreen(
 // ------------------------------------------------------------------ top bar
 
 @Composable
-private fun ChatTopBar(state: ChatState, health: LinkHealth, showMenu: Boolean, actions: ChatActions) {
+private fun ChatTopBar(state: ChatState, health: LinkHealth, showMenu: Boolean, actions: ChatActions, profile: String?) {
     Surface(color = MaterialTheme.colorScheme.surface) {
         Row(Modifier.fillMaxWidth().statusBarsPadding().padding(horizontal = 4.dp, vertical = 4.dp),
             verticalAlignment = Alignment.CenterVertically) {
@@ -261,6 +263,7 @@ private fun ChatTopBar(state: ChatState, health: LinkHealth, showMenu: Boolean, 
                     AnimatedContent(label, transitionSpec = { fadeIn() togetherWith fadeOut() }, label = "status") {
                         Text(it, style = MaterialTheme.typography.labelMedium, color = color, maxLines = 1)
                     }
+                    profile?.let { ProfileTag(it) }
                 }
             }
             LinkBadge(health, actions.openSettings)
@@ -273,6 +276,16 @@ private fun ChatTopBar(state: ChatState, health: LinkHealth, showMenu: Boolean, 
             IconButton(onClick = actions.newChat) { Icon(Glyphs.Compose, "New chat") }
         }
     }
+}
+
+/** "· developer" after the status: which Hermes profile this chat runs in. */
+@Composable
+private fun ProfileTag(name: String) {
+    Text(" · ", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    Icon(Glyphs.Person, null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(12.dp))
+    Spacer(Modifier.width(3.dp))
+    Text(name, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant,
+        maxLines = 1, overflow = TextOverflow.Ellipsis)
 }
 
 @Composable

@@ -121,6 +121,9 @@ data class ProfilesState(
     val active: String = DEFAULT_HERMES_PROFILE,
 ) {
     val current: HermesProfile? get() = items.firstOrNull { it.name == active }
+
+    /** What the chat header names, or null: a PC with only the default profile has nothing to tell apart. */
+    val headerLabel: String? get() = if (items.size > 1) current?.label ?: active else null
 }
 
 /** Which address the app is using, and what else it could use. */

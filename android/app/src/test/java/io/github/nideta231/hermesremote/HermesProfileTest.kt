@@ -91,4 +91,12 @@ class HermesProfileTest {
         assertEquals("PM", st.current?.label)
         assertNull(ProfilesState(active = "pm").current)  // not listed yet
     }
+
+    @Test fun theChatHeaderNamesTheProfileOnlyWhenThereIsAChoice() {
+        val two = listOf(HermesProfile("default", isDefault = true), HermesProfile("developer", "Dev"))
+        assertEquals("Dev", ProfilesState(two, active = "developer").headerLabel)
+        assertEquals("default", ProfilesState(two, active = "default").headerLabel)
+        assertNull(ProfilesState(listOf(HermesProfile("default", isDefault = true))).headerLabel)  // only one
+        assertNull(ProfilesState().headerLabel)  // not listed yet, or an old bridge
+    }
 }

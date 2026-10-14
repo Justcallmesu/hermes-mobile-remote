@@ -273,7 +273,8 @@ class MainActivity : ComponentActivity() {
                         Page.CHAT -> ChatScreen(chat, health, models, vm.shownModel(models, chat), reasoning, suggestions,
                             openModelPicker, confirm, showMenuButton = !wide, actions = chatActions,
                             update = update, onOpenUpdate = openUpdate, onDismissUpdate = vm::dismissUpdateBanner,
-                            projects = sessions.projects.filter { it.path != null })
+                            projects = sessions.projects.filter { it.path != null },
+                            profile = hermesProfiles.headerLabel)
                         Page.SETTINGS -> SettingsScreen(system, pairing, conn, update, settingsActions, onBack = { page = Page.CHAT }, models = models)
                     }
                 }

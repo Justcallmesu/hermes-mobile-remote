@@ -10,6 +10,8 @@ authoritative history — this file only summarises what is worth knowing before
   new chats then belong to that profile. Each PC remembers its choice, and a notification opens
   its chat in the right profile. Needs the updated bridge (run `./install.sh` on the PC); with an
   older bridge the app stays on the default profile as before.
+- The chat header names the Hermes profile the chat runs in (next to its status), when the PC has
+  more than one profile.
 - Bridge: `GET /v1/profiles` lists them, and the sessions, approvals and default model endpoints
   take `?profile=` so they act on one profile. The default profile works exactly as before. A new
   `allowed_profiles` key in `config.toml` limits which profiles the phone may use (empty: all).
