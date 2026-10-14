@@ -12,7 +12,7 @@ Roughly, in the order the pieces landed:
 
 - Android app with chat, sessions, pins, rename, delete and search.
 - The bridge: pairing, per-device tokens, LAN over pinned HTTPS, Tailscale, trusted networks.
-- Approvals in the app, plus switching Hermes' global `approvals.mode`.
+- Approvals in the app, plus switching Hermes' `approvals.mode`.
 - Model picker and reasoning effort.
 - In-app updates from tagged GitHub Releases.
 - 1.0: the phone shares the desktop app's Hermes backend over one WebSocket. Live streaming in both
@@ -22,6 +22,14 @@ Roughly, in the order the pieces landed:
   job. See [PLATFORMS.md](PLATFORMS.md).
 - A demo stack with a synthetic backend, so the app can be tried and recorded without a real
   Hermes.
+- 1.1: several paired PCs, switched from the drawer, each with its own pairing, drafts and last
+  chat. Pairing from a QR picture as well as the camera.
+- 1.2–1.5: Markdown tables; drawer grouping, sorting and filtering (date, project, status) with
+  collapsible groups; the changelog and "What's new" inside the app.
+- 1.7–1.9: new chats in a project, and new projects created from the phone; Hermes' default model
+  and the theme (mode and accent) in Settings.
+- Tray apps on both platforms: the Windows tray runs the bridge, the Linux tray controls the
+  systemd service. On Linux, `install.sh` adds it to the app menu and starts it at login.
 
 ## Next
 
@@ -39,18 +47,14 @@ backend would let a change to the event contract be verified automatically.
 **Approve from the lock screen.** The approval notification opens the app today; answering from
 the notification itself would save a step.
 
-**Session search that reaches the server.** Search currently filters the sessions the bridge has
-already listed. Pushing the query into the Hermes sessions API would make it scale to hundreds of
-conversations.
+**Session search that reaches the server.** Search filters the sessions the app has already
+listed (all of them, up to 2,000). Pushing the query into the Hermes sessions API would make it
+scale past that and find text anywhere in a conversation, not just its title and preview.
 
 **Tablet parity.** The wide layout shows sessions beside the chat, but sheets and the approval
 dock are still phone-sized.
 
 ## Later
-
-**Multiple PCs.** The app holds one pairing. Supporting several bridges — pick a machine per
-session — is the most-requested thing and the biggest change, because pairing, drafts and the
-live connection all assume a single PC.
 
 **A desktop build.** The UI is Compose and not obviously phone-only. A resizable desktop client
 would reuse the same bridge.
