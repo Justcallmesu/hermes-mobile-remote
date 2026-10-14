@@ -145,14 +145,14 @@ def make_icon(summary: str) -> QIcon:
 
 # ---------------------------------------------------------------- background polling
 class Poller(QObject):
-    done = pyqtSignal(dict)
+    done = pyqtSignal(int, dict)
 
-    def work(self) -> None:
-        self.done.emit(poll())
+    def work(self, generation: int) -> None:
+        self.done.emit(generation, poll())
 
 
 class Tray(QObject):
-    request = pyqtSignal()
+    request = pyqtSignal(int)
 
     def __init__(self, app: QApplication) -> None:
         super().__init__()
@@ -160,7 +160,11 @@ class Tray(QObject):
         self.health: dict = {"state": "unknown", "summary": "unknown", "problem": "checking...",
                              "checks": [], "trust": None, "devices": None}
         self.asked_networks: set[str] = set()
-        self.busy = False
+        # Every action that changes the bridge (revoke, trust, stop, ...) starts a new generation.
+        # A poll reports the generation it started in, and an older answer is dropped: it was
+        # read before the change and would put a revoked device back in the menu.
+        self.generation = 0
+        self.polling: int | None = None  # the generation of the poll in flight, if any
 
         self.icon = QSystemTrayIcon(make_icon("unknown"))
         self.icon.setToolTip("Hermes Remote: checking...")
@@ -184,18 +188,32 @@ class Tray(QObject):
 
     # ------------------------------------------------------------ health
     def refresh(self) -> None:
-        if self.busy:
-            return
-        self.busy = True
-        self.request.emit()
+        if self.polling == self.generation:
+            return  # an up-to-date poll is already running
+        self.polling = self.generation
+        self.request.emit(self.generation)
 
-    def apply(self, health: dict) -> None:
-        self.busy = False
+    def changed(self) -> None:
+        """The bridge's state just changed: polls already running describe the old one."""
+        self.generation += 1
+        self.refresh()
+
+    def apply(self, generation: int, health: dict) -> None:
+        if generation != self.generation:
+            return  # read before the last action; the poll queued after it is the one to show
+        self.polling = None
         self.health = health
         self.icon.setIcon(make_icon(health["summary"]))
         label = {"running": "running", "stopped": "stopped", "missing": "not installed"}.get(health["state"], health["state"])
         self.icon.setToolTip(f"Hermes Remote: {label}\n{health['problem']}")
+        self.show_health()
         self.offer_trust()
+
+    def show_health(self) -> None:
+        """Rebuild the menu as soon as fresh data lands (and again as it opens), so whatever
+        opens next is never a snapshot from before the last change."""
+        if not self.menu.isVisible():
+            self.build_menu()
 
     def offer_trust(self) -> None:
         """Once per new network, offer to trust it - the same nudge the Windows balloon gives."""
@@ -219,8 +237,7 @@ class Tray(QObject):
             fn()
         finally:
             QApplication.restoreOverrideCursor()
-        self.busy = False
-        self.refresh()
+        self.changed()
 
     # ------------------------------------------------------------ menu
     def add(self, menu: QMenu, text: str, fn=None, enabled: bool = True) -> QAction:
@@ -246,7 +263,7 @@ class Tray(QObject):
             for check in h["checks"]:
                 mark = {"ok": "\u2713", "warn": "!"}.get(check.get("level"), "\u2717")
                 self.add(details, f"{mark}  {check.get('message', '')}")
-        self.add(m, "Refresh now", lambda: (setattr(self, "busy", False), self.refresh()))
+        self.add(m, "Refresh now", self.changed)
         m.addSeparator()
 
         installed = state != "missing"
@@ -281,7 +298,7 @@ class Tray(QObject):
         if active:
             dev.addSeparator()
             for device in active:
-                self.add(dev, f"{device['name']} - revoke", lambda n=device["name"]: self.revoke(n))
+                self.add(dev, f"{device['name']} - revoke", lambda d=device: self.revoke(d))
         m.addSeparator()
 
         self.add(m, "Copy last 50 log lines", self.copy_log)
@@ -298,10 +315,29 @@ class Tray(QObject):
         self.add(m, "Quit tray (bridge keeps running)", self.quit)
 
     # ------------------------------------------------------------ actions
-    def revoke(self, name: str) -> None:
+    def revoke(self, device: dict) -> None:
+        name = device["name"]
         if QMessageBox.question(None, "Revoke device", f"Revoke '{name}'? It will have to pair again.") \
-                == QMessageBox.StandardButton.Yes:
-            self.after(lambda: bridge("revoke", name))
+                != QMessageBox.StandardButton.Yes:
+            return
+        out = ""
+
+        def do_revoke() -> None:
+            nonlocal out
+            out = bridge("revoke", device["id"])  # the id: a name can come back after a re-pair
+
+        self.after(do_revoke)
+        if not out.startswith("Revoked"):
+            QMessageBox.warning(None, "Revoke failed", f"Could not revoke '{name}'. Run in a terminal:\n\n"
+                                f"hermes-remote-bridge revoke {device['id']}")
+            return
+        self.forget_device(device["id"])
+
+    def forget_device(self, device_id: str) -> None:
+        """Take a revoked device off the menu now; the poll already running confirms it."""
+        rows = (self.health.get("devices") or {}).get("devices") or []
+        self.health = {**self.health, "devices": {"devices": [d for d in rows if d.get("id") != device_id]}}
+        self.show_health()
 
     def pair(self) -> None:
         name, ok = QInputDialog.getText(None, "Pair a device", "Name for this phone:", text="phone")
@@ -330,8 +366,7 @@ class Tray(QObject):
             PairDialog(name, str(qr), f"URL: {payload['url']}\nToken: {payload['token']}").exec()
         finally:
             shutil.rmtree(work, ignore_errors=True)
-            self.busy = False
-            self.refresh()
+            self.changed()
 
     def copy_log(self) -> None:
         out = run(["journalctl", "--user", "-u", UNIT, "-n", "50", "--no-pager", "-o", "short-iso"], 15)
