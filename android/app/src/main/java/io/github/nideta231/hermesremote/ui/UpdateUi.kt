@@ -36,7 +36,7 @@ import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import io.github.nideta231.hermesremote.UpdateState
+import io.github.nideta231.hermesremote.data.UpdateState
 
 /** One line under the chat's top bar when an update is out: tap for what's new, ✕ to hide it. */
 @Composable

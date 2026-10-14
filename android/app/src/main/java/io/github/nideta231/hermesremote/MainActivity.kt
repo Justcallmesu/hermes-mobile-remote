@@ -194,7 +194,7 @@ class MainActivity : ComponentActivity() {
         val chat by vm.chat.collectAsState()
         val sessions by vm.sessions.collectAsState()
         val sessionView by vm.sessionView.collectAsState()
-        val system by vm.system.collectAsState()
+        val system by vm.settings.system.collectAsState()
         val models by vm.models.collectAsState()
         val choice by vm.modelChoice.collectAsState()
         val confirm by vm.confirm.collectAsState()
@@ -202,7 +202,7 @@ class MainActivity : ComponentActivity() {
         val reasoning by vm.reasoning.collectAsState()
         val suggestions by vm.suggestions.collectAsState()
         val openModelPicker by vm.openModelPicker.collectAsState()
-        val update by vm.update.collectAsState()
+        val update by vm.updates.update.collectAsState()
         val toast by vm.toast.collectAsState()
         val pcs by vm.pcs.collectAsState()
         val hermesProfiles by vm.hermesProfiles.collectAsState()
@@ -222,7 +222,7 @@ class MainActivity : ComponentActivity() {
 
         fun go(p: Page) {
             page = p
-            if (p == Page.SETTINGS) vm.refreshStatus()
+            if (p == Page.SETTINGS) vm.settings.refresh()
             scope.launch { drawer.close() }
         }
 
@@ -257,11 +257,11 @@ class MainActivity : ComponentActivity() {
             chooseProject = vm::chooseProject, createProject = vm::createProject,
         )
         val settingsActions = SettingsActions(
-            refresh = vm::refreshStatus, unpair = vm::unpair, setApprovalMode = vm::setApprovalMode,
+            refresh = vm.settings::refresh, unpair = vm::unpair, setApprovalMode = vm.settings::setApprovalMode,
             useTransport = vm::useTransport, useAuto = vm::useAutoTransport,
-            checkUpdate = { vm.checkForUpdate() }, installUpdate = vm::installUpdate,
+            checkUpdate = { vm.updates.checkForUpdate() }, installUpdate = vm.updates::installUpdate,
             openUpdate = { updateSheet = true }, openChangelog = { changelogSheet = true },
-            loadModels = vm::loadModels, setDefaultModel = vm::setDefaultModel, dismissDefaultConfirm = vm::dismissDefaultConfirm,
+            loadModels = vm::loadModels, setDefaultModel = vm.settings::setDefaultModel, dismissDefaultConfirm = vm.settings::dismissDefaultConfirm,
         )
         val cronActions = CronActions(refresh = vm.cron::refresh, loadRuns = vm.cron::loadRuns,
             pause = vm.cron::pause, resume = vm.cron::resume, runNow = vm.cron::runNow)
@@ -278,7 +278,7 @@ class MainActivity : ComponentActivity() {
                     when (p) {
                         Page.CHAT -> ChatScreen(chat, health, models, vm.shownModel(models, chat), reasoning, suggestions,
                             openModelPicker, confirm, showMenuButton = !wide, actions = chatActions,
-                            update = update, onOpenUpdate = openUpdate, onDismissUpdate = vm::dismissUpdateBanner,
+                            update = update, onOpenUpdate = openUpdate, onDismissUpdate = vm.updates::dismissUpdateBanner,
                             projects = sessions.projects.filter { it.path != null },
                             profile = hermesProfiles.headerLabel)
                         Page.SCHEDULED -> CronScreen(cron, hermesProfiles.active.takeIf { hermesProfiles.items.size > 1 }, cronActions, onBack = { page = Page.CHAT })
@@ -287,12 +287,12 @@ class MainActivity : ComponentActivity() {
                 }
                 SnackbarHost(snack, Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(bottom = 72.dp))
             }
-            if (updateSheet && update.available != null) UpdateSheet(update, onInstall = vm::installUpdate, onDismiss = { updateSheet = false })
-            if (changelogSheet) NotesSheet("Changelog", "You have ${update.installed}", remember { fullChangelog(vm.changelog) },
+            if (updateSheet && update.available != null) UpdateSheet(update, onInstall = vm.updates::installUpdate, onDismiss = { updateSheet = false })
+            if (changelogSheet) NotesSheet("Changelog", "You have ${update.installed}", remember { fullChangelog(vm.updates.changelog) },
                 onDismiss = { changelogSheet = false })
             update.whatsNew?.let { notes ->
-                NotesSheet("What's new in ${update.installed}", "Updated. Here is what changed:", notes, onDismiss = vm::markWhatsNewSeen) {
-                    Button(onClick = vm::markWhatsNewSeen, modifier = Modifier.fillMaxWidth()) { Text("Got it") }
+                NotesSheet("What's new in ${update.installed}", "Updated. Here is what changed:", notes, onDismiss = vm.updates::markWhatsNewSeen) {
+                    Button(onClick = vm.updates::markWhatsNewSeen, modifier = Modifier.fillMaxWidth()) { Text("Got it") }
                 }
             }
         }

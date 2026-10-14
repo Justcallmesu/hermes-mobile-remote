@@ -94,8 +94,8 @@ import io.github.nideta231.hermesremote.ConnectionState
 import io.github.nideta231.hermesremote.PairedPc
 import io.github.nideta231.hermesremote.ProfilesState
 import io.github.nideta231.hermesremote.SessionsState
-import io.github.nideta231.hermesremote.SystemState
-import io.github.nideta231.hermesremote.UpdateState
+import io.github.nideta231.hermesremote.data.SystemState
+import io.github.nideta231.hermesremote.data.UpdateState
 import io.github.nideta231.hermesremote.data.Pairing
 import io.github.nideta231.hermesremote.data.PairingParser
 import io.github.nideta231.hermesremote.data.ProjectRef

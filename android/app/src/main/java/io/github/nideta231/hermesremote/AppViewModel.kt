@@ -1,7 +1,6 @@
 package io.github.nideta231.hermesremote
 
 import android.app.Application
-import android.content.Intent
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import androidx.lifecycle.AndroidViewModel
@@ -10,7 +9,6 @@ import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.ProcessLifecycleOwner
 import androidx.lifecycle.viewModelScope
 import io.github.nideta231.hermesremote.data.mergeSessionHead
-import io.github.nideta231.hermesremote.data.AppUpdate
 import io.github.nideta231.hermesremote.data.BridgeClient
 import io.github.nideta231.hermesremote.data.BridgeException
 import io.github.nideta231.hermesremote.data.ProjectRef
@@ -18,8 +16,11 @@ import io.github.nideta231.hermesremote.data.SessionView
 import io.github.nideta231.hermesremote.data.SessionViewStore
 import io.github.nideta231.hermesremote.data.ChatItem
 import io.github.nideta231.hermesremote.data.ComponentStatus
+import io.github.nideta231.hermesremote.data.AppUpdates
 import io.github.nideta231.hermesremote.data.CredentialStore
 import io.github.nideta231.hermesremote.data.CronJobs
+import io.github.nideta231.hermesremote.data.ModelConfirm
+import io.github.nideta231.hermesremote.data.SystemSettings
 import io.github.nideta231.hermesremote.data.Dispatch
 import io.github.nideta231.hermesremote.data.DraftStore
 import io.github.nideta231.hermesremote.data.Endpoint
@@ -41,13 +42,10 @@ import io.github.nideta231.hermesremote.data.Pairing
 import io.github.nideta231.hermesremote.data.REASONING_LEVELS
 import io.github.nideta231.hermesremote.data.RpcException
 import io.github.nideta231.hermesremote.data.SessionSummary
-import io.github.nideta231.hermesremote.data.changesBetween
 import io.github.nideta231.hermesremote.data.SlashSuggestion
 import io.github.nideta231.hermesremote.data.Tailnet
 import io.github.nideta231.hermesremote.data.Transport
 import io.github.nideta231.hermesremote.data.TransportMode
-import io.github.nideta231.hermesremote.data.UpdateEvents
-import io.github.nideta231.hermesremote.data.Updater
 import io.github.nideta231.hermesremote.data.WatchService
 import io.github.nideta231.hermesremote.data.objects
 import io.github.nideta231.hermesremote.data.parseApproval
@@ -145,41 +143,6 @@ data class ConnectionState(
     val liveError: String? = null,
 )
 
-data class SystemState(
-    val components: List<ComponentStatus> = emptyList(),
-    val loading: Boolean = false,
-    val error: String? = null,
-    val checkedAt: Long? = null,
-    val approvalMode: String? = null,
-    val approvalSaving: Boolean = false,
-    /** Hermes' default model for new chats ("" when unknown or the bridge is too old). */
-    val defaultModel: String = "",
-    val defaultProvider: String = "",
-    val defaultSaving: Boolean = false,
-    /** Set while Hermes asks to confirm an expensive default. */
-    val defaultConfirm: ModelConfirm? = null,
-)
-
-data class UpdateState(
-    val installed: String = "",
-    val available: AppUpdate? = null,
-    val checking: Boolean = false,
-    /** 0..1 while downloading, null otherwise. */
-    val progress: Float? = null,
-    val checkedAt: Long? = null,
-    val error: String? = null,
-    /** The version whose top-of-screen banner the user closed; the banner returns for a newer one. */
-    val dismissed: String? = null,
-    /** After an update: what changed since the version that ran before, shown once. */
-    val whatsNew: String? = null,
-) {
-    /** The top-of-screen and drawer banner: an update the user hasn't closed (or one downloading). */
-    val banner: Boolean get() = progress != null || (available != null && available.version != dismissed)
-}
-
-/** An expensive model needs a yes before Hermes switches to it (the desktop asks the same). */
-data class ModelConfirm(val option: ModelOption, val message: String)
-
 class AppViewModel(private val app: Application) : AndroidViewModel(app) {
     private val profiles = ProfileStore(app)
     private var store = CredentialStore(app, ProfileStore.pairingFile(profiles.activeId))
@@ -225,9 +188,6 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
         viewStore.save(v)
     }
 
-    private val _system = MutableStateFlow(SystemState())
-    val system: StateFlow<SystemState> = _system.asStateFlow()
-
     private val _models = MutableStateFlow<ModelCatalog?>(null)
     val models: StateFlow<ModelCatalog?> = _models.asStateFlow()
 
@@ -252,17 +212,6 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
     private val _openModelPicker = MutableStateFlow(false)
     val openModelPicker: StateFlow<Boolean> = _openModelPicker.asStateFlow()
 
-    private val updater = Updater(app)
-    private val appPrefs = app.getSharedPreferences("app", android.content.Context.MODE_PRIVATE)
-    private val _update = MutableStateFlow(UpdateState(installed = updater.installedVersion,
-        dismissed = appPrefs.getString(KEY_DISMISSED_UPDATE, null)))
-    val update: StateFlow<UpdateState> = _update.asStateFlow()
-
-    /** CHANGELOG.md as bundled in this APK (see build.gradle.kts); empty if missing. */
-    val changelog: String by lazy {
-        runCatching { app.assets.open("CHANGELOG.md").bufferedReader().use { it.readText() } }.getOrDefault("")
-    }
-
     /** One-shot user-facing messages (snackbar). */
     private val _toast = MutableStateFlow<String?>(null)
     val toast: StateFlow<String?> = _toast.asStateFlow()
@@ -270,6 +219,14 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
     /** The Scheduled page: cron jobs of the profile in use. */
     val cron = CronJobs(viewModelScope, client = { client }, profile = { profile },
         describe = ::describe, say = { _toast.value = it })
+    /** Settings > PC: the bridge's health, and the profile's approval mode and default model. */
+    val settings = SystemSettings(viewModelScope, client = { client }, profile = { profile },
+        describe = ::describe, say = { _toast.value = it },
+        onDefaultModel = { option -> _models.update { cat -> cat?.copy(options = cat.options.map { o ->
+            o.copy(current = o.id == option.id && o.provider == option.provider) }) } })
+
+    /** Self-update from GitHub releases, and "What's new" after one. */
+    val updates = AppUpdates(app, viewModelScope, describe = ::describe, say = { _toast.value = it })
 
     private var openJob: Job? = null
     private var suggestJob: Job? = null
@@ -277,10 +234,10 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
     private var sessionsRefreshJob: Job? = null
 
     private val foregroundObserver = object : DefaultLifecycleObserver {
-        override fun onStart(owner: LifecycleOwner) { onForeground(); startHeartbeat(); startActivePolling(); startUpdateChecks() }
+        override fun onStart(owner: LifecycleOwner) { onForeground(); startHeartbeat(); startActivePolling(); updates.startChecks() }
         override fun onStop(owner: LifecycleOwner) {
             heartbeatJob?.cancel()
-            updateCheckJob?.cancel()
+            updates.stopChecks()
             activeJob?.cancel()
             // A turn still running: keep the process (and the socket) up so its end or its
             // question can be notified. The service stops by itself once nothing runs.
@@ -367,16 +324,7 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
     init {
         refreshPcs()
         _pairing.value?.let { start(it) }
-        showWhatsNew()
-        viewModelScope.launch {
-            UpdateEvents.failure.collect { msg ->
-                if (msg != null) {
-                    _update.update { it.copy(progress = null, error = msg) }
-                    _toast.value = msg
-                    UpdateEvents.failure.value = null
-                }
-            }
-        }
+        updates.showWhatsNew()
         ProcessLifecycleOwner.get().lifecycle.addObserver(foregroundObserver)
         runCatching { connectivity?.registerDefaultNetworkCallback(networkCallback) }
     }
@@ -406,7 +354,7 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
         store.lastSessionId?.let { openSession(it) }
         refreshProfiles()
         refreshSessions()
-        refreshStatus()
+        settings.refresh()
         discoverEndpoints()
     }
 
@@ -512,7 +460,7 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
                         store.save(clientPairing())
                         useClient(BridgeClient(candidate))
                         refreshSessions()
-                        refreshStatus()
+                        settings.refresh()
                         discoverEndpoints()
                         return true
                     } catch (t: Throwable) {
@@ -676,7 +624,7 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
         _pairing.value = null
         _chat.value = ChatState()
         _sessions.value = SessionsState()
-        _system.value = SystemState()
+        settings.clear()
         cron.clear()
         _models.value = null
         _modelChoice.value = null
@@ -703,7 +651,7 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
         discoverEndpoints()
         refreshProfiles()
         refreshSessions()
-        refreshStatus()
+        settings.refresh()
         val sid = _chat.value.sessionId
         if (sid != null && gateway?.state?.value == GatewayState.OPEN) viewModelScope.launch { resume(sid) }
     }
@@ -974,10 +922,10 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
         _sessions.value = SessionsState(loading = true, live = _sessions.value.live)
         _models.value = null
         _modelChoice.value = null
-        _system.update { it.copy(approvalMode = null, defaultModel = "", defaultProvider = "", defaultConfirm = null) }
+        settings.forgetProfileValues()
         cron.clear()
         refreshSessions()
-        refreshStatus()
+        settings.refresh()
     }
 
     /** False once the user moved to another profile while a request for [asked] was in flight. */
@@ -1433,177 +1381,9 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
         }
     }
 
-    // ------------------------------------------------------------ app updates
-
-    private var updateCheckJob: Job? = null
-    private var lastUpdateCheck = 0L
-
-    /**
-     * Automatic update checks: every time the app opens or comes back to the foreground, then every
-     * [UPDATE_CHECK_EVERY] while it stays on screen. Two opens within [UPDATE_CHECK_MIN_GAP] share
-     * one check; repeats are conditional requests (see [Updater.check]), so they stay off the rate limit.
-     */
-    private fun startUpdateChecks() {
-        updateCheckJob?.cancel()
-        updateCheckJob = viewModelScope.launch {
-            // Counted from the last attempt, failed ones too, so being offline never means a retry loop.
-            if (System.currentTimeMillis() - lastUpdateCheck >= UPDATE_CHECK_MIN_GAP) {
-                lastUpdateCheck = System.currentTimeMillis()
-                checkForUpdate(quiet = true)
-            }
-            while (true) {
-                delay(UPDATE_CHECK_EVERY)
-                lastUpdateCheck = System.currentTimeMillis()
-                checkForUpdate(quiet = true)
-            }
-        }
-    }
-
-    /** Closes the top-of-screen banner for this version; Settings and the drawer still offer it. */
-    fun dismissUpdateBanner() {
-        val v = _update.value.available?.version ?: return
-        appPrefs.edit().putString(KEY_DISMISSED_UPDATE, v).apply()
-        _update.update { it.copy(dismissed = v) }
-    }
-
-    /**
-     * First start after an update: show what changed since the version that ran before. A fresh
-     * install shows nothing. Versions before 1.5.0 didn't record themselves, so an update from one of
-     * them shows the new version's changes only.
-     */
-    private fun showWhatsNew() {
-        val installed = updater.installedVersion
-        val last = appPrefs.getString(KEY_LAST_VERSION, null)
-        if (last == installed) return
-        val info = runCatching { app.packageManager.getPackageInfo(app.packageName, 0) }.getOrNull()
-        val freshInstall = last == null && info != null && info.firstInstallTime == info.lastUpdateTime
-        if (freshInstall || (last != null && !Updater.isNewer(installed, last))) { markWhatsNewSeen(); return }
-        val notes = changesBetween(changelog, last, installed)
-        if (notes.isBlank()) markWhatsNewSeen() else _update.update { it.copy(whatsNew = notes) }
-    }
-
-    fun markWhatsNewSeen() {
-        appPrefs.edit().putString(KEY_LAST_VERSION, updater.installedVersion).apply()
-        _update.update { it.copy(whatsNew = null) }
-    }
-
-    /** What the available update brings over this build: its notes cut to the versions in between. */
-    private fun updateNotes(u: AppUpdate): String =
-        changesBetween(u.notes, updater.installedVersion, u.version).ifBlank { u.notes }
-
-    fun checkForUpdate(quiet: Boolean = false) {
-        if (_update.value.checking || _update.value.progress != null) return
-        _update.update { it.copy(checking = true, error = null) }
-        viewModelScope.launch {
-            try {
-                val found = updater.check()
-                // The release notes are the whole changelog; keep only what is newer than this build.
-                _update.update { it.copy(available = found?.let { u -> u.copy(notes = updateNotes(u)) }, checking = false,
-                    checkedAt = System.currentTimeMillis()) }
-            } catch (t: Throwable) {
-                if (t is CancellationException) throw t
-                _update.update { it.copy(checking = false, error = if (quiet) null else "Couldn't check for updates: ${t.message}") }
-            }
-        }
-    }
-
-    fun installUpdate() {
-        val u = _update.value.available ?: return
-        if (_update.value.progress != null) return
-        if (!app.packageManager.canRequestPackageInstalls()) {
-            app.startActivity(Intent(android.provider.Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
-                android.net.Uri.parse("package:${app.packageName}")).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
-            _toast.value = "Allow installs from Hermes Remote, then tap Update again."
-            return
-        }
-        _update.update { it.copy(progress = 0f, error = null) }
-        viewModelScope.launch {
-            try {
-                updater.install(u) { p -> _update.update { it.copy(progress = p) } }
-                _update.update { it.copy(progress = null) }
-            } catch (t: Throwable) {
-                if (t is CancellationException) throw t
-                _update.update { it.copy(progress = null, error = t.message) }
-                say(t)
-            }
-        }
-    }
-
-    // ------------------------------------------------------------ system
-
-    fun refreshStatus() {
-        val c = client ?: return
-        val asked = profile
-        _system.update { it.copy(loading = true) }
-        viewModelScope.launch {
-            try {
-                val comps = c.status()
-                val mode = runCatching { c.approvalMode(asked) }.getOrNull()
-                val def = runCatching { c.defaultModel(asked) }.getOrNull()
-                if (!stillOn(asked)) return@launch
-                _system.update {
-                    it.copy(components = comps, loading = false, error = null, checkedAt = System.currentTimeMillis(),
-                        approvalMode = mode ?: it.approvalMode,
-                        defaultModel = def?.first ?: it.defaultModel, defaultProvider = def?.second ?: it.defaultProvider)
-                }
-            } catch (t: Throwable) {
-                if (t is CancellationException) throw t
-                _system.update { it.copy(loading = false, error = describe(t), checkedAt = System.currentTimeMillis()) }
-            }
-        }
-    }
-
-    fun setApprovalMode(mode: String) {
-        val c = client ?: return
-        if (_system.value.approvalMode == mode || _system.value.approvalSaving) return
-        _system.update { it.copy(approvalSaving = true) }
-        viewModelScope.launch {
-            try {
-                val applied = c.setApprovalMode(mode, profile)
-                _system.update { it.copy(approvalMode = applied, approvalSaving = false) }
-            } catch (t: Throwable) {
-                if (t is CancellationException) throw t
-                _system.update { it.copy(approvalSaving = false) }
-                say(t)
-            }
-        }
-    }
-
-    /** Change Hermes' profile default model: every NEW chat (desktop, messaging, this app) uses it. */
-    fun setDefaultModel(option: ModelOption, confirmed: Boolean = false) {
-        val c = client ?: return
-        if (_system.value.defaultSaving) return
-        _system.update { it.copy(defaultSaving = true, defaultConfirm = null) }
-        viewModelScope.launch {
-            try {
-                val res = c.setDefaultModel(option.id, option.provider, confirmed, profile)
-                if (res.optBoolean("confirm_required")) {
-                    val msg = res.optString("confirm_message").ifBlank { "This model is expensive. Make it the default anyway?" }
-                    _system.update { it.copy(defaultSaving = false, defaultConfirm = ModelConfirm(option, msg)) }
-                    return@launch
-                }
-                _system.update { it.copy(defaultSaving = false, defaultModel = res.optString("model", option.id),
-                    defaultProvider = res.optString("provider", option.provider)) }
-                _models.update { cat -> cat?.copy(options = cat.options.map { o ->
-                    o.copy(current = o.id == option.id && o.provider == option.provider) }) }
-                _toast.value = "New chats now use ${option.label}"
-            } catch (t: Throwable) {
-                if (t is CancellationException) throw t
-                _system.update { it.copy(defaultSaving = false) }
-                say(t)
-            }
-        }
-    }
-
-    fun dismissDefaultConfirm() = _system.update { it.copy(defaultConfirm = null) }
-
     private companion object {
         /** Bridge protocol this app speaks (the WebSocket relay). */
         const val MIN_BRIDGE_PROTOCOL = 2
-        const val UPDATE_CHECK_EVERY = 60 * 60 * 1000L
-        const val UPDATE_CHECK_MIN_GAP = 60 * 1000L
-        const val KEY_LAST_VERSION = "last_version"
-        const val KEY_DISMISSED_UPDATE = "dismissed_update"
         /** The bridge caps one /v1/sessions page at 100. */
         const val SESSIONS_PER_REQUEST = 100
         /** Upper bound for the drawer's up-front fetch; past it the old scroll-to-load takes over. */

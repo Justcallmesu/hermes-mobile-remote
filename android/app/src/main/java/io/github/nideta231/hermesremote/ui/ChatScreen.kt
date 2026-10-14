@@ -1,6 +1,6 @@
 package io.github.nideta231.hermesremote.ui
 
-import io.github.nideta231.hermesremote.UpdateState
+import io.github.nideta231.hermesremote.data.UpdateState
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
@@ -103,7 +103,7 @@ import androidx.compose.ui.unit.sp
 import io.github.nideta231.hermesremote.ChatState
 import io.github.nideta231.hermesremote.ConnectionState
 import io.github.nideta231.hermesremote.Link
-import io.github.nideta231.hermesremote.ModelConfirm
+import io.github.nideta231.hermesremote.data.ModelConfirm
 import io.github.nideta231.hermesremote.data.ProjectRef
 import io.github.nideta231.hermesremote.data.ChatItem
 import io.github.nideta231.hermesremote.data.LiveReducer

@@ -35,6 +35,9 @@ data class SessionSummary(
 
 data class ModelOption(val provider: String, val providerName: String, val id: String, val label: String, val current: Boolean)
 
+/** An expensive model needs a yes before Hermes switches to it (the desktop asks the same). */
+data class ModelConfirm(val option: ModelOption, val message: String)
+
 data class ModelCatalog(
     val currentModel: String?,
     val currentProvider: String?,
