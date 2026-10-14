@@ -103,6 +103,7 @@ object Glyphs {
     val Check = line("M5 12l5 5 9-10")
     val Folder = line("M3 6h6l2 2h10v11H3z")
     val Person = line("M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8z", "M4 21a8 8 0 0 1 16 0")
+    val Clock = line("M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18z", "M12 7v5l3 2")
 }
 
 /** A status dot that breathes while [pulse] is on (live run, reconnecting). */

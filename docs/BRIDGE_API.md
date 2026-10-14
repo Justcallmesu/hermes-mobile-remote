@@ -82,6 +82,9 @@ for (see [Profiles](#profiles)). Without it, or with `default`, it is the defaul
 | PUT | `/v1/settings/approvals` `{mode}` *(profile)* | Sets it via `hermes [-p <profile>] config set` (fixed argv, no shell), reads it back, audits the change. 400 `invalid_mode` for anything else. |
 | GET | `/v1/settings/model` *(profile)* | `{model, provider}`: the profile's default for new chats. |
 | PUT | `/v1/settings/model` `{model, provider?, confirm_expensive_model?}` *(profile)* | Sets that default. May answer `{confirm_required, confirm_message}` first. |
+| GET | `/v1/cron/jobs` *(profile)* | `{jobs[]}`, each `{id, name, schedule_display, state, enabled, next_run_at, last_run_at, last_status, last_error, failure_streak, model}`. `state` is Hermes' `scheduled`, `paused`, `completed` or `error`. A job's prompt, script, delivery target and folder are not sent. |
+| GET | `/v1/cron/jobs/{id}/runs?limit` *(profile)* | `{runs[]}`, newest first, each `{id, title, preview, source, started_at, ended_at, message_count, model}`. `limit` 1–50, default 10. |
+| POST | `/v1/cron/jobs/{id}/pause\|resume\|trigger` *(profile)* | Pause, resume, or run now (`trigger`). Answers `{job}` as it is afterwards. Audited. A job that is not in that profile is 404 `job_not_found`. Creating, editing and deleting jobs is not offered. |
 
 ## Profiles
 

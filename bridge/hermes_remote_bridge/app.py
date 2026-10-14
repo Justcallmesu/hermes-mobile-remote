@@ -57,6 +57,23 @@ def _check_id(value: str, what: str) -> str:
     return value
 
 
+# What the phone may do to a cron job. "trigger" is Hermes' word for "run now".
+CRON_ACTIONS = ("pause", "resume", "trigger")
+# The fields of a Hermes cron job the app shows. Prompts, scripts, delivery targets and paths stay
+# on the PC: the phone needs to recognise a job and see how it is doing, not what it runs.
+_CRON_JOB_FIELDS = ("id", "name", "schedule_display", "state", "enabled", "next_run_at", "last_run_at",
+                    "last_status", "last_error", "failure_streak", "model")
+_CRON_RUN_FIELDS = ("id", "title", "preview", "source", "started_at", "ended_at", "message_count", "model")
+
+
+def _cron_job(job: dict) -> dict:
+    return {k: job.get(k) for k in _CRON_JOB_FIELDS}
+
+
+def _cron_run(run: dict) -> dict:
+    return {k: run.get(k) for k in _CRON_RUN_FIELDS}
+
+
 class PatchSession(BaseModel):
     title: str | None = Field(default=None, max_length=200)
     # Desktop-sidebar flags Hermes persists per session.
@@ -359,6 +376,49 @@ def create_app(cfg: Config, *, locator: BackendLocator | None = None, tailnet: T
         # Hermes takes the owning profile in the body here, not the query.
         return await hermes_http("PATCH", f"/api/sessions/{_check_id(session_id, 'session id')}",
                                  json={**payload, **scoped(profile)})
+
+    # ------------------------------------------------------------ cron jobs
+    # Read, pause, resume and run now. Creating, editing and deleting a job (a prompt that runs on
+    # a schedule with the profile's tools) stays on the PC.
+
+    @app.get("/v1/cron/jobs")
+    async def list_cron_jobs(profile: str | None = Depends(profile_param), _: Device = Depends(device_auth)):
+        return {"jobs": [_cron_job(j) for j in await cron_jobs_of(profile)]}
+
+    async def cron_jobs_of(profile: str | None) -> list[dict]:
+        # Always name the profile: without one Hermes lists every profile's jobs.
+        data = await hermes_http("GET", "/api/cron/jobs", params={"profile": profile or "default"})
+        rows = data if isinstance(data, list) else data.get("jobs", [])
+        return [j for j in rows if isinstance(j, dict)]
+
+    async def owned_cron_job(job_id: str, profile: str | None) -> str:
+        """The job's id when it belongs to `profile`, else 404. Hermes treats the profile of a per-job
+        call as a hint and falls back to searching every profile, which would let a phone reach a job
+        in a profile `allowed_profiles` keeps it out of."""
+        _check_id(job_id, "job id")
+        if not any(j.get("id") == job_id for j in await cron_jobs_of(profile)):
+            raise ApiError(404, "job_not_found", "No such cron job in this profile")
+        return job_id
+
+    @app.get("/v1/cron/jobs/{job_id}/runs")
+    async def list_cron_runs(job_id: str, limit: int = 10, profile: str | None = Depends(profile_param),
+                             _: Device = Depends(device_auth)):
+        job_id = await owned_cron_job(job_id, profile)
+        data = await hermes_http("GET", f"/api/cron/jobs/{job_id}/runs",
+                                 params={"limit": max(1, min(limit, 50)), **scoped(profile)})
+        rows = data.get("runs", []) if isinstance(data, dict) else data
+        return {"runs": [_cron_run(r) for r in rows if isinstance(r, dict)]}
+
+    @app.post("/v1/cron/jobs/{job_id}/{action}")
+    async def cron_action(job_id: str, action: str, profile: str | None = Depends(profile_param),
+                          device: Device = Depends(device_auth)):
+        if action not in CRON_ACTIONS:
+            raise ApiError(404, "not_found", f"Unknown cron action: {action}")
+        job_id = await owned_cron_job(job_id, profile)
+        job = await hermes_http("POST", f"/api/cron/jobs/{job_id}/{action}", params=scoped(profile))
+        audit_event({"event": f"cron_{action}", "device": device.name, "profile": profile or "default",
+                     "job": job_id})
+        return {"job": _cron_job(job) if isinstance(job, dict) else None}
 
     # ------------------------------------------------------------ settings
 

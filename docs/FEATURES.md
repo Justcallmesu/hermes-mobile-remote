@@ -39,6 +39,15 @@ open chat, exactly like the desktop's picker; it does not change your global def
 
 **Reasoning effort.** Off, Minimal, Low, Medium, High, Extra high or Max, set on the open chat.
 
+## Scheduled jobs
+
+**Scheduled jobs.** *Scheduled* in the drawer lists the cron jobs of the Hermes profile in use:
+name, schedule, next and last run, and the last error if there is one. Tap a job for its recent
+runs and the start of their output. *Run now*, *Pause* and *Resume* act on it straight away.
+
+- Limit: creating, editing and deleting jobs is done on the PC. The phone sees what a job is called
+  and how it is doing, not the prompt or script it runs.
+
 ## Approvals
 
 **Approval dock.** When a turn needs permission for a command, a panel slides up above the

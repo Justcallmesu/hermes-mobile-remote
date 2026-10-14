@@ -56,6 +56,8 @@ import com.journeyapps.barcodescanner.ScanOptions
 import io.github.nideta231.hermesremote.data.DEFAULT_HERMES_PROFILE
 import io.github.nideta231.hermesremote.data.Notifier
 import io.github.nideta231.hermesremote.ui.ChatActions
+import io.github.nideta231.hermesremote.ui.CronActions
+import io.github.nideta231.hermesremote.ui.CronScreen
 import io.github.nideta231.hermesremote.ui.ChatScreen
 import io.github.nideta231.hermesremote.ui.HermesTheme
 import io.github.nideta231.hermesremote.ui.ThemePrefs
@@ -78,7 +80,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 /** Chat is home; the others are pages pushed on top of it. */
-enum class Page { CHAT, SETTINGS }
+enum class Page { CHAT, SCHEDULED, SETTINGS }
 
 class MainActivity : ComponentActivity() {
     private val vm: AppViewModel by viewModels()
@@ -204,6 +206,7 @@ class MainActivity : ComponentActivity() {
         val toast by vm.toast.collectAsState()
         val pcs by vm.pcs.collectAsState()
         val hermesProfiles by vm.hermesProfiles.collectAsState()
+        val cron by vm.cron.state.collectAsState()
         var updateSheet by rememberSaveable { mutableStateOf(false) }
         var changelogSheet by rememberSaveable { mutableStateOf(false) }
 
@@ -241,6 +244,7 @@ class MainActivity : ComponentActivity() {
             renamePc = vm::renamePc,
             forgetPc = vm::forgetPc,
             switchProfile = { vm.switchProfile(it); go(Page.CHAT) },
+            openScheduled = { go(Page.SCHEDULED) },
         )
         val chatActions = ChatActions(
             send = vm::send, stop = vm::stop, steer = vm::steer, approve = vm::answerApproval,
@@ -259,6 +263,8 @@ class MainActivity : ComponentActivity() {
             openUpdate = { updateSheet = true }, openChangelog = { changelogSheet = true },
             loadModels = vm::loadModels, setDefaultModel = vm::setDefaultModel, dismissDefaultConfirm = vm::dismissDefaultConfirm,
         )
+        val cronActions = CronActions(refresh = vm.cron::refresh, loadRuns = vm.cron::loadRuns,
+            pause = vm.cron::pause, resume = vm.cron::resume, runNow = vm.cron::runNow)
         val openUpdate = { scope.launch { drawer.close() }; updateSheet = true }
 
         val content: @Composable () -> Unit = {
@@ -275,6 +281,7 @@ class MainActivity : ComponentActivity() {
                             update = update, onOpenUpdate = openUpdate, onDismissUpdate = vm::dismissUpdateBanner,
                             projects = sessions.projects.filter { it.path != null },
                             profile = hermesProfiles.headerLabel)
+                        Page.SCHEDULED -> CronScreen(cron, hermesProfiles.active.takeIf { hermesProfiles.items.size > 1 }, cronActions, onBack = { page = Page.CHAT })
                         Page.SETTINGS -> SettingsScreen(system, pairing, conn, update, settingsActions, onBack = { page = Page.CHAT }, models = models)
                     }
                 }

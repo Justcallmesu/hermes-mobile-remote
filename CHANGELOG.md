@@ -15,6 +15,11 @@ authoritative history — this file only summarises what is worth knowing before
 - Bridge: `GET /v1/profiles` lists them, and the sessions, approvals and default model endpoints
   take `?profile=` so they act on one profile. The default profile works exactly as before. A new
   `allowed_profiles` key in `config.toml` limits which profiles the phone may use (empty: all).
+- Scheduled jobs. *Scheduled* in the drawer lists the cron jobs of the Hermes profile in use with
+  their schedule, next and last run and last error; tap one for its recent runs. Run now, pause and
+  resume work from the phone; creating and editing jobs stays on the PC.
+- Bridge: `GET /v1/cron/jobs`, `GET /v1/cron/jobs/{id}/runs` and `POST /v1/cron/jobs/{id}/pause|resume|trigger`,
+  all per profile. Prompts, scripts and delivery targets are not sent to the phone.
 
 ## v1.9.3
 

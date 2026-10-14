@@ -131,6 +131,7 @@ class SessionActions(
     val forgetPc: (String) -> Unit = {},
     val setView: (SessionView) -> Unit = {},
     val switchProfile: (String) -> Unit = {},
+    val openScheduled: () -> Unit = {},
 )
 
 /** The session list. On phones it lives in the navigation drawer; on tablets beside the chat. */
@@ -277,6 +278,7 @@ fun SessionsPane(
             }
         }
         HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f))
+        PanelRow("Scheduled", icon = Glyphs.Clock, onClick = actions.openScheduled)
         PanelRow("Settings", icon = Glyphs.Settings, onClick = actions.openSettings)
     }
 
@@ -1003,7 +1005,7 @@ private fun SettingsSection(title: String, hint: String? = null, content: @Compo
 
 /** Hairline between rows inside a [Panel]. */
 @Composable
-private fun PanelDivider() =
+internal fun PanelDivider() =
     HorizontalDivider(Modifier.padding(start = 16.dp, end = 16.dp), thickness = 0.5.dp, color = MaterialTheme.colorScheme.outlineVariant)
 
 @Composable

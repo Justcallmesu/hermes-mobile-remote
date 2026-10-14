@@ -19,6 +19,7 @@ import io.github.nideta231.hermesremote.data.SessionViewStore
 import io.github.nideta231.hermesremote.data.ChatItem
 import io.github.nideta231.hermesremote.data.ComponentStatus
 import io.github.nideta231.hermesremote.data.CredentialStore
+import io.github.nideta231.hermesremote.data.CronJobs
 import io.github.nideta231.hermesremote.data.Dispatch
 import io.github.nideta231.hermesremote.data.DraftStore
 import io.github.nideta231.hermesremote.data.Endpoint
@@ -265,6 +266,10 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
     /** One-shot user-facing messages (snackbar). */
     private val _toast = MutableStateFlow<String?>(null)
     val toast: StateFlow<String?> = _toast.asStateFlow()
+
+    /** The Scheduled page: cron jobs of the profile in use. */
+    val cron = CronJobs(viewModelScope, client = { client }, profile = { profile },
+        describe = ::describe, say = { _toast.value = it })
 
     private var openJob: Job? = null
     private var suggestJob: Job? = null
@@ -672,6 +677,7 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
         _chat.value = ChatState()
         _sessions.value = SessionsState()
         _system.value = SystemState()
+        cron.clear()
         _models.value = null
         _modelChoice.value = null
         _confirm.value = null
@@ -969,6 +975,7 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
         _models.value = null
         _modelChoice.value = null
         _system.update { it.copy(approvalMode = null, defaultModel = "", defaultProvider = "", defaultConfirm = null) }
+        cron.clear()
         refreshSessions()
         refreshStatus()
     }

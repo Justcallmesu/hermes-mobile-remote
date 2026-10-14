@@ -138,6 +138,16 @@ class BridgeClient(
         call("PUT", "/v1/settings/model", scoped(profile), JSONObject().put("model", model).put("provider", provider)
             .put("confirm_expensive_model", confirmed))
 
+    /** The profile's scheduled jobs. Bridges older than this route answer 404. */
+    suspend fun cronJobs(profile: String? = null): List<CronJob> = parseCronJobs(call("GET", "/v1/cron/jobs", scoped(profile)))
+
+    suspend fun cronRuns(jobId: String, profile: String? = null, limit: Int = 10): List<CronRun> =
+        parseCronRuns(call("GET", "/v1/cron/jobs/${enc(jobId)}/runs", mapOf("limit" to limit) + scoped(profile)))
+
+    /** [action] is pause, resume or trigger (run now). Returns the job as it is afterwards, when Hermes says. */
+    suspend fun cronAction(jobId: String, action: String, profile: String? = null): CronJob? =
+        call("POST", "/v1/cron/jobs/${enc(jobId)}/$action", scoped(profile)).optJSONObject("job")?.let(::parseCronJob)
+
     private fun scoped(profile: String?): Map<String, Any?> = mapOf("profile" to profileParam(profile))
 
     private fun enc(s: String) = URLEncoder.encode(s, "UTF-8").replace("+", "%20")
