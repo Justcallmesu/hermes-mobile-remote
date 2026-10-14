@@ -3,6 +3,19 @@
 Releases are git tags; the version in the app comes from the tag. `git log v0.9.0..vX.Y.Z` is the
 authoritative history — this file only summarises what is worth knowing before upgrading.
 
+## v1.12.0
+
+- Files in chat. The paperclip next to the picture button opens the system file picker (any
+  type: PDF, docs, spreadsheets, code; up to 6 per message, 10 MB each). Each file is staged on
+  the PC through Hermes' `file.attach` and the message carries its `@file:` reference, as on the
+  desktop. Sent files show as "📎 name" in the chat, also in history.
+- Scheduled: a "New job" button. Give it a name, a schedule (`every 30m`, `every day 8am`,
+  `weekdays at 9am`, a cron expression) and what Hermes should do. Jobs made from the phone run
+  with the profile's tools and save their result locally; editing, deleting, scripts and other
+  delivery targets stay on the PC.
+- Bridge: `POST /v1/cron/jobs` (prompt jobs only, delivery forced to local) and `file.attach`
+  on the relay allowlist. Update the PC bridge for both.
+
 ## v1.11.1
 
 - Scrolling far up an old chat no longer freezes and then crashes. Pictures are decoded at screen

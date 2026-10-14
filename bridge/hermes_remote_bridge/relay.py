@@ -46,7 +46,7 @@ ALLOWED_METHODS = frozenset({
     # questions from the agent
     "approval.respond", "approval.pending", "approval.received", "clarify.lock",
     # attachments
-    "image.attach_bytes", "image.detach",
+    "image.attach_bytes", "image.detach", "file.attach",
 })
 
 # config.set keys the phone may change: the chat's model, reasoning and fast mode.

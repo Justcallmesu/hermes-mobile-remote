@@ -71,6 +71,23 @@ class CronJobs(
         }
     }
 
+    /** Create a job; [onDone] gets null on success or the error to show in the form. */
+    fun create(name: String, schedule: String, prompt: String, onDone: (String?) -> Unit) {
+        val c = client() ?: return onDone("Not connected to your PC")
+        val asked = profile()
+        scope.launch {
+            try {
+                c.createCronJob(name.trim(), schedule.trim(), prompt.trim(), asked)
+                onDone(null)
+                say("Scheduled ${name.trim().ifEmpty { "job" }}")
+                if (asked == profile()) refresh()
+            } catch (t: Throwable) {
+                if (t is CancellationException) throw t
+                onDone(describe(t))
+            }
+        }
+    }
+
     fun pause(job: CronJob) = act(job, "pause", "Paused ${job.name}")
     fun resume(job: CronJob) = act(job, "resume", "Resumed ${job.name}")
     fun runNow(job: CronJob) = act(job, "trigger", "Started ${job.name}")

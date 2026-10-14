@@ -159,6 +159,9 @@ class ChatActions(
     /** Open the phone's photo picker; picks land in [ChatState.attachments]. */
     val pickImages: () -> Unit = {},
     val removeAttachment: (String) -> Unit = {},
+    /** Open the system file picker (any type); picks land in [ChatState.files]. */
+    val pickFiles: () -> Unit = {},
+    val removeFile: (String) -> Unit = {},
     /** Bytes of a chat image (phone uri or PC path); null when it can't be had. */
     val loadImage: suspend (String) -> ByteArray? = { null },
     /** Answer the open masked prompt: (identifier for a login, value); empty value = skip. */
@@ -821,7 +824,7 @@ private fun Composer(
         // The view model clears the draft only when the send is accepted, so a
         // refused send keeps its text here instead of losing it.
         // Pictures can't ride a steer: with any attached, the message is queued as its own turn.
-        if (state.busy && state.attachments.isEmpty() && !text.trimStart().startsWith("/")) actions.steer(text) else actions.send(text)
+        if (state.busy && state.attachments.isEmpty() && state.files.isEmpty() && !text.trimStart().startsWith("/")) actions.steer(text) else actions.send(text)
     }
     Surface(color = MaterialTheme.colorScheme.surface) {
         Column(Modifier.fillMaxWidth().navigationBarsPadding().padding(start = 10.dp, end = 10.dp, top = 6.dp, bottom = 8.dp)) {
@@ -842,13 +845,32 @@ private fun Composer(
                             }
                         }
                     }
+                    if (state.files.isNotEmpty()) {
+                        LazyRow(Modifier.fillMaxWidth().padding(start = 12.dp, end = 12.dp, top = 10.dp),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            items(state.files, key = { it.first }) { (uri, name) ->
+                                Surface(color = MaterialTheme.colorScheme.surfaceContainerHighest, shape = RoundedCornerShape(12.dp),
+                                    modifier = Modifier.animateItem()) {
+                                    Row(Modifier.padding(start = 10.dp, end = 4.dp, top = 4.dp, bottom = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                                        Icon(Glyphs.Paperclip, null, tint = Gold, modifier = Modifier.size(14.dp))
+                                        Spacer(Modifier.width(6.dp))
+                                        Text(name, style = MaterialTheme.typography.labelMedium, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                                            modifier = Modifier.widthIn(max = 160.dp))
+                                        IconButton(onClick = { actions.removeFile(uri) }, modifier = Modifier.size(26.dp)) {
+                                            Icon(Glyphs.Close, "Remove file", modifier = Modifier.size(12.dp))
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
                     TextField(
                         value = text, onValueChange = actions.draft,
                         // Hardware keyboard: Ctrl+Enter sends; Enter and Shift+Enter stay a newline.
                         modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp).onPreviewKeyEvent { e ->
                             val enter = e.key == Key.Enter || e.key == Key.NumPadEnter
                             if (!enter || !e.isCtrlPressed) return@onPreviewKeyEvent false
-                            if (e.type == KeyEventType.KeyDown && !state.sending && (text.isNotBlank() || state.attachments.isNotEmpty())) submit()
+                            if (e.type == KeyEventType.KeyDown && !state.sending && (text.isNotBlank() || state.attachments.isNotEmpty() || state.files.isNotEmpty())) submit()
                             true
                         },
                         placeholder = { Text(if (state.busy) "Steer the running task…" else "Message Hermes") },
@@ -869,6 +891,10 @@ private fun Composer(
                         val modelLabel = model?.label ?: catalog?.currentModel?.substringAfterLast('/') ?: "Model"
                         IconButton(onClick = actions.pickImages, enabled = !state.sending, modifier = Modifier.size(36.dp)) {
                             Icon(Glyphs.Image, "Attach a picture", tint = if (state.attachments.isNotEmpty()) Gold else MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.size(20.dp))
+                        }
+                        IconButton(onClick = actions.pickFiles, enabled = !state.sending, modifier = Modifier.size(36.dp)) {
+                            Icon(Glyphs.Paperclip, "Attach a file", tint = if (state.files.isNotEmpty()) Gold else MaterialTheme.colorScheme.onSurfaceVariant,
                                 modifier = Modifier.size(20.dp))
                         }
                         Spacer(Modifier.width(4.dp))
@@ -894,13 +920,13 @@ private enum class SendMode { SEND, STEER, STOP, SENDING }
 private fun SendButton(state: ChatState, text: String, onSend: () -> Unit, onStop: () -> Unit) {
     val mode = when {
         state.sending -> SendMode.SENDING
-        state.busy && text.isBlank() && state.attachments.isEmpty() -> SendMode.STOP
-        state.busy && state.attachments.isNotEmpty() -> SendMode.SEND
+        state.busy && text.isBlank() && state.attachments.isEmpty() && state.files.isEmpty() -> SendMode.STOP
+        state.busy && (state.attachments.isNotEmpty() || state.files.isNotEmpty()) -> SendMode.SEND
         state.busy && !text.trimStart().startsWith("/") -> SendMode.STEER
         else -> SendMode.SEND
     }
     val enabled = when (mode) {
-        SendMode.SEND -> text.isNotBlank() || state.attachments.isNotEmpty()
+        SendMode.SEND -> text.isNotBlank() || state.attachments.isNotEmpty() || state.files.isNotEmpty()
         SendMode.STEER -> text.isNotBlank()
         SendMode.STOP -> true
         SendMode.SENDING -> false

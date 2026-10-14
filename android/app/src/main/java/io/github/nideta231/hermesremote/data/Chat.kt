@@ -43,7 +43,21 @@ private const val STEER_CLOSE = "[/OUT-OF-BAND USER MESSAGE]"
  * A user turn as the user typed it. Skills and /plan expand into long prompts before they reach
  * the model; show "/humanizer fix this" instead of the whole skill body, like the desktop app does.
  */
-fun displayUserText(text: String): String {
+private val fileRefRe = Regex("""^@file:(?:"([^"]+)"|(\S+))$""")
+
+/** `@file:` reference lines (files sent with a message) shown as "📎 name", like the desktop's chips. */
+fun fileRefsAsLabels(text: String): String {
+    if (!text.contains("@file:")) return text
+    return text.lines().joinToString("\n") { line ->
+        fileRefRe.matchEntire(line.trim())?.let { m ->
+            "📎 " + m.groupValues.drop(1).first { it.isNotEmpty() }.substringAfterLast('/').substringAfterLast('\\')
+        } ?: line
+    }
+}
+
+fun displayUserText(text: String): String = fileRefsAsLabels(displayUserTextRaw(text))
+
+private fun displayUserTextRaw(text: String): String {
     if (text.startsWith(SKILL_PREFIX)) {
         val name = Regex("^" + Regex.escape(SKILL_PREFIX) + "\"([^\"]*)\"").find(text)?.groupValues?.get(1)?.trim().orEmpty()
         val label = if (name.startsWith("/")) name else "/$name"

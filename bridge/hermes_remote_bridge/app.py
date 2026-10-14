@@ -85,6 +85,15 @@ class PatchSession(BaseModel):
     archived: bool | None = None
 
 
+class CreateCronJob(BaseModel):
+    """A job made from the phone: a prompt on a schedule, delivered locally. Scripts, working
+    folders, toolsets and delivery targets stay a PC-side choice."""
+    name: str = Field(default="", max_length=120)
+    schedule: str = Field(min_length=1, max_length=120)
+    prompt: str = Field(min_length=1, max_length=20_000)
+    paused: bool = False
+
+
 class SetApprovalMode(BaseModel):
     mode: str = Field(max_length=16)
 
@@ -382,8 +391,8 @@ def create_app(cfg: Config, *, locator: BackendLocator | None = None, tailnet: T
                                  json={**payload, **scoped(profile)})
 
     # ------------------------------------------------------------ cron jobs
-    # Read, pause, resume and run now. Creating, editing and deleting a job (a prompt that runs on
-    # a schedule with the profile's tools) stays on the PC.
+    # Read, create (a prompt on a schedule), pause, resume and run now. Editing and deleting a job,
+    # and jobs with scripts or other delivery targets, stay on the PC.
 
     @app.get("/v1/cron/jobs")
     async def list_cron_jobs(profile: str | None = Depends(profile_param), _: Device = Depends(device_auth)):
@@ -403,6 +412,17 @@ def create_app(cfg: Config, *, locator: BackendLocator | None = None, tailnet: T
         if not any(j.get("id") == job_id for j in await cron_jobs_of(profile)):
             raise ApiError(404, "job_not_found", "No such cron job in this profile")
         return job_id
+
+    @app.post("/v1/cron/jobs")
+    async def create_cron_job(body: CreateCronJob, profile: str | None = Depends(profile_param),
+                              device: Device = Depends(device_auth)):
+        payload = {"name": body.name.strip(), "schedule": body.schedule.strip(), "prompt": body.prompt.strip(),
+                   "deliver": "local", "paused": body.paused}
+        job = await hermes_http("POST", "/api/cron/jobs", json=payload, params={"profile": profile or "default"})
+        job = job.get("job", job) if isinstance(job, dict) else None
+        audit_event({"event": "cron_create", "device": device.name, "profile": profile or "default",
+                     "job": job.get("id") if isinstance(job, dict) else None})
+        return {"job": _cron_job(job) if isinstance(job, dict) else None}
 
     @app.get("/v1/cron/jobs/{job_id}/runs")
     async def list_cron_runs(job_id: str, limit: int = 10, profile: str | None = Depends(profile_param),

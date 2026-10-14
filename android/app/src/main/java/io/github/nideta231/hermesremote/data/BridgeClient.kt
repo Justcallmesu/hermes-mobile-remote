@@ -152,6 +152,11 @@ class BridgeClient(
     suspend fun cronRuns(jobId: String, profile: String? = null, limit: Int = 10): List<CronRun> =
         parseCronRuns(call("GET", "/v1/cron/jobs/${enc(jobId)}/runs", mapOf("limit" to limit) + scoped(profile)))
 
+    /** A new job: [prompt] run on [schedule] ("every 30m", "every day 8am", "0 9 * * 1-5"), saved locally. */
+    suspend fun createCronJob(name: String, schedule: String, prompt: String, profile: String? = null): CronJob? =
+        call("POST", "/v1/cron/jobs", scoped(profile), JSONObject().put("name", name).put("schedule", schedule)
+            .put("prompt", prompt)).optJSONObject("job")?.let(::parseCronJob)
+
     /** [action] is pause, resume or trigger (run now). Returns the job as it is afterwards, when Hermes says. */
     suspend fun cronAction(jobId: String, action: String, profile: String? = null): CronJob? =
         call("POST", "/v1/cron/jobs/${enc(jobId)}/$action", scoped(profile)).optJSONObject("job")?.let(::parseCronJob)

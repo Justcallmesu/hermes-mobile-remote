@@ -116,6 +116,11 @@ class MainActivity : ComponentActivity() {
         vm.addAttachments(uris.map { it.toString() })
     }
 
+    // Files for the chat: the system document picker, any type. Read once when the message is sent.
+    private val filePicker = registerForActivityResult(androidx.activity.result.contract.ActivityResultContracts.OpenMultipleDocuments()) { uris ->
+        vm.addFiles(uris.map { it.toString() })
+    }
+
     // Asked right after pairing: without it a run still works, but the app can't say it
     // finished while the phone is in a pocket.
     private val notifPermission = registerForActivityResult(RequestPermission()) {}
@@ -265,6 +270,7 @@ class MainActivity : ComponentActivity() {
             setReasoning = vm::setReasoning, modelPickerOpened = vm::modelPickerOpened,
             chooseProject = vm::chooseProject, createProject = vm::createProject,
             pickImages = { runCatching { chatPicker.launch(PickVisualMediaRequest(PickVisualMedia.ImageOnly)) } },
+            pickFiles = { runCatching { filePicker.launch(arrayOf("*/*")) } }, removeFile = vm::removeFile,
             removeAttachment = vm::removeAttachment, loadImage = vm::loadImage, answerSecret = vm::answerSecret,
         )
         val settingsActions = SettingsActions(
@@ -275,7 +281,7 @@ class MainActivity : ComponentActivity() {
             loadModels = vm::loadModels, setDefaultModel = vm.settings::setDefaultModel, dismissDefaultConfirm = vm.settings::dismissDefaultConfirm,
         )
         val cronActions = CronActions(refresh = vm.cron::refresh, loadRuns = vm.cron::loadRuns,
-            pause = vm.cron::pause, resume = vm.cron::resume, runNow = vm.cron::runNow)
+            pause = vm.cron::pause, resume = vm.cron::resume, runNow = vm.cron::runNow, create = vm.cron::create)
         val openUpdate = { scope.launch { drawer.close() }; updateSheet = true }
 
         val content: @Composable () -> Unit = {

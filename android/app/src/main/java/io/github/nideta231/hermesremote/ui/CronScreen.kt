@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -42,9 +43,11 @@ class CronActions(
     val pause: (CronJob) -> Unit,
     val resume: (CronJob) -> Unit,
     val runNow: (CronJob) -> Unit,
+    /** (name, schedule, prompt, onDone(error or null)). */
+    val create: (String, String, String, (String?) -> Unit) -> Unit = { _, _, _, _ -> },
 )
 
-/** The scheduled (cron) jobs of the Hermes profile in use. Creating and editing jobs stays on the PC. */
+/** The scheduled (cron) jobs of the Hermes profile in use. New jobs can be made here; editing stays on the PC. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun CronScreen(state: CronState, profile: String?, actions: CronActions, onBack: () -> Unit) {
@@ -53,9 +56,18 @@ fun CronScreen(state: CronState, profile: String?, actions: CronActions, onBack:
         PullToRefreshBox(isRefreshing = state.loading, onRefresh = actions.refresh, modifier = Modifier.fillMaxSize()) {
             Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).navigationBarsPadding()
                 .padding(horizontal = 16.dp, vertical = 4.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                Text(listOfNotNull("Cron jobs", profile?.let { "profile $it" }).joinToString(" · ") +
-                    ". Create and edit them on the PC.", style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+                var creating by remember { mutableStateOf(false) }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(listOfNotNull("Cron jobs", profile?.let { "profile $it" }).joinToString(" · ") +
+                        ". Edit and delete them on the PC.", style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.weight(1f))
+                    if (!state.unsupported) TextButton(onClick = { creating = true }) {
+                        Icon(Glyphs.Plus, null, tint = Gold, modifier = Modifier.size(16.dp))
+                        Spacer(Modifier.width(4.dp))
+                        Text("New job", color = Gold)
+                    }
+                }
+                if (creating) NewJobDialog(actions.create) { creating = false }
                 when {
                     state.unsupported -> Note("Your PC runs an older bridge without scheduled jobs. Update it: run install.sh on the PC.")
                     state.error != null -> Note(state.error, Bad)
@@ -68,6 +80,48 @@ fun CronScreen(state: CronState, profile: String?, actions: CronActions, onBack:
             }
         }
     }
+}
+
+/** Schedules Hermes understands, offered as one-tap examples. */
+private val scheduleExamples = listOf("every 30m", "every day 8am", "weekdays at 9am", "every monday 9am", "0 20 * * *")
+
+@Composable
+private fun NewJobDialog(create: (String, String, String, (String?) -> Unit) -> Unit, onClose: () -> Unit) {
+    var name by remember { mutableStateOf("") }
+    var schedule by remember { mutableStateOf("") }
+    var prompt by remember { mutableStateOf("") }
+    var saving by remember { mutableStateOf(false) }
+    var error by remember { mutableStateOf<String?>(null) }
+    androidx.compose.material3.AlertDialog(
+        onDismissRequest = { if (!saving) onClose() },
+        title = { Text("New scheduled job") },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                androidx.compose.material3.OutlinedTextField(name, { name = it }, label = { Text("Name (optional)") },
+                    singleLine = true, modifier = Modifier.fillMaxWidth())
+                androidx.compose.material3.OutlinedTextField(schedule, { schedule = it }, label = { Text("Schedule") },
+                    placeholder = { Text("every day 8am") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    scheduleExamples.forEach { ex ->
+                        androidx.compose.material3.SuggestionChip(onClick = { schedule = ex }, label = { Text(ex) })
+                    }
+                }
+                androidx.compose.material3.OutlinedTextField(prompt, { prompt = it }, label = { Text("What Hermes should do") },
+                    placeholder = { Text("Summarise today's unread email") }, minLines = 3, maxLines = 8,
+                    modifier = Modifier.fillMaxWidth())
+                Text("Runs with this profile's tools; the result is saved on the PC and shows in this page's runs.",
+                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                error?.let { Text(it, color = Bad, style = MaterialTheme.typography.bodySmall) }
+            }
+        },
+        confirmButton = {
+            TextButton(enabled = !saving && schedule.isNotBlank() && prompt.isNotBlank(), onClick = {
+                saving = true; error = null
+                create(name, schedule, prompt) { err -> saving = false; if (err == null) onClose() else error = err }
+            }) { Text(if (saving) "Saving…" else "Create", color = Gold) }
+        },
+        dismissButton = { TextButton(enabled = !saving, onClick = onClose) { Text("Cancel") } },
+    )
 }
 
 @Composable

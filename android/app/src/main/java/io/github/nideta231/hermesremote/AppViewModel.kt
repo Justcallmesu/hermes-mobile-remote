@@ -19,6 +19,8 @@ import io.github.nideta231.hermesremote.data.ComponentStatus
 import io.github.nideta231.hermesremote.data.AppUpdates
 import io.github.nideta231.hermesremote.data.CredentialStore
 import io.github.nideta231.hermesremote.data.CronJobs
+import io.github.nideta231.hermesremote.data.FileAttachments
+import io.github.nideta231.hermesremote.data.withFileRefs
 import io.github.nideta231.hermesremote.data.ModelConfirm
 import io.github.nideta231.hermesremote.data.SystemSettings
 import io.github.nideta231.hermesremote.data.Dispatch
@@ -97,6 +99,8 @@ data class ChatState(
     val project: ProjectRef? = null,
     /** Pictures picked for the next message (phone `content://` uris), sent with it. */
     val attachments: List<String> = emptyList(),
+    /** Files (any type) picked for the next message, as (phone uri, display name). */
+    val files: List<Pair<String, String>> = emptyList(),
 ) {
     val busy: Boolean get() = status != "idle"
     val waiting: Boolean get() = status == "waiting" || LiveReducer.openApproval(items) != null ||
@@ -1126,7 +1130,7 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
 
     fun send(text: String) {
         val trimmed = text.trim()
-        if (_chat.value.attachments.isNotEmpty() && !trimmed.startsWith("/")) return sendMessage(trimmed, trimmed)
+        if ((_chat.value.attachments.isNotEmpty() || _chat.value.files.isNotEmpty()) && !trimmed.startsWith("/")) return sendMessage(trimmed, trimmed)
         if (trimmed.isEmpty()) return
         if (trimmed.startsWith("/") && !trimmed.startsWith("//")) return runSlash(trimmed)
         sendMessage(trimmed.removePrefix("/"), trimmed.removePrefix("/"))
@@ -1136,7 +1140,8 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
     private fun sendMessage(text: String, display: String) {
         val trimmed = text.trim()
         val pictures = _chat.value.attachments
-        if (trimmed.isEmpty() && pictures.isEmpty()) return
+        val files = _chat.value.files
+        if (trimmed.isEmpty() && pictures.isEmpty() && files.isEmpty()) return
         if (_chat.value.sending) {
             // Never drop a send silently: the text stays in the composer and the snackbar says why.
             _toast.value = "Still sending your last message…"
@@ -1145,7 +1150,8 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
         val key = "u-${System.nanoTime()}"
         _suggestions.value = emptyList()
         _chat.update { it.copy(sending = true, draft = if (it.draft.trim() == display.trim()) "" else it.draft,
-            attachments = emptyList(), items = it.items + ChatItem.User(key, display, pending = true, images = pictures)) }
+            attachments = emptyList(), files = emptyList(),
+            items = it.items + ChatItem.User(key, fileLabel(display, files), pending = true, images = pictures)) }
         drafts.put(_chat.value.sessionId, _chat.value.draft)
         viewModelScope.launch {
             try {
@@ -1157,10 +1163,18 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
                         .put("filename", name) }, 90_000)
                     r.str("path") ?: uri
                 }
+                // Files are staged on the PC; the message carries their @file: references.
+                val refs = files.map { (uri, _) ->
+                    val (bytes, name) = FileAttachments.read(app, uri)
+                    val r = rpc("file.attach", { rid -> JSONObject().put("session_id", rid)
+                        .put("data_url", FileAttachments.dataUrl(bytes, app.contentResolver.getType(android.net.Uri.parse(uri))))
+                        .put("name", name) }, 120_000)
+                    r.str("ref_text") ?: throw IOException("Hermes didn't take $name")
+                }
                 if (sent.isNotEmpty()) _chat.update { st -> st.copy(items = st.items.map {
                     if (it is ChatItem.User && it.key == key) it.copy(images = sent) else it }) }
                 val res = rpc("prompt.submit", { rid -> JSONObject().put("session_id", rid)
-                    .put("text", trimmed.ifEmpty { "What do you see in this image?" }) }, 30_000)
+                    .put("text", withFileRefs(trimmed.ifEmpty { if (pictures.isNotEmpty()) "What do you see in this image?" else "" }, refs)) }, 30_000)
                 val status = res.str("status")
                 _chat.update { st ->
                     st.copy(sending = false, status = if (st.status == "idle") "working" else st.status,
@@ -1180,7 +1194,7 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
                 _chat.update { st ->
                     st.copy(sending = false, items = st.items.filterNot { it.key == key },
                         draft = if (st.draft.isNotEmpty()) st.draft else display,
-                        attachments = (pictures + st.attachments).distinct())
+                        attachments = (pictures + st.attachments).distinct(), files = (files + st.files).distinctBy { f -> f.first })
                 }
                 drafts.put(_chat.value.sessionId, _chat.value.draft)
                 say(t)
@@ -1254,6 +1268,22 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
     }
 
     fun removeAttachment(uri: String) = _chat.update { it.copy(attachments = it.attachments - uri) }
+
+    /** Files picked in the composer (any type); they go with the next message. */
+    fun addFiles(uris: List<String>) {
+        if (uris.isEmpty()) return
+        val room = FileAttachments.MAX_PER_MESSAGE - _chat.value.files.size
+        if (uris.size > room) _toast.value = "Up to ${FileAttachments.MAX_PER_MESSAGE} files per message."
+        if (room <= 0) return
+        val picked = uris.take(room).map { it to FileAttachments.name(app, it) }
+        _chat.update { st -> st.copy(files = (st.files + picked).distinctBy { it.first }) }
+    }
+
+    fun removeFile(uri: String) = _chat.update { st -> st.copy(files = st.files.filterNot { it.first == uri }) }
+
+    /** The bubble text for a message with files: what was typed, then one line per file. */
+    private fun fileLabel(display: String, files: List<Pair<String, String>>): String =
+        (listOf(display.trim()).filter { it.isNotEmpty() } + files.map { "📎 ${it.second}" }).joinToString("\n")
 
     /** Bytes of a chat image: a phone uri (still sending) or a PC path, fetched over the bridge and cached. */
     suspend fun loadImage(ref: String): ByteArray? = ImageAttachments.load(app, ref) { path -> client?.media(path) }

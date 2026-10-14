@@ -54,13 +54,17 @@ def bridge(tmp_path):
     def handler(request: httpx.Request):
         calls.append(request)
         path, q = request.url.path, dict(request.url.params)
-        if path == "/api/cron/jobs":
+        if path == "/api/cron/jobs" and request.method == "GET":
             return httpx.Response(200, json=JOBS.get(q.get("profile"), []))
         if path.endswith("/runs"):
             return httpx.Response(200, json={"runs": [{"id": "cron_a1b2c3d4e5f6_1", "title": "Daily digest",
                                                        "preview": "3 new mails", "source": "cron",
                                                        "started_at": 1.0, "system_prompt": "secret"}],
                                              "limit": 10})
+        if request.method == "POST" and path == "/api/cron/jobs":
+            body = json.loads(request.content)
+            return httpx.Response(200, json=dict(JOBS["default"][0], id="newjob000001", name=body["name"],
+                                                 prompt=body["prompt"], state="scheduled"))
         if request.method == "POST":
             job = dict(JOBS["default"][0], state="paused" if path.endswith("/pause") else "scheduled")
             return httpx.Response(200, json=job)
@@ -135,3 +139,25 @@ def test_needs_a_device_token_and_a_sane_id(bridge):
     assert c.post("/v1/cron/jobs/a1b2c3d4e5f6/pause").status_code == 401
     assert c.post("/v1/cron/jobs/..%2Fetc/pause", headers=auth).status_code in (400, 404)
     assert json.loads(c.post("/v1/cron/jobs/bad%20id/pause", headers=auth).content)["error"]["code"] == "invalid_id"
+
+
+def test_creates_a_job_as_a_local_prompt_only(bridge):
+    make, calls, _ = bridge
+    client, auth = make()
+    r = client.post("/v1/cron/jobs", headers=auth, json={
+        "name": "Morning", "schedule": "every day 8am", "prompt": "Check the shop email",
+        "script": "/tmp/evil.sh", "deliver": "telegram", "workdir": "/etc"})
+    assert r.status_code == 200, r.text
+    assert r.json()["job"]["id"] == "newjob000001" and "prompt" not in r.json()["job"]
+    sent = json.loads(calls[-1].content)
+    assert sent == {"name": "Morning", "schedule": "every day 8am", "prompt": "Check the shop email",
+                    "deliver": "local", "paused": False}
+    assert dict(calls[-1].url.params)["profile"] == "default"
+
+
+def test_create_needs_auth_and_a_schedule_and_prompt(bridge):
+    make, _, _ = bridge
+    client, auth = make()
+    assert client.post("/v1/cron/jobs", json={"schedule": "30m", "prompt": "x"}).status_code == 401
+    assert client.post("/v1/cron/jobs", headers=auth, json={"schedule": "", "prompt": "x"}).status_code in (400, 422)
+    assert client.post("/v1/cron/jobs", headers=auth, json={"schedule": "30m", "prompt": ""}).status_code in (400, 422)
