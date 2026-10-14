@@ -220,7 +220,7 @@ def _advertise(cfg: Config, pin: str | None, lan_ips: list[str]):
 
 def _ask_to_trust(trust: TrustStore, net) -> None:
     """Desktop prompt: offer to trust the network the PC just joined (once per network)."""
-    if net.id in trust.declined():
+    if trust.is_declined(net):
         return
 
     def ask():

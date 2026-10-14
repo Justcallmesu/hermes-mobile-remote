@@ -7,6 +7,13 @@ exactly where an unknown device may sit on the address the phone remembers.
 A network is identified by the OS's connection profile *and* the gateway's MAC
 address. The profile alone is an SSID + password; the gateway MAC ties trust to the physical
 router, so a hotspot that copies the SSID does not inherit it.
+
+Phone hotspots (tethering) break that: Android gives the hotspot a new random MAC each time it is
+switched on, so the same hotspot showed up as a new network every time and was trusted again and
+again, piling up duplicates. A random MAC is "locally administered" (bit 0x02 of the first octet),
+which no real router uses. For those the trust follows the connection profile instead (SSID +
+password), which a look-alike hotspot without the password cannot join. Routers with a real MAC
+keep the strict profile + MAC identity.
 """
 from __future__ import annotations
 
@@ -28,6 +35,17 @@ class Network:
     name: str
     interface: str
     lan_ips: tuple[str, ...]
+    # Hash of the OS connection profile, and whether the gateway MAC is a random (hotspot) one.
+    profile: str = ""
+    roaming: bool = False
+
+
+def is_random_mac(mac: str) -> bool:
+    """A locally administered MAC: what Android hotspots (and MAC randomisation) use."""
+    try:
+        return bool(int(mac.split(":")[0], 16) & 0x02)
+    except (ValueError, IndexError):
+        return False
 
 
 def _default_route() -> tuple[str, str] | None:
@@ -108,7 +126,10 @@ def _compute_network() -> Network | None:
     found = _network_profile(interface)
     profile, name = found if found else (interface, interface)
     net_id = hashlib.sha256(f"{profile}|{mac}".encode()).hexdigest()[:16]
-    return Network(net_id, name or interface, interface, lan_ips)
+    # Only a real OS profile may carry trust across MACs; the interface-name fallback is not one.
+    profile_key = hashlib.sha256(f"profile|{profile}".encode()).hexdigest()[:16] if found else ""
+    return Network(net_id, name or interface, interface, lan_ips, profile_key,
+                   bool(profile_key) and is_random_mac(mac))
 
 
 class TrustStore:
@@ -132,11 +153,35 @@ class TrustStore:
         tmp.replace(self.path)
 
     def is_trusted(self, net: Network | None) -> bool:
-        return net is not None and net.id in self._read().get("trusted", {})
+        if net is None:
+            return False
+        trusted = self._read().get("trusted", {})
+        if net.id in trusted:
+            return True
+        if not net.roaming:
+            return False
+        # A hotspot back with a new random MAC: same profile, trusted as a roaming network.
+        if any(e.get("roaming") and e.get("profile") == net.profile for e in trusted.values()):
+            return True
+        # Entries written before profiles were recorded: the same connection name was trusted.
+        # Migrate them to one roaming entry so the duplicates collapse on the next visit.
+        if any("profile" not in e and e.get("name") == net.name for e in trusted.values()):
+            self.trust(net)
+            return True
+        return False
 
     def trust(self, net: Network) -> None:
         data = self._read()
-        data.setdefault("trusted", {})[net.id] = {"name": net.name, "since": round(time.time())}
+        trusted = data.setdefault("trusted", {})
+        if net.roaming:
+            # One entry per hotspot: drop older ones for the same profile, and the duplicates
+            # left by older versions (same name, no profile recorded, so their MAC is unknown).
+            for key in [k for k, e in trusted.items() if k != net.id and (
+                    (e.get("roaming") and e.get("profile") == net.profile)
+                    or ("profile" not in e and e.get("name") == net.name))]:
+                del trusted[key]
+        trusted[net.id] = {"name": net.name, "since": round(time.time()),
+                           "profile": net.profile, "roaming": net.roaming}
         data.get("declined", {}).pop(net.id, None)
         self._write(data)
 
@@ -153,9 +198,15 @@ class TrustStore:
     def declined(self) -> set[str]:
         return set(self._read().get("declined", {}))
 
+    def is_declined(self, net: Network) -> bool:
+        declined = self._read().get("declined", {})
+        return net.id in declined or (net.roaming and any(
+            e.get("roaming") and e.get("profile") == net.profile for e in declined.values()))
+
     def decline(self, net: Network) -> None:
         data = self._read()
-        data.setdefault("declined", {})[net.id] = {"name": net.name, "since": round(time.time())}
+        data.setdefault("declined", {})[net.id] = {"name": net.name, "since": round(time.time()),
+                                                   "profile": net.profile, "roaming": net.roaming}
         self._write(data)
 
 
@@ -177,4 +228,4 @@ def network_info(trust: TrustStore) -> dict | None:
     net = current_network()
     if net is None:
         return None
-    return {**{k: v for k, v in asdict(net).items() if k != "lan_ips"}, "trusted": trust.is_trusted(net)}
+    return {**{k: v for k, v in asdict(net).items() if k not in ("lan_ips", "profile")}, "trusted": trust.is_trusted(net)}

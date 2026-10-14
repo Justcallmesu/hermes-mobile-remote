@@ -515,7 +515,7 @@ private fun UserBubble(item: ChatItem.User) {
     Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.CenterEnd) {
         Surface(color = Gold.copy(alpha = alpha), shape = RoundedCornerShape(20.dp, 20.dp, 6.dp, 20.dp),
             modifier = Modifier.widthIn(max = 560.dp).padding(start = 40.dp).clip(RoundedCornerShape(20.dp, 20.dp, 6.dp, 20.dp)).then(copyable(item.text))) {
-            Text(item.text, modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+            Text(remember(item.text) { clipForDisplay(item.text) }, modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
                 style = MaterialTheme.typography.bodyMedium.copy(lineHeight = 21.sp),
                 color = if (item.pending) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurface)
         }
@@ -528,7 +528,9 @@ private fun AssistantBlock(item: ChatItem.Assistant) {
     val caretOn by animateFloatAsState(if (item.streaming) 1f else 0f, tween(250), label = "caret")
     val (body, images) = remember(shown, item.streaming) { if (item.streaming) shown to emptyList() else splitReplyImages(shown) }
     Column(Modifier.fillMaxWidth().padding(end = 8.dp)) {
-        MarkdownText(if (caretOn > 0.01f) "$body ▍" else body)
+        // Streaming replies are short-lived; a finished one is clipped so a huge answer can't stall scrolling.
+        val safe = remember(body, item.streaming) { if (item.streaming) body else clipForDisplay(body) }
+        MarkdownText(if (caretOn > 0.01f) "$safe ▍" else safe)
         if (images.isNotEmpty()) ImageStrip(images, Modifier.padding(top = 8.dp))
         // Copy the whole reply as markdown, like the desktop's copy action under each answer.
         if (!item.streaming && item.text.isNotBlank()) CopyButton(item.text, Modifier.offset(x = (-6).dp))
@@ -551,7 +553,7 @@ private fun ThinkingBlock(item: ChatItem.Thinking) {
             Icon(Glyphs.Chevron, null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(14.dp).rotate(rot))
         }
         if (open) {
-            Text(item.text, style = MaterialTheme.typography.bodySmall.copy(lineHeight = 18.sp),
+            Text(remember(item.text) { clipForDisplay(item.text) }, style = MaterialTheme.typography.bodySmall.copy(lineHeight = 18.sp),
                 color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(start = 20.dp, top = 6.dp))
         }
     }
@@ -626,8 +628,10 @@ private fun CommandOutputCard(item: ChatItem.CommandOutput) {
                 Text(item.command, style = MaterialTheme.typography.labelLarge, color = Gold, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
             if (item.text.isNotBlank()) {
-                Text(item.text.trimEnd(), fontFamily = FontFamily.Monospace, fontSize = 12.sp, lineHeight = 16.sp,
-                    modifier = Modifier.padding(top = 6.dp).horizontalScroll(rememberScrollState()))
+                val shown = remember(item.text) { displaySafe(item.text.trimEnd()) }
+                Text(shown, fontFamily = FontFamily.Monospace, fontSize = 12.sp, lineHeight = 16.sp,
+                    modifier = Modifier.padding(top = 6.dp).heightIn(max = 480.dp)
+                        .verticalScroll(rememberScrollState()).horizontalScroll(rememberScrollState()))
             }
         }
     }
@@ -1085,13 +1089,47 @@ fun SearchField(value: String, onChange: (String) -> Unit, hint: String, modifie
 
 // ------------------------------------------------------------------ pictures
 
+/** Longest side a chat picture is decoded to: sharp on a phone screen, about 4 MB per bitmap. */
+private const val CHAT_IMAGE_SIDE = 1080
+
+/**
+ * Decoded chat pictures, shared by every bubble. Decoding at full size on every scroll (a 4K
+ * screenshot is a 33 MB bitmap) ran the app out of memory when scrolling far up: it froze while the
+ * GC thrashed, then crashed. Pictures are now downsampled and kept, so scrolling back is free.
+ */
+private object DecodedImages {
+    private val cache = object : android.util.LruCache<String, ImageBitmap>(48 * 1024 * 1024) {
+        override fun sizeOf(key: String, value: ImageBitmap) = value.width * value.height * 4
+    }
+
+    fun get(ref: String, side: Int): ImageBitmap? = cache.get("$side|$ref")
+
+    fun decode(ref: String, bytes: ByteArray, side: Int): ImageBitmap? = runCatching {
+        val bounds = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
+        if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return@runCatching null
+        val opts = android.graphics.BitmapFactory.Options().apply {
+            inSampleSize = sampleSizeFor(bounds.outWidth, bounds.outHeight, side)
+        }
+        android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size, opts)?.asImageBitmap()
+    }.getOrNull()?.also { cache.put("$side|$ref", it) }
+}
+
+/** The power-of-two sample size that keeps the long side at or above [side] (BitmapFactory's rule). */
+internal fun sampleSizeFor(width: Int, height: Int, side: Int): Int {
+    var sample = 1
+    while (maxOf(width, height) / (sample * 2) >= side) sample *= 2
+    return sample
+}
+
 /** One chat picture, decoded off the main thread; a quiet placeholder while it loads or if it can't. */
 @Composable
 private fun ChatImage(ref: String, modifier: Modifier, crop: Boolean = false, onClick: (() -> Unit)? = null) {
     val load = LocalImageLoader.current
-    val bitmap by produceState<ImageBitmap?>(null, ref) {
+    val bitmap by produceState(DecodedImages.get(ref, CHAT_IMAGE_SIDE), ref) {
+        if (value != null) return@produceState
         value = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
-            load(ref)?.let { b -> runCatching { android.graphics.BitmapFactory.decodeByteArray(b, 0, b.size)?.asImageBitmap() }.getOrNull() }
+            load(ref)?.let { b -> DecodedImages.decode(ref, b, CHAT_IMAGE_SIDE) }
         }
     }
     val bmp = bitmap

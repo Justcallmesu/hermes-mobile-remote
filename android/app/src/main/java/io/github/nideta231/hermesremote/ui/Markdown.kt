@@ -187,10 +187,35 @@ internal fun splitRow(line: String): List<String> {
     return cells
 }
 
+/** Longest text a chat item renders; the copy action still has the full text. */
+const val MAX_DISPLAY_CHARS = 24_000
+
+/** Longest single line rendered unwrapped; past that, Compose can't measure the width (crash). */
+const val MAX_LINE_CHARS = 1_000
+
+/** [text] cut to [MAX_DISPLAY_CHARS] with a note, so one giant message cannot freeze the list. */
+fun clipForDisplay(text: String, max: Int = MAX_DISPLAY_CHARS): String =
+    if (text.length <= max) text
+    else text.substring(0, max).substringBeforeLast('\n', text.substring(0, max)) +
+        "\n\n… (${text.length - max} more characters, use Copy to get all of it)"
+
+/** Clipped like [clipForDisplay], and every line cut to [MAX_LINE_CHARS], for unwrapped monospace text. */
+fun displaySafe(text: String): String = clipForDisplay(text).split('\n').joinToString("\n") {
+    if (it.length <= MAX_LINE_CHARS) it else it.substring(0, MAX_LINE_CHARS) + " … (+${it.length - MAX_LINE_CHARS})"
+}
+
+/** Parsed replies, so a long one scrolling back into view is not parsed again on the main thread. */
+private val parsed = object : LinkedHashMap<String, List<MdBlock>>(64, 0.75f, true) {
+    override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, List<MdBlock>>) = size > 64
+}
+
+internal fun parseCached(text: String): List<MdBlock> =
+    synchronized(parsed) { parsed[text] } ?: parseMarkdown(text).also { synchronized(parsed) { parsed[text] = it } }
+
 /** Minimal markdown: fenced code, tables, headings, bullets, **bold**, *italic*, `code`. */
 @Composable
 fun MarkdownText(text: String, modifier: Modifier = Modifier) {
-    val blocks = remember(text) { parseMarkdown(text) }
+    val blocks = remember(text) { parseCached(text) }
     SelectionContainer(modifier) {
         Column {
             blocks.forEach { block ->
@@ -218,7 +243,7 @@ private fun CodeBlock(block: MdBlock.Code) {
             DisableSelection { CopyButton(block.body, size = 13.dp) }
         }
         Text(
-            block.body,
+            remember(block.body) { displaySafe(block.body) },
             fontFamily = FontFamily.Monospace,
             fontSize = 12.5.sp,
             lineHeight = 17.sp,

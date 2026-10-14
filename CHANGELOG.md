@@ -3,6 +3,18 @@
 Releases are git tags; the version in the app comes from the tag. `git log v0.9.0..vX.Y.Z` is the
 authoritative history — this file only summarises what is worth knowing before upgrading.
 
+## v1.11.1
+
+- Scrolling far up an old chat no longer freezes and then crashes. Pictures are decoded at screen
+  size (1080 px) and kept in memory instead of at full size on every scroll, and huge
+  messages, code blocks and command outputs are clipped for display (Copy still copies all
+  of it). Parsed replies are reused rather than parsed again each time they scroll back into view.
+- Bridge: a phone hotspot (tethering) stays trusted. Android gives a hotspot a new random MAC
+  each time it starts, so the bridge saw a new network each time and asked to trust it again,
+  piling up duplicates. Networks whose gateway has a random (locally administered) MAC are now
+  trusted by their connection profile (SSID + password). Old duplicates collapse into one entry
+  on the next connect. Routers with a real MAC still need that exact router.
+
 ## v1.11.0
 
 - Pictures in chat. The picture button in the composer opens the photo picker (up to 6 per
