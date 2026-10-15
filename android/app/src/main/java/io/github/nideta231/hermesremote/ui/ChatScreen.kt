@@ -87,6 +87,7 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.isCtrlPressed
+import androidx.compose.ui.input.key.isShiftPressed
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
@@ -122,7 +123,9 @@ import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.window.Dialog
@@ -900,13 +903,25 @@ private fun Composer(
                             }
                         }
                     }
+                    // Keeps the cursor so Shift+Enter can insert at it; follows the draft when it changes elsewhere.
+                    var field by remember { mutableStateOf(TextFieldValue(text, TextRange(text.length))) }
+                    val value = if (field.text == text) field else TextFieldValue(text, TextRange(text.length)).also { field = it }
                     TextField(
-                        value = text, onValueChange = actions.draft,
-                        // Hardware keyboard: Ctrl+Enter sends; Enter and Shift+Enter stay a newline.
+                        value = value, onValueChange = { field = it; if (it.text != text) actions.draft(it.text) },
+                        // Hardware keyboard: Ctrl+Enter sends; Enter and Shift+Enter insert a newline.
                         modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp).onPreviewKeyEvent { e ->
                             val enter = e.key == Key.Enter || e.key == Key.NumPadEnter
-                            if (!enter || !e.isCtrlPressed) return@onPreviewKeyEvent false
-                            if (e.type == KeyEventType.KeyDown && !state.sending && (text.isNotBlank() || state.attachments.isNotEmpty() || state.files.isNotEmpty())) submit()
+                            if (!enter) return@onPreviewKeyEvent false
+                            if (e.isCtrlPressed) {
+                                if (e.type == KeyEventType.KeyDown && !state.sending && (text.isNotBlank() || state.attachments.isNotEmpty() || state.files.isNotEmpty())) submit()
+                                return@onPreviewKeyEvent true
+                            }
+                            if (!e.isShiftPressed) return@onPreviewKeyEvent false
+                            if (e.type == KeyEventType.KeyDown) {
+                                val next = insertNewline(value)
+                                field = next
+                                actions.draft(next.text)
+                            }
                             true
                         },
                         placeholder = { Text(if (state.busy) "Steer the running task…" else "Message Hermes") },
@@ -1310,4 +1325,11 @@ private fun SecretDock(item: ChatItem.Secret, onAnswer: (String, String) -> Unit
             }
         }
     }
+}
+
+/** Shift+Enter: replace the selection with a newline and put the cursor after it. */
+internal fun insertNewline(v: TextFieldValue): TextFieldValue {
+    val start = minOf(v.selection.start, v.selection.end).coerceIn(0, v.text.length)
+    val end = maxOf(v.selection.start, v.selection.end).coerceIn(0, v.text.length)
+    return TextFieldValue(v.text.substring(0, start) + "\n" + v.text.substring(end), TextRange(start + 1))
 }
