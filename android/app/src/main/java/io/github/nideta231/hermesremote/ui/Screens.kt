@@ -58,7 +58,9 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
@@ -182,7 +184,8 @@ fun SessionsPane(
     Column(modifier.fillMaxHeight().statusBarsPadding().navigationBarsPadding()) {
         // Account switcher in the Instagram style: the header is the active PC (avatar + name + chevron).
         // Tap opens the switcher; long-press jumps straight to the next PC.
-        Row(Modifier.fillMaxWidth().padding(start = 12.dp, end = 8.dp, top = 12.dp, bottom = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+        // Compact header: PC switcher plus Scheduled and Settings as icons, so the chat list gets the height.
+        Row(Modifier.fillMaxWidth().padding(start = 8.dp, end = 4.dp, top = 4.dp), verticalAlignment = Alignment.CenterVertically) {
             Row(Modifier.weight(1f).clip(RoundedCornerShape(14.dp))
                 .combinedClickable(
                     onClick = { pcSheet = true },
@@ -191,10 +194,10 @@ fun SessionsPane(
                         if (next != null) { haptics.performHapticFeedback(HapticFeedbackType.LongPress); actions.switchPc(next.id) }
                         else pcSheet = true
                     },
-                ).padding(vertical = 6.dp, horizontal = 8.dp),
+                ).padding(vertical = 4.dp, horizontal = 8.dp),
                 verticalAlignment = Alignment.CenterVertically) {
-                if (activePc != null) PcAvatar(activePc.name, 34.dp, ring = pcs.size > 1)
-                else Box(Modifier.size(34.dp).background(Gold.copy(alpha = 0.16f), CircleShape), contentAlignment = Alignment.Center) {
+                if (activePc != null) PcAvatar(activePc.name, 28.dp, ring = pcs.size > 1)
+                else Box(Modifier.size(28.dp).background(Gold.copy(alpha = 0.16f), CircleShape), contentAlignment = Alignment.Center) {
                     Icon(Glyphs.Spark, null, tint = Gold, modifier = Modifier.size(16.dp))
                 }
                 Spacer(Modifier.width(10.dp))
@@ -206,7 +209,8 @@ fun SessionsPane(
                 }
                 Icon(Glyphs.Chevron, "Switch PC", modifier = Modifier.padding(start = 4.dp).size(18.dp))
             }
-            IconButton(onClick = actions.refresh) { Icon(Glyphs.Refresh, "Refresh", modifier = Modifier.size(20.dp)) }
+            IconButton(onClick = actions.openScheduled) { Icon(Glyphs.Clock, "Scheduled", modifier = Modifier.size(20.dp)) }
+            IconButton(onClick = actions.openSettings) { Icon(Glyphs.Settings, "Settings", modifier = Modifier.size(20.dp)) }
         }
         if (pcSheet) PcSheet(pcs, actions, onDismiss = { pcSheet = false })
         // Only when the PC has more than one profile: with just the default there is nothing to pick.
@@ -214,13 +218,7 @@ fun SessionsPane(
         if (profileSheet) ProfileSheet(profiles, onPick = { profileSheet = false; actions.switchProfile(it) },
             onDismiss = { profileSheet = false })
         update?.let { DrawerUpdateRow(it, onOpenUpdate) }
-        Button(onClick = actions.newChat, modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
-            shape = RoundedCornerShape(16.dp), contentPadding = PaddingValues(vertical = 12.dp)) {
-            Icon(Glyphs.Compose, null, modifier = Modifier.size(18.dp))
-            Spacer(Modifier.width(8.dp))
-            Text("New chat", fontWeight = FontWeight.SemiBold)
-        }
-        Row(Modifier.padding(start = 16.dp, end = 8.dp, top = 4.dp, bottom = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+        Row(Modifier.padding(start = 12.dp, end = 4.dp, top = 2.dp, bottom = 2.dp), verticalAlignment = Alignment.CenterVertically) {
             SearchField(query, { query = it }, "Search chats", Modifier.weight(1f))
             // Group / sort / filter, like the desktop sidebar's filter menu. A gold dot marks a non-default view.
             Box {
@@ -229,6 +227,11 @@ fun SessionsPane(
                         tint = if (view.customized) Gold else MaterialTheme.colorScheme.onSurfaceVariant)
                 }
                 if (view.filtersActive) Box(Modifier.align(Alignment.TopEnd).padding(top = 10.dp, end = 10.dp).size(7.dp).background(Gold, CircleShape))
+            }
+            // New chat, as a compact gold round button instead of a full-width bar.
+            FilledIconButton(onClick = actions.newChat, modifier = Modifier.size(40.dp),
+                colors = IconButtonDefaults.filledIconButtonColors(containerColor = Gold, contentColor = MaterialTheme.colorScheme.onPrimary)) {
+                Icon(Glyphs.Compose, "New chat", modifier = Modifier.size(18.dp))
             }
         }
         if (filterSheet) SessionViewSheet(view, state.projects, actions.setView, actions.resetGroupOrder, onDismiss = { filterSheet = false })
@@ -296,10 +299,6 @@ fun SessionsPane(
                 }
             }
         }
-        HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f))
-        PanelRow("Scheduled", icon = Glyphs.Clock, onClick = actions.openScheduled)
-        PanelRow("Vault", icon = Glyphs.Shield, onClick = actions.openVault)
-        PanelRow("Settings", icon = Glyphs.Settings, onClick = actions.openSettings)
     }
 
     menuFor?.let { s ->
@@ -422,8 +421,8 @@ private fun ProfileRow(profiles: ProfilesState, onClick: () -> Unit) {
     val current = profiles.current
     Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 2.dp).clip(RoundedCornerShape(12.dp))
         .background(MaterialTheme.colorScheme.surfaceContainerHigh).clickable(onClick = onClick)
-        .padding(horizontal = 12.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-        Icon(Glyphs.Person, null, tint = Gold, modifier = Modifier.size(18.dp))
+        .padding(horizontal = 12.dp, vertical = 5.dp), verticalAlignment = Alignment.CenterVertically) {
+        Icon(Glyphs.Person, null, tint = Gold, modifier = Modifier.size(16.dp))
         Spacer(Modifier.width(10.dp))
         Column(Modifier.weight(1f)) {
             Text("Profile: ${current?.label ?: profiles.active}", style = MaterialTheme.typography.labelLarge,
@@ -728,6 +727,7 @@ class SettingsActions(
     val loadModels: () -> Unit = {},
     val setDefaultModel: (ModelOption, Boolean) -> Unit = { _, _ -> },
     val dismissDefaultConfirm: () -> Unit = {},
+    val openVault: () -> Unit = {},
 )
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -758,6 +758,10 @@ fun SettingsScreen(
                     DefaultModelPanel(state, models) { actions.loadModels(); modelSheet = true }
                     Spacer(Modifier.size(10.dp))
                     ApprovalPanel(state, actions.setApprovalMode)
+                    Spacer(Modifier.size(10.dp))
+                    Panel {
+                        PanelRow("Vault", "Saved logins, cards and addresses Hermes can fill", Glyphs.Shield, onClick = actions.openVault)
+                    }
                 }
                 SettingsSection("Appearance", "Only changes this phone.") {
                     ThemePanel()

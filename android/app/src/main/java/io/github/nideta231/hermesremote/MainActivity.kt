@@ -245,7 +245,7 @@ class MainActivity : ComponentActivity() {
         }
 
         BackHandler(enabled = drawer.isOpen) { scope.launch { drawer.close() } }
-        BackHandler(enabled = !drawer.isOpen && page != Page.CHAT) { page = Page.CHAT }
+        BackHandler(enabled = !drawer.isOpen && page != Page.CHAT) { page = if (page == Page.VAULT) Page.SETTINGS else Page.CHAT }
 
         val sessionActions = SessionActions(
             open = { vm.openSession(it); go(Page.CHAT) },
@@ -287,6 +287,7 @@ class MainActivity : ComponentActivity() {
             checkUpdate = { vm.updates.checkForUpdate() }, installUpdate = vm.updates::installUpdate,
             openUpdate = { updateSheet = true }, openChangelog = { changelogSheet = true },
             loadModels = vm::loadModels, setDefaultModel = vm.settings::setDefaultModel, dismissDefaultConfirm = vm.settings::dismissDefaultConfirm,
+            openVault = { page = Page.VAULT },
         )
         val cronActions = CronActions(refresh = vm.cron::refresh, loadRuns = vm.cron::loadRuns,
             pause = vm.cron::pause, resume = vm.cron::resume, runNow = vm.cron::runNow, create = vm.cron::create)
@@ -308,7 +309,7 @@ class MainActivity : ComponentActivity() {
                             profile = hermesProfiles.headerLabel)
                         Page.SCHEDULED -> CronScreen(cron, hermesProfiles.active.takeIf { hermesProfiles.items.size > 1 }, cronActions, onBack = { page = Page.CHAT })
                         Page.VAULT -> VaultScreen(vaultState, VaultActions(refresh = vm.vault::refresh, save = vm.vault::save,
-                            remove = vm.vault::remove), onBack = { page = Page.CHAT })
+                            remove = vm.vault::remove), onBack = { page = Page.SETTINGS })
                         Page.SETTINGS -> SettingsScreen(system, pairing, conn, update, settingsActions, onBack = { page = Page.CHAT }, models = models)
                     }
                 }

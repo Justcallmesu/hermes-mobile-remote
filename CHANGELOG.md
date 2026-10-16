@@ -3,6 +3,12 @@
 Releases are git tags; the version in the app comes from the tag. `git log v0.9.0..vX.Y.Z` is the
 authoritative history — this file only summarises what is worth knowing before upgrading.
 
+## v1.15.0
+
+- Drawer is compact so more chats fit: Scheduled and Settings are icons in the header, New chat is a
+  round button next to search, and the header and profile row are slimmer.
+- Vault moved into Settings (Hermes on your PC → Vault); Back from the Vault returns to Settings.
+
 ## v1.14.1
 
 - Chat: a message with a picture no longer draws the picture on top of its text; the picture sits
