@@ -3,6 +3,13 @@
 Releases are git tags; the version in the app comes from the tag. `git log v0.9.0..vX.Y.Z` is the
 authoritative history — this file only summarises what is worth knowing before upgrading.
 
+## v1.14.1
+
+- Chat: a message with a picture no longer draws the picture on top of its text; the picture sits
+  above the message.
+- Picture viewer: a Download button next to Close saves the original picture to
+  Pictures/Hermes Remote (Android 10+), or to a file you pick on Android 8/9.
+
 ## v1.14.0
 
 - Drawer: "Sort by Last updated" now also orders project groups, so the project with the newest reply

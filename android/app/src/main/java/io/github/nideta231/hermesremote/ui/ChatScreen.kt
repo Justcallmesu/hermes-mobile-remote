@@ -523,13 +523,15 @@ private fun UserBubble(item: ChatItem.User) {
     val haptics = LocalHapticFeedback.current
     var menu by remember { mutableStateOf(false) }
     var editing by remember { mutableStateOf(false) }
+    // One Column: the list item is a Box, so a picture and the text emitted side by side were drawn
+    // on top of each other (the picture covered the start of the message).
+    Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.End) {
     if (item.images.isNotEmpty()) {
         Box(Modifier.fillMaxWidth().padding(bottom = if (item.text.isBlank()) 0.dp else 6.dp), contentAlignment = Alignment.CenterEnd) {
             ImageStrip(item.images, Modifier.padding(start = 40.dp))
         }
     }
-    if (item.text.isBlank()) return
-    Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.CenterEnd) {
+    if (item.text.isNotBlank()) Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.CenterEnd) {
         Surface(color = Gold.copy(alpha = alpha), shape = RoundedCornerShape(20.dp, 20.dp, 6.dp, 20.dp),
             modifier = Modifier.widthIn(max = 560.dp).padding(start = 40.dp).clip(RoundedCornerShape(20.dp, 20.dp, 6.dp, 20.dp))
                 .combinedClickable(onClick = {}, onLongClick = { haptics.performHapticFeedback(HapticFeedbackType.LongPress); menu = true })) {
@@ -543,6 +545,7 @@ private fun UserBubble(item: ChatItem.User) {
             if (edit != null && !item.pending) androidx.compose.material3.DropdownMenuItem(text = { Text("Edit") },
                 leadingIcon = { Icon(Glyphs.Edit, null, Modifier.size(18.dp)) }, onClick = { menu = false; editing = true })
         }
+    }
     }
     if (editing && edit != null) EditMessageDialog(item, onSave = { edit(item, it); editing = false }, onClose = { editing = false })
 }
@@ -1237,9 +1240,34 @@ private fun ImageStrip(refs: List<String>, modifier: Modifier = Modifier) {
     open?.let { ImageViewer(it) { open = null } }
 }
 
-/** Full-screen picture: pinch to zoom, drag to pan, tap the X (or back) to close. */
+/** Full-screen picture: pinch to zoom, drag to pan, Download saves the original, X (or back) closes. */
 @Composable
 private fun ImageViewer(ref: String, onClose: () -> Unit) {
+    val load = LocalImageLoader.current
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val scope = rememberCoroutineScope()
+    var pending by remember { mutableStateOf<ByteArray?>(null) }
+    fun toast(msg: String) = android.widget.Toast.makeText(context, msg, android.widget.Toast.LENGTH_SHORT).show()
+    // Android 8/9 have no MediaStore folder writes without a permission: let the user pick a file.
+    val pick = androidx.activity.compose.rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.CreateDocument("image/*")) { uri ->
+        val bytes = pending; pending = null
+        if (uri == null || bytes == null) return@rememberLauncherForActivityResult
+        scope.launch {
+            val ok = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                runCatching { context.contentResolver.openOutputStream(uri)?.use { it.write(bytes) } != null }.getOrDefault(false)
+            }
+            toast(if (ok) "Picture saved" else "Couldn't save the picture")
+        }
+    }
+    fun download() = scope.launch {
+        val bytes = load(ref) ?: return@launch toast("Couldn't load the picture")
+        val name = pictureFileName(ref, bytes)
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+            val ok = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { savePicture(context, name, bytes) }
+            toast(if (ok) "Saved to Pictures/Hermes Remote" else "Couldn't save the picture")
+        } else { pending = bytes; pick.launch(name) }
+    }
     Dialog(onDismissRequest = onClose, properties = DialogProperties(usePlatformDefaultWidth = false)) {
         var scale by remember { mutableFloatStateOf(1f) }
         var dx by remember { mutableFloatStateOf(0f) }
@@ -1251,12 +1279,48 @@ private fun ImageViewer(ref: String, onClose: () -> Unit) {
                     if (scale == 1f) { dx = 0f; dy = 0f } else { dx += pan.x; dy += pan.y }
                 }
             }.graphicsLayer { scaleX = scale; scaleY = scale; translationX = dx; translationY = dy })
-            IconButton(onClick = onClose, modifier = Modifier.align(Alignment.TopEnd).statusBarsPadding().padding(8.dp)) {
-                Icon(Glyphs.Close, "Close", tint = Color.White)
+            Row(Modifier.align(Alignment.TopEnd).statusBarsPadding().padding(8.dp)) {
+                IconButton(onClick = { download() }) { Icon(Glyphs.Download, "Download", tint = Color.White) }
+                IconButton(onClick = onClose) { Icon(Glyphs.Close, "Close", tint = Color.White) }
             }
         }
     }
 }
+
+/** The file name a saved picture gets: the original's when it has one, else a timestamp; extension from its bytes. */
+internal fun pictureFileName(ref: String, bytes: ByteArray, now: Long = System.currentTimeMillis()): String {
+    val ext = pictureExtension(bytes)
+    val base = ref.substringBefore('?').substringAfterLast('/').substringAfterLast(':')
+        .substringBeforeLast('.').replace(Regex("[^A-Za-z0-9._-]"), "_").take(60)
+    return (if (base.length >= 3) base else "hermes-$now") + "." + ext
+}
+
+/** png/jpg/gif/webp from the file's magic bytes (jpg when unknown). */
+internal fun pictureExtension(b: ByteArray): String = when {
+    b.size >= 4 && b[0] == 0x89.toByte() && b[1] == 'P'.code.toByte() && b[2] == 'N'.code.toByte() -> "png"
+    b.size >= 3 && b[0] == 'G'.code.toByte() && b[1] == 'I'.code.toByte() && b[2] == 'F'.code.toByte() -> "gif"
+    b.size >= 12 && String(b, 0, 4, Charsets.US_ASCII) == "RIFF" && String(b, 8, 4, Charsets.US_ASCII) == "WEBP" -> "webp"
+    else -> "jpg"
+}
+
+/** Android 10+: writes into Pictures/Hermes Remote through MediaStore (no permission needed). */
+@androidx.annotation.RequiresApi(android.os.Build.VERSION_CODES.Q)
+private fun savePicture(context: android.content.Context, name: String, bytes: ByteArray): Boolean = runCatching {
+    val mime = when (name.substringAfterLast('.')) { "png" -> "image/png"; "gif" -> "image/gif"; "webp" -> "image/webp"; else -> "image/jpeg" }
+    val values = android.content.ContentValues().apply {
+        put(android.provider.MediaStore.Images.Media.DISPLAY_NAME, name)
+        put(android.provider.MediaStore.Images.Media.MIME_TYPE, mime)
+        put(android.provider.MediaStore.Images.Media.RELATIVE_PATH, android.os.Environment.DIRECTORY_PICTURES + "/Hermes Remote")
+        put(android.provider.MediaStore.Images.Media.IS_PENDING, 1)
+    }
+    val resolver = context.contentResolver
+    val uri = resolver.insert(android.provider.MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values) ?: return false
+    val ok = runCatching { resolver.openOutputStream(uri)?.use { it.write(bytes) } != null }.getOrDefault(false)
+    if (!ok) { resolver.delete(uri, null, null); return false }
+    values.clear(); values.put(android.provider.MediaStore.Images.Media.IS_PENDING, 0)
+    resolver.update(uri, values, null, null)
+    true
+}.getOrDefault(false)
 
 // ------------------------------------------------------------------ masked prompts
 
