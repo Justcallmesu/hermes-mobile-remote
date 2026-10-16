@@ -3,6 +3,19 @@
 Releases are git tags; the version in the app comes from the tag. `git log v0.9.0..vX.Y.Z` is the
 authoritative history — this file only summarises what is worth knowing before upgrading.
 
+## v1.14.0
+
+- Drawer: "Sort by Last updated" now also orders project groups, so the project with the newest reply
+  is on top (it used to stay A-Z). Other sorts (created, tokens, cost) order groups the same way.
+- Custom group order: long-press any group header (project, date or status) to move it to the
+  top, up, down or to the bottom. The order is saved on the phone, per PC, profile and grouping,
+  and kept after restarts. View sheet → "Group order" switches between "Follow sort" and "Custom".
+- Drawer cache: chats, projects and the custom order are stored on the phone and shown at once on
+  start. They sync on start, when the app comes back to the screen, while chatting, after each
+  reply and every ~30 s. If a sync fails, the saved list stays on screen.
+- Reconnect: projects are fetched as soon as the live link is up, so chats no longer all land in
+  Home until a manual refresh.
+
 ## v1.13.1
 
 - Composer: Shift+Enter on a hardware keyboard inserts a newline at the cursor (replacing any

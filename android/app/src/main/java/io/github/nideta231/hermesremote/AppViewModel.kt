@@ -14,6 +14,9 @@ import io.github.nideta231.hermesremote.data.BridgeException
 import io.github.nideta231.hermesremote.data.ProjectRef
 import io.github.nideta231.hermesremote.data.SessionView
 import io.github.nideta231.hermesremote.data.SessionViewStore
+import io.github.nideta231.hermesremote.data.DrawerCache
+import io.github.nideta231.hermesremote.data.GroupOrder
+import io.github.nideta231.hermesremote.data.moveGroup
 import io.github.nideta231.hermesremote.data.ChatItem
 import io.github.nideta231.hermesremote.data.ComponentStatus
 import io.github.nideta231.hermesremote.data.AppUpdates
@@ -195,8 +198,49 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
     val sessionView: StateFlow<SessionView> = _sessionView.asStateFlow()
 
     fun setSessionView(v: SessionView) {
+        val regroup = v.grouping != _sessionView.value.grouping
         _sessionView.value = v
         viewStore.save(v)
+        if (regroup) loadGroupOrder()
+    }
+
+    /** The drawer as last synced (chats, projects, custom group order) for this PC; see [DrawerCache]. */
+    private var drawerCache = DrawerCache(app, profiles.activeId)
+
+    /** Custom group order (group keys, top first) for the current grouping and profile. */
+    private val _groupOrder = MutableStateFlow<List<String>>(emptyList())
+    val groupOrder: StateFlow<List<String>> = _groupOrder.asStateFlow()
+
+    private fun loadGroupOrder() { _groupOrder.value = drawerCache.groupOrder(profile, _sessionView.value.grouping) }
+
+    /**
+     * Move a drawer group by [delta] places (Int.MIN_VALUE/MAX_VALUE = top/bottom) among [shown], the
+     * group keys in the order the drawer draws them. Switches the drawer to the custom group order.
+     */
+    fun moveSessionGroup(shown: List<String>, key: String, delta: Int) {
+        val next = moveGroup(shown, _groupOrder.value, key, delta)
+        _groupOrder.value = next
+        drawerCache.putGroupOrder(profile, _sessionView.value.grouping, next)
+        if (_sessionView.value.groupOrder != GroupOrder.CUSTOM) setSessionView(_sessionView.value.copy(groupOrder = GroupOrder.CUSTOM))
+    }
+
+    /** Forget the custom order of the current grouping (back to following the sort). */
+    fun resetGroupOrder() {
+        _groupOrder.value = emptyList()
+        drawerCache.putGroupOrder(profile, _sessionView.value.grouping, emptyList())
+        setSessionView(_sessionView.value.copy(groupOrder = GroupOrder.AUTO))
+    }
+
+    /** Show the saved drawer at once (no blank list, no chats lumped into Home) until the sync lands. */
+    private fun loadCachedDrawer() {
+        val asked = profile
+        val items = drawerCache.sessions(asked)
+        val projects = drawerCache.projects(asked)
+        loadGroupOrder()
+        if (items.isEmpty() && projects.isEmpty()) return
+        _sessions.update { st ->
+            st.copy(items = st.items.ifEmpty { items }, projects = st.projects.ifEmpty { projects })
+        }
     }
 
     private val _models = MutableStateFlow<ModelCatalog?>(null)
@@ -288,8 +332,11 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
     private fun startActivePolling() {
         activeJob?.cancel()
         activeJob = viewModelScope.launch {
+            var tick = 0
             while (true) {
                 refreshActive()
+                // Every ~30 s also re-sync the drawer (newest page + projects), in case a change event was missed.
+                if (++tick % 8 == 0) refreshSessionsHead()
                 delay(4_000)
             }
         }
@@ -366,6 +413,7 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
         _conn.update { it.copy(activeUrl = p.url, mode = savedMode, needsRepairForLan = p.pin == null,
             transport = EndpointResolver.transportOf(EndpointResolver.hostOf(p.url).orEmpty())) }
         useClient(BridgeClient(p))
+        loadCachedDrawer()
         store.lastSessionId?.let { openSession(it) }
         refreshProfiles()
         refreshSessions()
@@ -605,6 +653,7 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
         if (id == profiles.activeId) return unpair()
         CredentialStore(app, ProfileStore.pairingFile(id)).clear()
         DraftStore(app, ProfileStore.draftsFile(id)).clearAll()
+        DrawerCache(app, id).clear()
         profiles.remove(id)
         refreshPcs()
     }
@@ -622,6 +671,7 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
         profiles.activeId = id
         store = CredentialStore(app, ProfileStore.pairingFile(id))
         drafts = DraftStore(app, ProfileStore.draftsFile(id))
+        drawerCache = DrawerCache(app, id)
         _reasoning.value = store.reasoningEffort
         _chat.value = ChatState(draft = drafts.get(null), reasoning = store.reasoningEffort)
         _hermesProfiles.value = ProfilesState(active = store.hermesProfile)
@@ -709,6 +759,9 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
                 // Fresh socket: re-attach the open chat (its runtime may be new) and catch up.
                 _chat.value.sessionId?.let { sid -> viewModelScope.launch { resume(sid) } }
                 viewModelScope.launch { refreshActive() }
+                // The first sessions sync usually lands before the socket is up, when projects.tree
+                // can't be asked yet: without this every chat sat in Home until a manual refresh.
+                viewModelScope.launch { refreshProjects() }
             }
             is Incoming.Event -> {
                 if (inc.type == "sessions.changed") return scheduleSessionsRefresh()
@@ -830,6 +883,7 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
                 if (!stillOn(asked)) return@launch
                 val merged = mergeSessionHead(_sessions.value.items, page)
                 if (merged != _sessions.value.items) _sessions.update { it.copy(items = merged, error = null) }
+                drawerCache.putSessions(asked, merged)
                 val open = page.firstOrNull { it.id == _chat.value.sessionId }
                 if (open != null) _chat.update { it.copy(pinned = open.pinned, title = if (it.title == "New chat") open.displayTitle else it.title) }
                 refreshProjects()
@@ -975,6 +1029,7 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
         _hermesProfiles.update { it.copy(active = name) }
         newChat()
         _sessions.value = SessionsState(loading = true, live = _sessions.value.live)
+        loadCachedDrawer()
         _models.value = null
         _modelChoice.value = null
         settings.forgetProfileValues()
@@ -1005,13 +1060,17 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
                     more = next && page.isNotEmpty()
                 }
                 if (!stillOn(asked)) return@launch
-                _sessions.update { it.copy(items = list.distinctBy { s -> s.id }, loading = false, hasMore = more, error = null) }
+                val items = list.distinctBy { s -> s.id }
+                _sessions.update { it.copy(items = items, loading = false, hasMore = more, error = null) }
+                drawerCache.putSessions(asked, items)
                 val open = list.firstOrNull { it.id == _chat.value.sessionId }
                 if (open != null) _chat.update { it.copy(pinned = open.pinned, title = if (it.title == "New chat") open.displayTitle else it.title) }
                 refreshProjects()
             } catch (t: Throwable) {
                 if (t is CancellationException) throw t
-                if (stillOn(asked)) _sessions.update { it.copy(loading = false, error = describe(t)) }
+                // Sync failed: the saved list stays on screen (it was shown at start), with a note.
+                if (stillOn(asked)) _sessions.update { it.copy(loading = false,
+                    error = if (it.items.isEmpty()) describe(t) else "Showing the saved list: ${describe(t)}") }
             }
         }
     }
@@ -1033,6 +1092,7 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
             ProjectRef(id, p.str("label") ?: id, members, path, auto = p.optBoolean("isAuto"))
         }
         if (projects != _sessions.value.projects) _sessions.update { it.copy(projects = projects) }
+        drawerCache.putProjects(asked, projects)
     }
 
     fun loadMoreSessions() {

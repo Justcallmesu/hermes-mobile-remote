@@ -15,6 +15,13 @@ enum class SessionOrdering(val label: String) {
     UPDATED("Last updated"), CREATED("Created"), STATUS("Status"), TOKENS("Tokens used"), COST("Cost")
 }
 
+/**
+ * How the drawer orders its groups. AUTO follows the chosen sort (e.g. the project with the most
+ * recently updated chat first; date and status groups keep their natural order). CUSTOM is the
+ * order the user arranged by hand (long-press a group header), saved per PC and profile.
+ */
+enum class GroupOrder(val label: String) { AUTO("Follow sort"), CUSTOM("Custom") }
+
 /** A session's state right now. [order] is the "needs you first" order used by grouping and sorting. */
 enum class SessionStatus(val label: String, val order: Int) {
     WAITING("Needs input", 0), WORKING("Working", 1), UNREAD("Unread", 2), IDLE("Idle", 3)
@@ -34,6 +41,7 @@ data class SessionView(
     val statuses: Set<SessionStatus> = emptySet(),
     /** Project ids to show; [NO_PROJECT] is the backend's "Home" bucket for chats outside every project. */
     val projects: Set<String> = emptySet(),
+    val groupOrder: GroupOrder = GroupOrder.AUTO,
 ) {
     val filtersActive: Boolean get() = statuses.isNotEmpty() || projects.isNotEmpty()
     val customized: Boolean get() = this != SessionView()
@@ -70,7 +78,9 @@ fun dateGroupOf(ts: Double?, now: Calendar = Calendar.getInstance()): String {
 
 /**
  * Filters, sorts and groups the drawer list. Pinned chats always lead in their own group,
- * like on desktop. Project groups follow the order of their most relevant session.
+ * like on desktop. With [GroupOrder.AUTO] project groups follow the chosen sort (by their most
+ * relevant chat); with [GroupOrder.CUSTOM] every group follows [customOrder] (group keys, as
+ * arranged by the user), and groups not in it yet keep their automatic place after those.
  */
 fun arrangeSessions(
     items: List<SessionSummary>,
@@ -79,6 +89,7 @@ fun arrangeSessions(
     projects: List<ProjectRef> = emptyList(),
     query: String = "",
     now: Calendar = Calendar.getInstance(),
+    customOrder: List<String> = emptyList(),
 ): List<SessionGroup> {
     val projectOf = HashMap<String, ProjectRef>()
     projects.forEach { p -> p.sessionIds.forEach { projectOf.putIfAbsent(it, p) } }
@@ -112,20 +123,43 @@ fun arrangeSessions(
         }
         SessionGrouping.STATUS -> rest.groupBy { statusOf(it, live) }.toSortedMap(compareBy { it.order })
             .map { (k, v) -> SessionGroup(k.label, v) }
-        // A fixed order, never recency: sorting groups by their newest chat made a project jump to the
-        // top every time one of its chats got a reply. Created projects keep the backend's order (which
-        // is creation order), auto projects follow A-Z (the backend lists those by recency), Home last.
+        // Groups follow the chosen sort, by the chat in them that sorts first: "Last updated" puts the
+        // project with the newest reply on top. Ties fall back to the label so the order is stable.
         SessionGrouping.PROJECT -> {
-            val rank = projects.withIndex().associate { (i, p) -> p.id to i }
             rest.groupBy { projectOf[it.id]?.takeIf { p -> p.id != SessionView.NO_PROJECT } }
-                .entries.sortedWith(compareBy<Map.Entry<ProjectRef?, List<SessionSummary>>>(
-                    { it.key == null }, { it.key?.auto == true },
-                    { if (it.key?.auto == true) 0 else rank[it.key?.id] ?: Int.MAX_VALUE },
-                    { it.key?.label?.lowercase().orEmpty() }, { it.key?.id.orEmpty() }))
+                .entries.sortedWith(Comparator<Map.Entry<ProjectRef?, List<SessionSummary>>> { a, b ->
+                    order.compare(a.value.first(), b.value.first())
+                }.thenBy { it.key?.label?.lowercase() ?: "\uffff" }.thenBy { it.key?.id.orEmpty() })
                 .map { (k, v) -> SessionGroup(k?.label ?: SessionView.NO_PROJECT_LABEL, v, "p-" + (k?.id ?: SessionView.NO_PROJECT)) }
         }
-    }
+    }.let { auto -> if (view.groupOrder == GroupOrder.CUSTOM) applyCustomOrder(auto, customOrder) else auto }
     return if (pinned.isEmpty()) groups else listOf(SessionGroup("Pinned", pinned)) + groups
+}
+
+/** [groups] in [custom] order (group keys); groups missing from it keep their relative order, after the known ones. */
+fun applyCustomOrder(groups: List<SessionGroup>, custom: List<String>): List<SessionGroup> {
+    if (custom.isEmpty()) return groups
+    val rank = custom.withIndex().associate { (i, k) -> k to i }
+    return groups.withIndex().sortedWith(compareBy({ rank[it.value.key] ?: Int.MAX_VALUE }, { it.index })).map { it.value }
+}
+
+/**
+ * The new custom order after moving [key] by [delta] places ([Int.MIN_VALUE] = to the top,
+ * [Int.MAX_VALUE] = to the bottom) in [shown], the group keys as the drawer draws them now.
+ * Keys saved earlier for groups not on screen (filtered out, no chats right now) are kept at the end.
+ */
+fun moveGroup(shown: List<String>, saved: List<String>, key: String, delta: Int): List<String> {
+    val list = shown.toMutableList()
+    val from = list.indexOf(key)
+    if (from < 0) return saved
+    list.removeAt(from)
+    val to = when (delta) {
+        Int.MIN_VALUE -> 0
+        Int.MAX_VALUE -> list.size
+        else -> (from + delta).coerceIn(0, list.size)
+    }
+    list.add(to, key)
+    return list + saved.filter { it !in list }
 }
 
 /** Chats a drawer group shows before "Show more" by default (Hermes desktop shows 3). Settings can change it. */
@@ -164,6 +198,7 @@ class SessionViewStore(private val prefs: SharedPreferences) {
         statuses = prefs.getStringSet("statuses", emptySet()).orEmpty()
             .mapNotNull { n -> SessionStatus.entries.firstOrNull { it.name == n } }.toSet(),
         projects = prefs.getStringSet("projects", emptySet()).orEmpty().toSet(),
+        groupOrder = enumOr(prefs.getString("group_order", null), GroupOrder.AUTO),
     )
 
     fun save(v: SessionView) {
@@ -172,6 +207,7 @@ class SessionViewStore(private val prefs: SharedPreferences) {
             .putString("ordering", v.ordering.name)
             .putStringSet("statuses", v.statuses.map { it.name }.toSet())
             .putStringSet("projects", v.projects.toSet())
+            .putString("group_order", v.groupOrder.name)
             .apply()
     }
 

@@ -107,6 +107,7 @@ import io.github.nideta231.hermesremote.data.SessionView
 import io.github.nideta231.hermesremote.data.SESSION_PAGE
 import io.github.nideta231.hermesremote.data.SESSION_FIRST_PAGE_CHOICES
 import io.github.nideta231.hermesremote.data.arrangeSessions
+import io.github.nideta231.hermesremote.data.GroupOrder
 import io.github.nideta231.hermesremote.data.pageGroups
 import io.github.nideta231.hermesremote.data.Transport
 import io.github.nideta231.hermesremote.data.TransportMode
@@ -133,6 +134,9 @@ class SessionActions(
     val switchProfile: (String) -> Unit = {},
     val openScheduled: () -> Unit = {},
     val openVault: () -> Unit = {},
+    /** Move a group: (group keys as drawn, key, delta; Int.MIN_VALUE/MAX_VALUE = top/bottom). */
+    val moveGroup: (List<String>, String, Int) -> Unit = { _, _, _ -> },
+    val resetGroupOrder: () -> Unit = {},
 )
 
 /** The session list. On phones it lives in the navigation drawer; on tablets beside the chat. */
@@ -148,6 +152,7 @@ fun SessionsPane(
     view: SessionView = SessionView(),
     update: UpdateState? = null,
     onOpenUpdate: () -> Unit = {},
+    groupOrder: List<String> = emptyList(),
 ) {
     var query by remember { mutableStateOf("") }
     var filterSheet by remember { mutableStateOf(false) }
@@ -162,9 +167,11 @@ fun SessionsPane(
     val collapsedKeys = ThemePrefs.collapsedGroups
     fun collapseKey(groupKey: String) = "${view.grouping.name}/$groupKey"
 
-    val grouped = remember(state.items, state.live, state.projects, view, query) {
-        arrangeSessions(state.items, view, state.live, state.projects, query)
+    val grouped = remember(state.items, state.live, state.projects, view, query, groupOrder) {
+        arrangeSessions(state.items, view, state.live, state.projects, query, customOrder = groupOrder)
     }
+    // Long-pressed group header: its move menu.
+    var movingGroup by remember { mutableStateOf<String?>(null) }
     // "Show more" per group: group key -> rows shown. Search, filters and paging are applied in that
     // order (see pageGroups), and a new query, view, PC or profile starts every group back at one page.
     var shown by remember(query, view, pcs.firstOrNull { it.active }?.id, profiles.active) { mutableStateOf(mapOf<String, Int>()) }
@@ -224,7 +231,15 @@ fun SessionsPane(
                 if (view.filtersActive) Box(Modifier.align(Alignment.TopEnd).padding(top = 10.dp, end = 10.dp).size(7.dp).background(Gold, CircleShape))
             }
         }
-        if (filterSheet) SessionViewSheet(view, state.projects, actions.setView, onDismiss = { filterSheet = false })
+        if (filterSheet) SessionViewSheet(view, state.projects, actions.setView, actions.resetGroupOrder, onDismiss = { filterSheet = false })
+        movingGroup?.let { key ->
+            val keys = grouped.map { it.key }.filter { it != PINNED_KEY }
+            val label = grouped.firstOrNull { it.key == key }?.label ?: key
+            GroupMoveSheet(label, keys.indexOf(key), keys.size, view.groupOrder == GroupOrder.CUSTOM,
+                onMove = { d -> actions.moveGroup(keys, key, d) },
+                onReset = { actions.resetGroupOrder(); movingGroup = null },
+                onDismiss = { movingGroup = null })
+        }
 
         PullToRefreshBox(isRefreshing = state.loading && state.items.isNotEmpty(), onRefresh = actions.refresh,
             modifier = Modifier.weight(1f).fillMaxWidth()) {
@@ -241,8 +256,11 @@ fun SessionsPane(
                     val closed = query.isBlank() && ck in collapsedKeys
                     item(key = "g-${group.key}") {
                         GroupHeader(group.label, group.items.size, closed, Modifier.animateItem(),
-                            project = view.grouping == SessionGrouping.PROJECT && group.label != "Pinned",
-                            live = page.group.items.count { state.live[it.id] != null }) {
+                            project = view.grouping == SessionGrouping.PROJECT && group.key != PINNED_KEY,
+                            live = page.group.items.count { state.live[it.id] != null },
+                            onLongClick = if (group.key == PINNED_KEY) null else ({
+                                haptics.performHapticFeedback(HapticFeedbackType.LongPress); movingGroup = group.key
+                            })) {
                             ThemePrefs.toggleCollapsed(ck)
                         }
                     }
@@ -494,13 +512,14 @@ private fun ShowMoreRow(remaining: Int, modifier: Modifier, onClick: () -> Unit)
  * Project groups get a folder card in sentence case so each project stands out from its chats;
  * date/status groups stay as quiet uppercase labels.
  */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun GroupHeader(label: String, count: Int, collapsed: Boolean, modifier: Modifier,
-                        project: Boolean = false, live: Int = 0, onToggle: () -> Unit) {
+                        project: Boolean = false, live: Int = 0, onLongClick: (() -> Unit)? = null, onToggle: () -> Unit) {
     val angle by animateFloatAsState(if (collapsed) -90f else 0f, label = "chevron")
     if (project) {
         Row(modifier.fillMaxWidth().padding(top = 10.dp, bottom = 2.dp).clip(RoundedCornerShape(12.dp))
-            .background(MaterialTheme.colorScheme.surfaceContainerHigh).clickable(onClick = onToggle)
+            .background(MaterialTheme.colorScheme.surfaceContainerHigh).combinedClickable(onClick = onToggle, onLongClick = onLongClick)
             .padding(start = 12.dp, end = 10.dp, top = 10.dp, bottom = 10.dp), verticalAlignment = Alignment.CenterVertically) {
             Icon(Glyphs.Folder, null, tint = Gold, modifier = Modifier.size(18.dp))
             Spacer(Modifier.width(10.dp))
@@ -518,7 +537,7 @@ private fun GroupHeader(label: String, count: Int, collapsed: Boolean, modifier:
         }
         return
     }
-    Row(modifier.fillMaxWidth().padding(top = 8.dp).clip(RoundedCornerShape(10.dp)).clickable(onClick = onToggle)
+    Row(modifier.fillMaxWidth().padding(top = 8.dp).clip(RoundedCornerShape(10.dp)).combinedClickable(onClick = onToggle, onLongClick = onLongClick)
         .padding(start = 12.dp, end = 8.dp, top = 6.dp, bottom = 6.dp), verticalAlignment = Alignment.CenterVertically) {
         // Label and count share the weighted slot, so every chevron lines up on the right edge.
         Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
@@ -588,7 +607,8 @@ private fun SessionActionsSheet(s: SessionSummary, onDismiss: () -> Unit, onPin:
 /** Group by / sort by / status / project, mirroring the desktop sidebar's filter menu. Changes apply live. */
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
-private fun SessionViewSheet(view: SessionView, projects: List<ProjectRef>, onChange: (SessionView) -> Unit, onDismiss: () -> Unit) {
+private fun SessionViewSheet(view: SessionView, projects: List<ProjectRef>, onChange: (SessionView) -> Unit,
+                             onResetGroupOrder: () -> Unit, onDismiss: () -> Unit) {
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
         containerColor = MaterialTheme.colorScheme.surfaceContainer) {
         Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = 20.dp).padding(bottom = 24.dp)) {
@@ -608,6 +628,15 @@ private fun SessionViewSheet(view: SessionView, projects: List<ProjectRef>, onCh
                     FilterChip(selected = view.ordering == o, onClick = { onChange(view.copy(ordering = o)) }, label = { Text(o.label) })
                 }
             }
+            SectionLabel("Group order")
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                GroupOrder.entries.forEach { o ->
+                    FilterChip(selected = view.groupOrder == o, label = { Text(o.label) }, onClick = { onChange(view.copy(groupOrder = o)) })
+                }
+                if (view.groupOrder == GroupOrder.CUSTOM) TextButton(onClick = onResetGroupOrder) { Text("Clear custom order") }
+            }
+            Text("Long-press a group header to move it. The custom order is saved on this phone, per grouping.",
+                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             SectionLabel("Status")
             FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 SessionStatus.entries.forEach { st ->
@@ -631,6 +660,30 @@ private fun SessionViewSheet(view: SessionView, projects: List<ProjectRef>, onCh
             }
             Text("Empty filters show everything. Pinned chats stay on top.", style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 12.dp))
+        }
+    }
+}
+
+private const val PINNED_KEY = "Pinned"
+
+/** Move one drawer group up/down/top/bottom. Stays open so a group can be moved several places in a row. */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun GroupMoveSheet(label: String, index: Int, count: Int, custom: Boolean,
+                           onMove: (Int) -> Unit, onReset: () -> Unit, onDismiss: () -> Unit) {
+    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+        containerColor = MaterialTheme.colorScheme.surfaceContainer) {
+        Column(Modifier.fillMaxWidth().padding(horizontal = 20.dp).padding(bottom = 24.dp)) {
+            Text(label, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text("Position ${index + 1} of $count", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Spacer(Modifier.size(8.dp))
+            val top = index <= 0
+            val bottom = index >= count - 1
+            TextButton(enabled = !top, onClick = { onMove(Int.MIN_VALUE) }) { Text("Move to top") }
+            TextButton(enabled = !top, onClick = { onMove(-1) }) { Text("Move up") }
+            TextButton(enabled = !bottom, onClick = { onMove(1) }) { Text("Move down") }
+            TextButton(enabled = !bottom, onClick = { onMove(Int.MAX_VALUE) }) { Text("Move to bottom") }
+            if (custom) TextButton(onClick = onReset) { Text("Clear custom order (follow sort)") }
         }
     }
 }

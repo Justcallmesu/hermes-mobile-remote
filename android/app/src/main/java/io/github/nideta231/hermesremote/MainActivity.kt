@@ -210,6 +210,7 @@ class MainActivity : ComponentActivity() {
         val chat by vm.chat.collectAsState()
         val sessions by vm.sessions.collectAsState()
         val sessionView by vm.sessionView.collectAsState()
+        val groupOrder by vm.groupOrder.collectAsState()
         val system by vm.settings.system.collectAsState()
         val models by vm.models.collectAsState()
         val choice by vm.modelChoice.collectAsState()
@@ -251,6 +252,8 @@ class MainActivity : ComponentActivity() {
             refresh = vm::refreshSessions,
             loadMore = vm::loadMoreSessions,
             setView = vm::setSessionView,
+            moveGroup = vm::moveSessionGroup,
+            resetGroupOrder = vm::resetGroupOrder,
             rename = vm::rename,
             delete = vm::delete,
             setPinned = vm::setPinned,
@@ -324,7 +327,7 @@ class MainActivity : ComponentActivity() {
         if (wide) {
             Row(Modifier.fillMaxSize()) {
                 Surface(color = MaterialTheme.colorScheme.surfaceContainerLow, modifier = Modifier.width(320.dp).fillMaxHeight()) {
-                    SessionsPane(sessions, chat.sessionId, sessionActions, pcs = pcs, profiles = hermesProfiles, view = sessionView, update = update, onOpenUpdate = openUpdate)
+                    SessionsPane(sessions, chat.sessionId, sessionActions, pcs = pcs, profiles = hermesProfiles, view = sessionView, update = update, onOpenUpdate = openUpdate, groupOrder = groupOrder)
                 }
                 VerticalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f))
                 Box(Modifier.weight(1f)) { content() }
@@ -332,7 +335,7 @@ class MainActivity : ComponentActivity() {
         } else {
             ModalNavigationDrawer(drawerState = drawer, gesturesEnabled = page == Page.CHAT || drawer.isOpen, drawerContent = {
                 ModalDrawerSheet(drawerContainerColor = MaterialTheme.colorScheme.surfaceContainerLow, modifier = Modifier.width(320.dp)) {
-                    SessionsPane(sessions, chat.sessionId, sessionActions, pcs = pcs, profiles = hermesProfiles, view = sessionView, update = update, onOpenUpdate = openUpdate)
+                    SessionsPane(sessions, chat.sessionId, sessionActions, pcs = pcs, profiles = hermesProfiles, view = sessionView, update = update, onOpenUpdate = openUpdate, groupOrder = groupOrder)
                 }
             }) { content() }
         }
