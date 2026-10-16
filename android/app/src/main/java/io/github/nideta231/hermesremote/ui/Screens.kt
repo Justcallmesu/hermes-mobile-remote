@@ -141,6 +141,8 @@ class SessionActions(
     val resetGroupOrder: () -> Unit = {},
     /** New chat preselected to a project id (null = no project, Home). */
     val newChatIn: (String?) -> Unit = {},
+    /** Rename / re-folder / describe / delete projects, from a project group's long-press. */
+    val projects: ProjectActions = ProjectActions(),
 )
 
 /** The session list. On phones it lives in the navigation drawer; on tablets beside the chat. */
@@ -176,6 +178,7 @@ fun SessionsPane(
     }
     // Long-pressed group header: its move menu.
     var movingGroup by remember { mutableStateOf<String?>(null) }
+    var editingProject by remember { mutableStateOf<ProjectRef?>(null) }
     // "Show more" per group: group key -> rows shown. Search, filters and paging are applied in that
     // order (see pageGroups), and a new query, view, PC or profile starts every group back at one page.
     var shown by remember(query, view, pcs.firstOrNull { it.active }?.id, profiles.active) { mutableStateOf(mapOf<String, Int>()) }
@@ -237,9 +240,13 @@ fun SessionsPane(
             }
         }
         if (filterSheet) SessionViewSheet(view, state.projects, actions.setView, actions.resetGroupOrder, onDismiss = { filterSheet = false })
+        editingProject?.let { p -> EditProjectDialog(p.id, p.label, actions.projects, onDismiss = { editingProject = null }) }
         movingGroup?.let { key ->
             val keys = grouped.map { it.key }.filter { it != PINNED_KEY }
             val label = grouped.firstOrNull { it.key == key }?.label ?: key
+            // A saved project (not Home, not an auto repo) can be edited or deleted, like desktop's project menu.
+            val saved = if (view.grouping == SessionGrouping.PROJECT && key.startsWith("p-"))
+                state.projects.firstOrNull { it.id == key.removePrefix("p-") && !it.auto && it.id != SessionView.NO_PROJECT } else null
             GroupMoveSheet(label, keys.indexOf(key), keys.size, view.groupOrder == GroupOrder.CUSTOM,
                 onMove = { d -> actions.moveGroup(keys, key, d) },
                 onReset = { actions.resetGroupOrder(); movingGroup = null },
@@ -248,7 +255,8 @@ fun SessionsPane(
                 onNewChat = if (view.grouping == SessionGrouping.PROJECT && key.startsWith("p-")) ({
                     movingGroup = null
                     actions.newChatIn(key.removePrefix("p-").takeIf { it != SessionView.NO_PROJECT })
-                }) else null)
+                }) else null,
+                onEditProject = saved?.let { p -> { movingGroup = null; editingProject = p } })
         }
 
         PullToRefreshBox(isRefreshing = state.loading && state.items.isNotEmpty(), onRefresh = actions.refresh,
@@ -677,7 +685,7 @@ private const val PINNED_KEY = "Pinned"
 @Composable
 private fun GroupMoveSheet(label: String, index: Int, count: Int, custom: Boolean,
                            onMove: (Int) -> Unit, onReset: () -> Unit, onDismiss: () -> Unit,
-                           onNewChat: (() -> Unit)? = null) {
+                           onNewChat: (() -> Unit)? = null, onEditProject: (() -> Unit)? = null) {
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
         containerColor = MaterialTheme.colorScheme.surfaceContainer) {
         Column(Modifier.fillMaxWidth().padding(horizontal = 20.dp).padding(bottom = 24.dp)) {
@@ -691,6 +699,15 @@ private fun GroupMoveSheet(label: String, index: Int, count: Int, custom: Boolea
                     Text("New chat in $label", maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
                 Spacer(Modifier.size(4.dp))
+            }
+            if (onEditProject != null) {
+                OutlinedButton(onClick = onEditProject, modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(14.dp)) {
+                    Icon(Glyphs.Edit, null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text("Edit project", maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
+                Text("Rename, change folder or description, delete", style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(start = 4.dp, top = 2.dp, bottom = 4.dp))
             }
             val top = index <= 0
             val bottom = index >= count - 1

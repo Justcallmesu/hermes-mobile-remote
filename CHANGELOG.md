@@ -3,6 +3,18 @@
 Releases are git tags; the version in the app comes from the tag. `git log v0.9.0..vX.Y.Z` is the
 authoritative history — this file only summarises what is worth knowing before upgrading.
 
+## v1.17.0
+
+- Projects can be managed from the phone, like the desktop's project menu: rename, change the
+  folder, edit the description, or delete. Tap the pencil next to a project in the project picker,
+  or long-press a project group in the drawer (grouped by project) and choose Edit project.
+  Deleting removes the saved project from Hermes only; its chats, files and folder stay on the PC.
+- New project: the folder is now optional, and you can write a description. Like the desktop's
+  New project, the description is saved as `IDEA.md` in the project folder (Markdown is fine).
+- Bridge: allows the phone `projects.get/update/delete/add_folder/remove_folder/set_primary`, and
+  adds `GET/PUT /v1/projects/{id}/idea`, which only ever reads or writes `IDEA.md` in that
+  project's own folder. Update the bridge on the PC for these.
+
 ## v1.16.0
 
 - Chat files: files Hermes hands over in a reply (`MEDIA:` reports, spreadsheets, PDFs) and files

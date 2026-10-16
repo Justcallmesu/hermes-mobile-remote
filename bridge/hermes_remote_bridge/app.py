@@ -36,6 +36,7 @@ from .config import Config
 from .devices import Device, DeviceStore
 from .network import TrustStore, network_info, serving_lan_ips
 from .chat_files import referenced_file
+from .project_notes import IDEA_MAX_BYTES, NoFolder, read_idea, write_idea
 from .profiles import ProfileRefused, is_visible, media_roots, profile_home, resolve_profile
 from .relay import Relay
 from .tailnet import TailnetClient, is_loopback, is_private_lan_ip, is_tailnet_ip
@@ -87,6 +88,10 @@ class PatchSession(BaseModel):
     # Desktop-sidebar flags Hermes persists per session.
     pinned: bool | None = None
     archived: bool | None = None
+
+
+class ProjectIdea(BaseModel):
+    text: str = Field(default="", max_length=IDEA_MAX_BYTES)
 
 
 class CreateCronJob(BaseModel):
@@ -536,6 +541,28 @@ def create_app(cfg: Config, *, locator: BackendLocator | None = None, tailnet: T
         mime = mimetypes.guess_type(target)[0] or "application/octet-stream"
         return FileResponse(target, media_type=mime, filename=os.path.basename(target),
                             headers={"Cache-Control": "private, no-cache"})
+
+    @app.get("/v1/projects/{project_id}/idea")
+    async def get_project_idea(project_id: str, profile: str | None = Depends(profile_param),
+                               _: Device = Depends(device_auth)):
+        """The project's IDEA.md (its description, as the desktop's "New project" writes it)."""
+        _check_id(project_id, "project id")
+        try:
+            return await asyncio.to_thread(read_idea, profile_home(cfg.hermes_home, profile), project_id)
+        except NoFolder as exc:
+            raise ApiError(404, "no_folder", str(exc))
+
+    @app.put("/v1/projects/{project_id}/idea")
+    async def put_project_idea(project_id: str, body: ProjectIdea, profile: str | None = Depends(profile_param),
+                               _: Device = Depends(device_auth)):
+        """Write (or, when empty, remove) IDEA.md in the project's own folder; no other path is writable."""
+        _check_id(project_id, "project id")
+        try:
+            return await asyncio.to_thread(write_idea, profile_home(cfg.hermes_home, profile), project_id, body.text)
+        except NoFolder as exc:
+            raise ApiError(404, "no_folder", str(exc))
+        except OSError as exc:
+            raise ApiError(500, "write_failed", f"Could not write IDEA.md: {exc.strerror or exc}")
 
     # ------------------------------------------------------------ the live connection
 

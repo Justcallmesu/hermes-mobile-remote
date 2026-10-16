@@ -142,6 +142,13 @@ class BridgeClient(
         return list to (if (total != null) offset + list.size < total else list.size >= limit)
     }
 
+    /** A project's IDEA.md (its description file in the project folder). Bridges before 1.17 answer 404. */
+    suspend fun projectIdea(id: String, profile: String? = null): String =
+        call("GET", "/v1/projects/${enc(id)}/idea", scoped(profile)).optString("text")
+
+    suspend fun setProjectIdea(id: String, text: String, profile: String? = null) =
+        call("PUT", "/v1/projects/${enc(id)}/idea", scoped(profile), JSONObject().put("text", text))
+
     suspend fun renameSession(id: String, title: String, profile: String? = null) =
         call("PATCH", "/v1/sessions/${enc(id)}", scoped(profile), JSONObject().put("title", title))
 

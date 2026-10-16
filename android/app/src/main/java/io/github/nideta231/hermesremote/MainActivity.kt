@@ -59,6 +59,7 @@ import com.journeyapps.barcodescanner.ScanOptions
 import io.github.nideta231.hermesremote.data.DEFAULT_HERMES_PROFILE
 import io.github.nideta231.hermesremote.data.Notifier
 import io.github.nideta231.hermesremote.ui.ChatActions
+import io.github.nideta231.hermesremote.ui.ProjectActions
 import io.github.nideta231.hermesremote.ui.CronActions
 import io.github.nideta231.hermesremote.ui.CronScreen
 import io.github.nideta231.hermesremote.ui.VaultActions
@@ -247,6 +248,9 @@ class MainActivity : ComponentActivity() {
         BackHandler(enabled = drawer.isOpen) { scope.launch { drawer.close() } }
         BackHandler(enabled = !drawer.isOpen && page != Page.CHAT) { page = if (page == Page.VAULT) Page.SETTINGS else Page.CHAT }
 
+        val projectActions = remember(vm) {
+            ProjectActions(create = vm::createProject, details = vm::projectDetails, save = vm::saveProject, delete = vm::deleteProject)
+        }
         val sessionActions = SessionActions(
             open = { vm.openSession(it); go(Page.CHAT) },
             refresh = vm::refreshSessions,
@@ -259,6 +263,7 @@ class MainActivity : ComponentActivity() {
             setPinned = vm::setPinned,
             newChat = { vm.newChat(); go(Page.CHAT) },
             newChatIn = { id -> vm.newChat(); vm.chooseProject(id); go(Page.CHAT) },
+            projects = projectActions,
             openSettings = { go(Page.SETTINGS) },
             switchPc = { vm.switchPc(it); go(Page.CHAT) },
             addPc = { scope.launch { drawer.close() }; vm.startAddingPc() },
@@ -276,7 +281,7 @@ class MainActivity : ComponentActivity() {
             openSettings = { go(Page.SETTINGS) },
             loadModels = vm::loadModels, chooseModel = vm::chooseModel, dismissConfirm = vm::dismissConfirm,
             setReasoning = vm::setReasoning, modelPickerOpened = vm::modelPickerOpened,
-            chooseProject = vm::chooseProject, createProject = vm::createProject,
+            chooseProject = vm::chooseProject, projects = projectActions,
             pickImages = { runCatching { chatPicker.launch(PickVisualMediaRequest(PickVisualMedia.ImageOnly)) } },
             pickFiles = { runCatching { filePicker.launch(arrayOf("*/*")) } }, removeFile = vm::removeFile,
             removeAttachment = vm::removeAttachment, loadImage = vm::loadImage, fetchFile = vm::fetchChatFile, answerSecret = vm::answerSecret,

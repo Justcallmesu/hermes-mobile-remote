@@ -12,6 +12,7 @@ import io.github.nideta231.hermesremote.data.mergeSessionHead
 import io.github.nideta231.hermesremote.data.BridgeClient
 import io.github.nideta231.hermesremote.data.BridgeException
 import io.github.nideta231.hermesremote.data.ProjectRef
+import io.github.nideta231.hermesremote.data.ProjectDetails
 import io.github.nideta231.hermesremote.data.SessionView
 import io.github.nideta231.hermesremote.data.SessionViewStore
 import io.github.nideta231.hermesremote.data.DrawerCache
@@ -1134,21 +1135,98 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
      * Creates a Hermes project on the PC (`projects.create`, same as the desktop's "New project") with
      * [path] as its primary folder, then selects it for the new chat. [done] gets null on success, else the error.
      */
-    fun createProject(name: String, path: String, done: (String?) -> Unit) {
+    fun createProject(name: String, path: String, description: String, done: (String?) -> Unit) {
         viewModelScope.launch {
             val g = gateway
             if (g == null || g.state.value != GatewayState.OPEN) { done("Not connected to the PC."); return@launch }
             val params = scoped(JSONObject().put("name", name.trim()))
             if (path.isNotBlank()) params.put("primary_path", path.trim())
+            if (description.isNotBlank()) params.put("description", description.trim())
             val result = runCatching { g.call("projects.create", params, 15_000) }
             result.exceptionOrNull()?.let { t ->
                 if (t is CancellationException) throw t
                 done(describe(t)); return@launch
             }
-            val id = result.getOrNull()?.optJSONObject("project")?.str("id")
+            val project = result.getOrNull()?.optJSONObject("project")
+            val id = project?.str("id")
+            // Like desktop's "New project": the description also lands as IDEA.md in the project folder.
+            val ideaError = if (id != null && description.isNotBlank() && !project.str("primary_path").isNullOrBlank())
+                writeIdea(id, description) else null
             refreshProjects()
             if (id != null) chooseProject(id)
-            done(null)
+            done(ideaError?.let { "Project created, but IDEA.md wasn't written: $it" })
+        }
+    }
+
+    /** Name, folder and description of a saved project, for the edit dialog. */
+    suspend fun projectDetails(id: String): ProjectDetails {
+        val g = gateway?.takeIf { it.state.value == GatewayState.OPEN } ?: throw IOException("Not connected to the PC.")
+        val p = g.call("projects.get", scoped(JSONObject().put("id", id)), 15_000).optJSONObject("project")
+            ?: throw IOException("Project not found")
+        val path = p.str("primary_path")?.takeIf(String::isNotBlank)
+        // IDEA.md wins over the stored text: it is what the desktop and the agent read.
+        val idea = if (path == null) null else runCatching { client?.projectIdea(id, profileParam(profile)) }
+            .onFailure { if (it is CancellationException) throw it }.getOrNull()?.trimEnd()
+        return ProjectDetails(id, p.str("name") ?: id, path, idea?.takeIf(String::isNotBlank) ?: p.str("description").orEmpty())
+    }
+
+    /**
+     * Saves the edit dialog: rename (`projects.update`), change the folder (the new path becomes the
+     * primary folder and the old one is detached; blank = no folder) and the description (stored on
+     * the project and written to IDEA.md in its folder). [done] gets null or an error.
+     */
+    fun saveProject(before: ProjectDetails, name: String, path: String, description: String, done: (String?) -> Unit) {
+        viewModelScope.launch {
+            val g = gateway
+            if (g == null || g.state.value != GatewayState.OPEN) { done("Not connected to the PC."); return@launch }
+            val id = before.id
+            val newPath = path.trim()
+            val error = try {
+                val fields = JSONObject()
+                if (name.trim() != before.name) fields.put("name", name.trim())
+                if (description.trim() != before.description.trim()) fields.put("description", description.trim())
+                if (fields.length() > 0) g.call("projects.update", scoped(fields.put("id", id)), 15_000)
+                if (newPath != (before.path ?: "")) {
+                    if (newPath.isNotEmpty())
+                        g.call("projects.add_folder", scoped(JSONObject().put("id", id).put("path", newPath).put("is_primary", true)), 15_000)
+                    val stored = g.call("projects.get", scoped(JSONObject().put("id", id)), 15_000).optJSONObject("project")
+                    val primary = stored?.str("primary_path")
+                    // Detach the old folder (only when it is no longer the primary one, e.g. same path typed differently).
+                    before.path?.takeIf { it != primary }?.let { old ->
+                        g.call("projects.remove_folder", scoped(JSONObject().put("id", id).put("path", old)), 15_000)
+                    }
+                }
+                // IDEA.md follows the description into the (new) folder; an emptied description removes it.
+                val descChanged = description.trim() != before.description.trim()
+                if (newPath.isNotEmpty() && (descChanged || newPath != (before.path ?: ""))) writeIdea(id, description) else null
+            } catch (t: Throwable) {
+                if (t is CancellationException) throw t
+                describe(t)
+            }
+            refreshProjects()
+            done(error)
+        }
+    }
+
+    /** Deletes the saved project in Hermes (desktop's "Delete…"). Its folder and files on the PC stay. */
+    fun deleteProject(id: String, done: (String?) -> Unit) {
+        viewModelScope.launch {
+            val g = gateway
+            if (g == null || g.state.value != GatewayState.OPEN) { done("Not connected to the PC."); return@launch }
+            val error = runCatching { g.call("projects.delete", scoped(JSONObject().put("id", id)), 15_000) }
+                .exceptionOrNull()?.let { if (it is CancellationException) throw it; describe(it) }
+            if (error == null && _chat.value.project?.id == id) _chat.update { it.copy(project = null) }
+            refreshProjects()
+            done(error)
+        }
+    }
+
+    /** Writes IDEA.md through the bridge; null on success, else why not. */
+    private suspend fun writeIdea(id: String, text: String): String? {
+        val c = client ?: return "Not connected to the PC."
+        return runCatching { c.setProjectIdea(id, text, profileParam(profile)) }.exceptionOrNull()?.let {
+            if (it is CancellationException) throw it
+            if (it is BridgeException && it.httpCode == 404 && it.code != "no_folder") "update the bridge on the PC" else describe(it)
         }
     }
 

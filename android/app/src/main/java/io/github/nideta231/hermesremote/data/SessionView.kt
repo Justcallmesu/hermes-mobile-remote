@@ -35,6 +35,9 @@ data class ProjectRef(val id: String, val label: String, val sessionIds: Set<Str
                       /** An auto project (a repo Hermes found from chats' folders), not one the user created. */
                       val auto: Boolean = false)
 
+/** A saved project as the edit dialog shows it; [description] is IDEA.md, else the stored text. */
+data class ProjectDetails(val id: String, val name: String, val path: String?, val description: String)
+
 data class SessionView(
     val grouping: SessionGrouping = SessionGrouping.DATE,
     val ordering: SessionOrdering = SessionOrdering.UPDATED,

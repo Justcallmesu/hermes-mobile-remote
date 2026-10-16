@@ -159,8 +159,8 @@ class ChatActions(
     val modelPickerOpened: () -> Unit,
     /** New chat only: pick the project it starts in (null = no project). */
     val chooseProject: (String?) -> Unit = {},
-    /** Create a project on the PC (name, folder); callback gets null or an error message. */
-    val createProject: (String, String, (String?) -> Unit) -> Unit = { _, _, _ -> },
+    /** Create, edit and delete projects on the PC. */
+    val projects: ProjectActions = ProjectActions(),
     /** Open the phone's photo picker; picks land in [ChatState.attachments]. */
     val pickImages: () -> Unit = {},
     val removeAttachment: (String) -> Unit = {},
@@ -278,7 +278,7 @@ fun ChatScreen(
         actions.chooseModel(it, false); modelSheet = false
     })
     if (projectSheet) ProjectSheet(projects, state.project?.id, onDismiss = { projectSheet = false },
-        onCreate = actions.createProject) {
+        actions = actions.projects) {
         actions.chooseProject(it); projectSheet = false
     }
     if (reasoningSheet) ReasoningSheet(catalog, reasoning, onDismiss = { reasoningSheet = false }) { actions.setReasoning(it); reasoningSheet = false }
@@ -1079,16 +1079,18 @@ internal fun ModelSheet(
 @Composable
 private fun ProjectSheet(
     projects: List<ProjectRef>, current: String?, onDismiss: () -> Unit,
-    onCreate: (String, String, (String?) -> Unit) -> Unit, onPick: (String?) -> Unit,
+    actions: ProjectActions, onPick: (String?) -> Unit,
 ) {
     val sheet = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     var creating by remember { mutableStateOf(false) }
+    var editing by remember { mutableStateOf<ProjectRef?>(null) }
     var query by remember { mutableStateOf("") }
     val shown = remember(projects, query) {
         val q = query.trim()
         if (q.isEmpty()) projects else projects.filter { it.label.contains(q, true) || it.path?.contains(q, true) == true }
     }
-    if (creating) NewProjectDialog(onDismiss = { creating = false }, onCreate = onCreate, onCreated = { creating = false; onDismiss() })
+    if (creating) NewProjectDialog(onDismiss = { creating = false }, onCreate = actions.create, onCreated = { creating = false; onDismiss() })
+    editing?.let { p -> EditProjectDialog(p.id, p.label, actions, onDismiss = { editing = null }) }
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheet, containerColor = MaterialTheme.colorScheme.surfaceContainer) {
         Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
             Text("Project", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
@@ -1099,49 +1101,19 @@ private fun ProjectSheet(
             Spacer(Modifier.size(8.dp))
             LazyColumn(Modifier.fillMaxWidth().heightIn(max = 520.dp), contentPadding = PaddingValues(bottom = 24.dp)) {
                 if (query.isBlank()) {
-                    item { SheetOption("+ New project", "Create one on the PC from a folder", selected = false) { creating = true } }
+                    item { SheetOption("+ New project", "Create one on the PC; the folder is optional", selected = false) { creating = true } }
                     item { SheetOption("No project", "Hermes' default folder", selected = current == null) { onPick(null) } }
                 }
                 if (shown.isEmpty()) item {
                     Text("No project matches “$query”.", color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(12.dp))
                 }
                 items(shown, key = { it.id }) { p ->
-                    SheetOption(p.label, p.path, selected = current == p.id) { onPick(p.id) }
+                    SheetOption(p.label, p.path, selected = current == p.id,
+                        onEdit = if (p.auto) null else ({ editing = p })) { onPick(p.id) }
                 }
             }
         }
     }
-}
-
-/** Name + PC folder for `projects.create`. The folder is a path on the PC, e.g. ~/Workspace/my-app. */
-@Composable
-private fun NewProjectDialog(onDismiss: () -> Unit, onCreate: (String, String, (String?) -> Unit) -> Unit, onCreated: () -> Unit) {
-    var name by remember { mutableStateOf("") }
-    var path by remember { mutableStateOf("") }
-    var busy by remember { mutableStateOf(false) }
-    var error by remember { mutableStateOf<String?>(null) }
-    AlertDialog(
-        onDismissRequest = { if (!busy) onDismiss() },
-        title = { Text("New project") },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedTextField(name, { name = it; error = null }, label = { Text("Name") }, singleLine = true,
-                    placeholder = { Text("My app") }, modifier = Modifier.fillMaxWidth())
-                OutlinedTextField(path, { path = it; error = null }, label = { Text("Folder on the PC") }, singleLine = true,
-                    placeholder = { Text("~/Workspace/my-app") }, modifier = Modifier.fillMaxWidth())
-                Text("A path on the PC, e.g. ~/Workspace/my-app. New chats in this project start there.",
-                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                error?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error) }
-            }
-        },
-        confirmButton = {
-            TextButton(enabled = !busy && name.isNotBlank() && path.isNotBlank(), onClick = {
-                busy = true
-                onCreate(name, path) { err -> busy = false; if (err == null) onCreated() else error = err }
-            }) { Text(if (busy) "Creating…" else "Create") }
-        },
-        dismissButton = { TextButton(enabled = !busy, onClick = onDismiss) { Text("Cancel") } },
-    )
 }
 
 private val effortHints = mapOf(
@@ -1174,7 +1146,7 @@ private fun ReasoningSheet(catalog: ModelCatalog?, reasoning: String?, onDismiss
 }
 
 @Composable
-private fun SheetOption(title: String, subtitle: String?, selected: Boolean, onClick: () -> Unit) {
+private fun SheetOption(title: String, subtitle: String?, selected: Boolean, onEdit: (() -> Unit)? = null, onClick: () -> Unit) {
     val bg by animateColorAsState(if (selected) Gold.copy(alpha = 0.14f) else Color.Transparent, label = "opt")
     Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(bg).clickable(onClick = onClick)
         .padding(horizontal = 14.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -1185,6 +1157,7 @@ private fun SheetOption(title: String, subtitle: String?, selected: Boolean, onC
         AnimatedVisibility(selected, enter = scaleIn() + fadeIn(), exit = scaleOut() + fadeOut()) {
             Icon(Glyphs.Check, null, tint = Gold, modifier = Modifier.size(20.dp))
         }
+        onEdit?.let { IconButton(onClick = it) { Icon(Glyphs.Edit, "Edit project", modifier = Modifier.size(18.dp)) } }
     }
 }
 
