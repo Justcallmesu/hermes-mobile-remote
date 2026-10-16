@@ -659,3 +659,42 @@ def test_media_serves_only_images_in_hermes_image_folders(tmp_path):
     assert get(home / "images" / ".." / ".env.png", headers=auth(token)).status_code == 403
     assert get(home / "profiles" / "bkm" / "images" / "b.png", headers=auth(token)).status_code == 403  # not allowed
     assert get(home / "images" / "missing.png", headers=auth(token)).status_code == 404
+
+
+def test_chat_file_serves_only_files_the_chat_names(tmp_path):
+    import sqlite3
+    home = tmp_path / "hermes"
+    work = tmp_path / "work"
+    (home / "attachments").mkdir(parents=True)
+    work.mkdir()
+    (home / "attachments" / "sheet one.xlsx").write_bytes(b"PK-sheet")
+    (work / "report.pdf").write_bytes(b"%PDF-1")
+    (work / "secret.txt").write_text("not named")
+    (home / "old.csv").write_text("a,b")
+    db = sqlite3.connect(home / "state.db")
+    db.execute("CREATE TABLE sessions (id TEXT, parent_session_id TEXT, cwd TEXT)")
+    db.execute("CREATE TABLE messages (session_id TEXT, content TEXT)")
+    db.executemany("INSERT INTO sessions VALUES (?,?,?)", [("s2", "s1", str(work)), ("s1", None, str(work))])
+    db.executemany("INSERT INTO messages VALUES (?,?)", [
+        ("s2", f"fix this\n@file:`{home}/attachments/sheet one.xlsx`"),
+        ("s2", "Done:\nMEDIA:report.pdf\n"),
+        ("s1", f"earlier\nMEDIA:{home}/old.csv"),  # before compression: still this chat
+        ("other", f"MEDIA:{work}/secret.txt")])
+    db.commit(); db.close()
+    c, token = _profile_app(tmp_path, [], hermes_home=home)
+
+    def get(sid, path, **kw):
+        return c.get(f"/v1/sessions/{sid}/file", params={"path": str(path)}, **kw)
+
+    r = get("s2", home / "attachments" / "sheet one.xlsx", headers=auth(token))
+    assert r.status_code == 200 and r.content == b"PK-sheet"
+    assert "sheet%20one.xlsx" in r.headers["content-disposition"] or "sheet one.xlsx" in r.headers["content-disposition"]
+    assert get("s2", work / "report.pdf", headers=auth(token)).headers["content-type"] == "application/pdf"
+    assert get("s2", "report.pdf", headers=auth(token)).status_code == 200  # as written, relative to the chat folder
+    assert get("s2", home / "old.csv", headers=auth(token)).status_code == 200
+    assert get("s2", work / "secret.txt", headers=auth(token)).status_code == 403  # another chat's file
+    assert get("s2", work / ".." / "work" / "secret.txt", headers=auth(token)).status_code == 403
+    assert get("nope", work / "report.pdf", headers=auth(token)).status_code == 403
+    assert get("s2", work / "report.pdf").status_code == 401
+    (work / "report.pdf").unlink()
+    assert get("s2", work / "report.pdf", headers=auth(token)).status_code == 404

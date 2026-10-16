@@ -10,8 +10,10 @@ sealed interface ChatItem {
 
     /** [images]: the pictures sent with it, as PC paths (or a phone `content://` uri while it is still sending). */
     /** [rowId]: Hermes' durable row id, known once the message is read back from the PC (edit needs it). */
+    /** [files]: PC paths of the files sent with it (`@file:` references), shown as cards. */
     data class User(override val key: String, val text: String, val pending: Boolean = false,
-                    val images: List<String> = emptyList(), val rowId: Long? = null) : ChatItem
+                    val images: List<String> = emptyList(), val rowId: Long? = null,
+                    val files: List<String> = emptyList()) : ChatItem
     data class Assistant(override val key: String, val text: String, val streaming: Boolean = false) : ChatItem
     /** The model's reasoning for the reply that follows; shown collapsed. */
     data class Thinking(override val key: String, val text: String, val streaming: Boolean = false) : ChatItem
@@ -44,16 +46,31 @@ private const val STEER_CLOSE = "[/OUT-OF-BAND USER MESSAGE]"
  * A user turn as the user typed it. Skills and /plan expand into long prompts before they reach
  * the model; show "/humanizer fix this" instead of the whole skill body, like the desktop app does.
  */
-private val fileRefRe = Regex("""^@file:(?:"([^"]+)"|(\S+))$""")
+private val fileRefRe = Regex("""^@file:(?:`([^`]+)`|"([^"]+)"|'([^']+)'|(\S+))$""")
 
 /** `@file:` reference lines (files sent with a message) shown as "📎 name", like the desktop's chips. */
 fun fileRefsAsLabels(text: String): String {
     if (!text.contains("@file:")) return text
-    return text.lines().joinToString("\n") { line ->
-        fileRefRe.matchEntire(line.trim())?.let { m ->
-            "📎 " + m.groupValues.drop(1).first { it.isNotEmpty() }.substringAfterLast('/').substringAfterLast('\\')
-        } ?: line
+    return withoutContextWarnings(text).lines().joinToString("\n") { line ->
+        fileRefRe.matchEntire(line.trim())?.let { m -> "📎 " + fileName(m.groupValues.drop(1).first { it.isNotEmpty() }) } ?: line
     }
+}
+
+/** The paths of a user message's `@file:` reference lines, in order. */
+fun fileRefs(text: String): List<String> {
+    if (!text.contains("@file:")) return emptyList()
+    return withoutContextWarnings(text).lines().mapNotNull { line ->
+        fileRefRe.matchEntire(line.trim())?.groupValues?.drop(1)?.first { it.isNotEmpty() }
+    }.distinct()
+}
+
+/** Last segment of a PC path (either slash). */
+fun fileName(path: String): String = path.trimEnd('/', '\\').substringAfterLast('/').substringAfterLast('\\')
+
+/** Hermes appends a model-facing "--- Context Warnings ---" block to a message with files; not the user's words. */
+private fun withoutContextWarnings(text: String): String {
+    val at = text.indexOf("\n--- Context Warnings ---")
+    return if (at < 0) text else text.substring(0, at).trimEnd()
 }
 
 fun displayUserText(text: String): String = fileRefsAsLabels(displayUserTextRaw(text))
@@ -104,14 +121,24 @@ fun splitUserImages(text: String): Pair<String, List<String>> {
 }
 
 /** A reply with its `MEDIA:/path/to/image.png` lines (how Hermes hands over a file) taken out as images. */
-fun splitReplyImages(text: String): Pair<String, List<String>> {
-    if (!text.contains("MEDIA:")) return text to emptyList()
+fun splitReplyImages(text: String): Pair<String, List<String>> = splitReplyMedia(text).let { it.text to it.images }
+
+/** A reply's text, and its `MEDIA:` files split into pictures (drawn) and other files (shown as cards). */
+data class ReplyMedia(val text: String, val images: List<String>, val files: List<String>)
+
+fun splitReplyMedia(text: String): ReplyMedia {
+    if (!text.contains("MEDIA:")) return ReplyMedia(text, emptyList(), emptyList())
     val images = mutableListOf<String>()
+    val files = mutableListOf<String>()
     val kept = text.lines().filter { line ->
         val path = mediaLineRe.matchEntire(line)?.groupValues?.get(1)?.trim('`', '"', '\'')
-        if (path != null && imageExt.containsMatchIn(path)) { images += path; false } else true
+        when {
+            path.isNullOrEmpty() -> true
+            imageExt.containsMatchIn(path) -> { images += path; false }
+            else -> { files += path; false }
+        }
     }
-    return kept.joinToString("\n").trim() to images
+    return ReplyMedia(kept.joinToString("\n").trim(), images.distinct(), files.distinct())
 }
 
 /** Human-sized summary of a tool call's arguments (the command for terminal, else compact JSON). */
@@ -203,7 +230,7 @@ object HistoryMapper {
                     null -> {
                         val (body, images) = splitUserImages(text)
                         items += ChatItem.User("h-$id", displayUserText(body), images = images,
-                            rowId = if (m.has("row_id") && !m.isNull("row_id")) m.optLong("row_id") else null)
+                            rowId = if (m.has("row_id") && !m.isNull("row_id")) m.optLong("row_id") else null, files = fileRefs(body))
                     }
                 }
                 "assistant" -> {
@@ -424,7 +451,7 @@ fun withInflight(history: List<ChatItem>, inflight: JSONObject?, promptKey: Stri
             val shown = out.getOrNull(lastUser) as? ChatItem.User
             if (shown != null && sameText(shown.text, user)) at = lastUser
             else if (user.isNotEmpty() || images.isNotEmpty()) {
-                out += ChatItem.User("inflight-u", user, images = images)
+                out += ChatItem.User("inflight-u", user, images = images, files = fileRefs(body))
                 at = out.lastIndex
             }
         }
@@ -469,7 +496,7 @@ fun withLiveUser(items: List<ChatItem>, anchorKey: String?, inflight: JSONObject
             val lastUser = items.indexOfLast { it is ChatItem.User }
             if (lastUser >= 0 && sameText((items[lastUser] as ChatItem.User).text, text) &&
                 items.drop(lastUser + 1).none { it is ChatItem.Assistant }) return items
-            ChatItem.User(key, text, images = images)
+            ChatItem.User(key, text, images = images, files = fileRefs(body))
         }
     }
     return items.toMutableList().apply { add(at, row) }

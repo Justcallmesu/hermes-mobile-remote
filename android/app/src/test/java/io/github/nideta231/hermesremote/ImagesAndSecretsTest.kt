@@ -45,7 +45,7 @@ class ImagesAndSecretsTest {
 
     @Test fun replyMediaLinesBecomePictures() {
         val (text, images) = splitReplyImages("Here it is:\nMEDIA:/home/u/out/chart.png\nMEDIA:/home/u/out/report.pdf")
-        assertEquals("Here it is:\nMEDIA:/home/u/out/report.pdf", text)  // only images are drawn; other files stay as text
+        assertEquals("Here it is:", text)  // other files are drawn as file cards
         assertEquals(listOf("/home/u/out/chart.png"), images)
     }
 

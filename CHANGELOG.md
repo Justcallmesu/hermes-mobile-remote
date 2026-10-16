@@ -3,6 +3,18 @@
 Releases are git tags; the version in the app comes from the tag. `git log v0.9.0..vX.Y.Z` is the
 authoritative history — this file only summarises what is worth knowing before upgrading.
 
+## v1.16.0
+
+- Chat files: files Hermes hands over in a reply (`MEDIA:` reports, spreadsheets, PDFs) and files
+  sent with a message now show as cards. Tap a card to open it in a phone app (Sheets, a PDF
+  viewer, ...); the arrow saves it to Downloads/Hermes Remote. Before, they were plain text, or
+  "📎 name" with nothing to tap.
+- Messages with a file no longer show Hermes' "--- Context Warnings ---" block, and files sent
+  from the desktop (``@file:`path` ``) show up correctly.
+- Pictures saved outside Hermes' image folders (e.g. a chart in a project) now load in the chat.
+- Bridge: new `GET /v1/sessions/{id}/file`. It serves only files that chat's own messages name.
+  Update the PC bridge (`git pull`, then restart it) to use this.
+
 ## v1.15.1
 
 - Drawer: long-press a project folder (grouped by Project) → "New chat in <project>" starts a chat

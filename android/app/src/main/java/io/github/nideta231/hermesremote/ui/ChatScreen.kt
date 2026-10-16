@@ -108,7 +108,9 @@ import io.github.nideta231.hermesremote.data.ModelConfirm
 import io.github.nideta231.hermesremote.data.ProjectRef
 import io.github.nideta231.hermesremote.data.ChatItem
 import io.github.nideta231.hermesremote.data.LiveReducer
-import io.github.nideta231.hermesremote.data.splitReplyImages
+import io.github.nideta231.hermesremote.data.ReplyMedia
+import io.github.nideta231.hermesremote.data.fileName
+import io.github.nideta231.hermesremote.data.splitReplyMedia
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.aspectRatio
@@ -167,6 +169,8 @@ class ChatActions(
     val removeFile: (String) -> Unit = {},
     /** Bytes of a chat image (phone uri or PC path); null when it can't be had. */
     val loadImage: suspend (String) -> ByteArray? = { null },
+    /** A file the chat names (PC path), downloaded into the app's cache. */
+    val fetchFile: suspend (String) -> java.io.File = { throw java.io.IOException("Not available") },
     /** Answer the open masked prompt: (identifier for a login, value); empty value = skip. */
     val answerSecret: (String, String) -> Unit = { _, _ -> },
     /** Edit a sent message: Hermes drops it and what followed, then answers the new text. */
@@ -178,6 +182,9 @@ private val LocalEditMessage = staticCompositionLocalOf<((ChatItem.User, String)
 
 /** Loads a chat image's bytes; provided once by [ChatScreen] so every bubble can draw pictures. */
 private val LocalImageLoader = staticCompositionLocalOf<suspend (String) -> ByteArray?> { { null } }
+
+/** Downloads a chat file from the PC; provided once by [ChatScreen] so every bubble can show file cards. */
+private val LocalFileFetcher = staticCompositionLocalOf<suspend (String) -> java.io.File> { { throw java.io.IOException("Not available") } }
 
 /** How the phone reaches the PC right now, reduced to what the top bar shows. */
 enum class LinkHealth { LAN, TAILNET, SEARCHING, OFFLINE }
@@ -220,7 +227,8 @@ fun ChatScreen(
     val clarify = LiveReducer.openClarify(state.items)
     val secret = LiveReducer.openSecret(state.items)
 
-    CompositionLocalProvider(LocalImageLoader provides actions.loadImage, LocalEditMessage provides actions.edit) {
+    CompositionLocalProvider(LocalImageLoader provides actions.loadImage, LocalFileFetcher provides actions.fetchFile,
+        LocalEditMessage provides actions.edit) {
     Column(Modifier.fillMaxSize().imePadding()) {
         ChatTopBar(state, health, showMenuButton, actions, profile)
         ConnectionBanner(state, health, actions.openSettings)
@@ -523,6 +531,11 @@ private fun UserBubble(item: ChatItem.User) {
     val haptics = LocalHapticFeedback.current
     var menu by remember { mutableStateOf(false) }
     var editing by remember { mutableStateOf(false) }
+    // With file cards drawn, the "📎 name" lines that stand for them would say it twice.
+    val shownText = remember(item.text, item.files) {
+        if (item.files.isEmpty()) item.text
+        else item.text.lines().filterNot { it.trim().startsWith("📎 ") }.joinToString("\n").trim()
+    }
     // One Column: the list item is a Box, so a picture and the text emitted side by side were drawn
     // on top of each other (the picture covered the start of the message).
     Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.End) {
@@ -531,11 +544,16 @@ private fun UserBubble(item: ChatItem.User) {
             ImageStrip(item.images, Modifier.padding(start = 40.dp))
         }
     }
-    if (item.text.isNotBlank()) Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.CenterEnd) {
+    if (item.files.isNotEmpty()) {
+        Box(Modifier.fillMaxWidth().padding(bottom = if (shownText.isBlank()) 0.dp else 6.dp), contentAlignment = Alignment.CenterEnd) {
+            FileCards(item.files, Modifier.padding(start = 40.dp), alignEnd = true)
+        }
+    }
+    if (shownText.isNotBlank()) Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.CenterEnd) {
         Surface(color = Gold.copy(alpha = alpha), shape = RoundedCornerShape(20.dp, 20.dp, 6.dp, 20.dp),
             modifier = Modifier.widthIn(max = 560.dp).padding(start = 40.dp).clip(RoundedCornerShape(20.dp, 20.dp, 6.dp, 20.dp))
                 .combinedClickable(onClick = {}, onLongClick = { haptics.performHapticFeedback(HapticFeedbackType.LongPress); menu = true })) {
-            Text(remember(item.text) { clipForDisplay(item.text) }, modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+            Text(remember(shownText) { clipForDisplay(shownText) }, modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
                 style = MaterialTheme.typography.bodyMedium.copy(lineHeight = 21.sp),
                 color = if (item.pending) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurface)
         }
@@ -571,12 +589,17 @@ private fun EditMessageDialog(item: ChatItem.User, onSave: (String) -> Unit, onC
 private fun AssistantBlock(item: ChatItem.Assistant) {
     val shown = rememberSmoothText(item.text, item.streaming)
     val caretOn by animateFloatAsState(if (item.streaming) 1f else 0f, tween(250), label = "caret")
-    val (body, images) = remember(shown, item.streaming) { if (item.streaming) shown to emptyList() else splitReplyImages(shown) }
+    val media = remember(shown, item.streaming) {
+        if (item.streaming) ReplyMedia(shown, emptyList(), emptyList()) else splitReplyMedia(shown)
+    }
+    val body = media.text
+    val images = media.images
     Column(Modifier.fillMaxWidth().padding(end = 8.dp)) {
         // Streaming replies are short-lived; a finished one is clipped so a huge answer can't stall scrolling.
         val safe = remember(body, item.streaming) { if (item.streaming) body else clipForDisplay(body) }
         MarkdownText(if (caretOn > 0.01f) "$safe ▍" else safe)
         if (images.isNotEmpty()) ImageStrip(images, Modifier.padding(top = 8.dp))
+        if (media.files.isNotEmpty()) FileCards(media.files, Modifier.padding(top = 8.dp))
         // Copy the whole reply as markdown, like the desktop's copy action under each answer.
         if (!item.streaming && item.text.isNotBlank()) CopyButton(item.text, Modifier.offset(x = (-6).dp))
     }
@@ -1330,6 +1353,110 @@ private fun savePicture(context: android.content.Context, name: String, bytes: B
     val ok = runCatching { resolver.openOutputStream(uri)?.use { it.write(bytes) } != null }.getOrDefault(false)
     if (!ok) { resolver.delete(uri, null, null); return false }
     values.clear(); values.put(android.provider.MediaStore.Images.Media.IS_PENDING, 0)
+    resolver.update(uri, values, null, null)
+    true
+}.getOrDefault(false)
+
+// ------------------------------------------------------------------ files
+
+/** Files of one message, one card each: tap opens it in a phone app, the arrow saves it to Downloads. */
+@Composable
+private fun FileCards(paths: List<String>, modifier: Modifier = Modifier, alignEnd: Boolean = false) {
+    Column(modifier, verticalArrangement = Arrangement.spacedBy(6.dp), horizontalAlignment = if (alignEnd) Alignment.End else Alignment.Start) {
+        paths.forEach { FileCard(it) }
+    }
+}
+
+@Composable
+private fun FileCard(path: String) {
+    val fetch = LocalFileFetcher.current
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val scope = rememberCoroutineScope()
+    var busy by remember(path) { mutableStateOf(false) }
+    var pending by remember { mutableStateOf<java.io.File?>(null) }
+    val name = remember(path) { fileName(path) }
+    fun toast(msg: String) = android.widget.Toast.makeText(context, msg, android.widget.Toast.LENGTH_SHORT).show()
+    // Android 8/9: no MediaStore Downloads without a permission, so the user picks where it goes.
+    val pick = androidx.activity.compose.rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.CreateDocument(mimeOf(name))) { uri ->
+        val file = pending; pending = null
+        if (uri == null || file == null) return@rememberLauncherForActivityResult
+        scope.launch {
+            val ok = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                runCatching { context.contentResolver.openOutputStream(uri)?.use { out -> file.inputStream().use { it.copyTo(out) } } != null }.getOrDefault(false)
+            }
+            toast(if (ok) "Saved $name" else "Couldn't save $name")
+        }
+    }
+    fun withFile(action: (java.io.File) -> Unit) {
+        if (busy) return
+        busy = true
+        scope.launch {
+            try { action(fetch(path)) }
+            catch (t: Throwable) {
+                if (t is kotlinx.coroutines.CancellationException) throw t
+                toast(fileError(name, t))
+            } finally { busy = false }
+        }
+    }
+    fun open() = withFile { f ->
+        val uri = androidx.core.content.FileProvider.getUriForFile(context, context.packageName + ".files", f)
+        val intent = android.content.Intent(android.content.Intent.ACTION_VIEW).setDataAndType(uri, mimeOf(name))
+            .addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION or android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+        try { context.startActivity(android.content.Intent.createChooser(intent, name).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)) }
+        catch (_: android.content.ActivityNotFoundException) { toast("No app on this phone opens $name. Use the download arrow.") }
+    }
+    fun save() = withFile { f ->
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) scope.launch {
+            val ok = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { saveDownload(context, name, f) }
+            toast(if (ok) "Saved to Downloads/Hermes Remote" else "Couldn't save $name")
+        } else { pending = f; pick.launch(name) }
+    }
+    Surface(color = MaterialTheme.colorScheme.surfaceContainer, shape = RoundedCornerShape(14.dp),
+        modifier = Modifier.widthIn(min = 180.dp, max = 300.dp).clip(RoundedCornerShape(14.dp)).clickable { open() }) {
+        Row(Modifier.padding(start = 12.dp, end = 4.dp, top = 6.dp, bottom = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+            Icon(Glyphs.Doc, null, tint = Gold, modifier = Modifier.size(20.dp))
+            Spacer(Modifier.width(10.dp))
+            Column(Modifier.weight(1f, fill = false)) {
+                Text(name, style = MaterialTheme.typography.bodyMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(if (busy) "Getting it from the PC…" else name.substringAfterLast('.', "file").uppercase().take(6) + " · tap to open",
+                    style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            Spacer(Modifier.width(4.dp))
+            if (busy) Box(Modifier.size(40.dp), contentAlignment = Alignment.Center) {
+                androidx.compose.material3.CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp, color = Gold)
+            } else IconButton(onClick = { save() }) { Icon(Glyphs.Download, "Save $name", modifier = Modifier.size(18.dp)) }
+        }
+    }
+}
+
+/** What went wrong getting a chat file, in words. */
+internal fun fileError(name: String, t: Throwable): String = when ((t as? io.github.nideta231.hermesremote.data.BridgeException)?.httpCode) {
+    404 -> if (t.message?.contains("not found", true) == true) "$name is no longer on the PC" else "Update the PC bridge to open files from the phone"
+    403 -> "The PC won't share $name"
+    413 -> "$name is too large to send to the phone"
+    else -> "Couldn't get $name: ${t.message ?: t.javaClass.simpleName}"
+}
+
+/** MIME type from the file name (for the viewer chooser and the save dialog). */
+internal fun mimeOf(name: String): String =
+    android.webkit.MimeTypeMap.getSingleton().getMimeTypeFromExtension(name.substringAfterLast('.', "").lowercase())
+        ?: "application/octet-stream"
+
+/** Android 10+: copies [file] into Downloads/Hermes Remote through MediaStore (no permission needed). */
+@androidx.annotation.RequiresApi(android.os.Build.VERSION_CODES.Q)
+private fun saveDownload(context: android.content.Context, name: String, file: java.io.File): Boolean = runCatching {
+    val values = android.content.ContentValues().apply {
+        put(android.provider.MediaStore.Downloads.DISPLAY_NAME, name)
+        put(android.provider.MediaStore.Downloads.MIME_TYPE, mimeOf(name))
+        put(android.provider.MediaStore.Downloads.RELATIVE_PATH, android.os.Environment.DIRECTORY_DOWNLOADS + "/Hermes Remote")
+        put(android.provider.MediaStore.Downloads.IS_PENDING, 1)
+    }
+    val resolver = context.contentResolver
+    val uri = resolver.insert(android.provider.MediaStore.Downloads.EXTERNAL_CONTENT_URI, values) ?: return false
+    val ok = runCatching { resolver.openOutputStream(uri)?.use { out -> file.inputStream().use { it.copyTo(out) } } != null }.getOrDefault(false)
+    if (!ok) { resolver.delete(uri, null, null); return false }
+    values.clear(); values.put(android.provider.MediaStore.Downloads.IS_PENDING, 0)
     resolver.update(uri, values, null, null)
     true
 }.getOrDefault(false)

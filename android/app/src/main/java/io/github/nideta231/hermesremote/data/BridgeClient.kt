@@ -101,6 +101,23 @@ class BridgeClient(
         }
     }
 
+    /**
+     * A file the chat [sessionId] names (a reply's `MEDIA:` line or an `@file:` the user sent),
+     * streamed into [dest]. Bridges before 1.16 answer 404.
+     */
+    suspend fun chatFile(sessionId: String, path: String, profile: String?, dest: java.io.File) = runInterruptible(Dispatchers.IO) {
+        val req = Request.Builder().url(url("/v1/sessions/${URLEncoder.encode(sessionId, "UTF-8")}/file",
+            mapOf("path" to path, "profile" to profile))).build()
+        http.newBuilder().readTimeout(120, TimeUnit.SECONDS).build().newCall(req).execute().use { resp ->
+            if (!resp.isSuccessful) throw parseError(resp, resp.body?.string().orEmpty())
+            val body = resp.body ?: throw IOException("Empty answer")
+            dest.parentFile?.mkdirs()
+            val tmp = java.io.File(dest.path + ".part")
+            tmp.outputStream().use { out -> body.byteStream().use { it.copyTo(out) } }
+            if (!tmp.renameTo(dest)) { tmp.delete(); throw IOException("Couldn't store ${dest.name}") }
+        }
+    }
+
     /** Cheap reachability check with a short timeout: an absent LAN must not stall switching. */
     suspend fun reachable(): Boolean = runInterruptible(Dispatchers.IO) {
         runCatching {

@@ -279,7 +279,7 @@ class MainActivity : ComponentActivity() {
             chooseProject = vm::chooseProject, createProject = vm::createProject,
             pickImages = { runCatching { chatPicker.launch(PickVisualMediaRequest(PickVisualMedia.ImageOnly)) } },
             pickFiles = { runCatching { filePicker.launch(arrayOf("*/*")) } }, removeFile = vm::removeFile,
-            removeAttachment = vm::removeAttachment, loadImage = vm::loadImage, answerSecret = vm::answerSecret,
+            removeAttachment = vm::removeAttachment, loadImage = vm::loadImage, fetchFile = vm::fetchChatFile, answerSecret = vm::answerSecret,
             edit = vm::editMessage,
         )
         val settingsActions = SettingsActions(

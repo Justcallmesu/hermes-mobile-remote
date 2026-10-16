@@ -15,6 +15,7 @@ import contextlib
 import json
 import logging
 import logging.handlers
+import mimetypes
 import os
 import re
 import socket
@@ -34,7 +35,8 @@ from .backend import SESSION_HEADER, Backend, BackendLocator, BackendUnavailable
 from .config import Config
 from .devices import Device, DeviceStore
 from .network import TrustStore, network_info, serving_lan_ips
-from .profiles import ProfileRefused, is_visible, media_roots, resolve_profile
+from .chat_files import referenced_file
+from .profiles import ProfileRefused, is_visible, media_roots, profile_home, resolve_profile
 from .relay import Relay
 from .tailnet import TailnetClient, is_loopback, is_private_lan_ip, is_tailnet_ip
 
@@ -46,6 +48,8 @@ APPROVAL_MODES = ("manual", "smart", "off")
 MEDIA_TYPES = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif",
                ".webp": "image/webp", ".bmp": "image/bmp"}
 MEDIA_MAX_BYTES = 25 * 1024 * 1024
+# Files a chat names (reports, spreadsheets, PDFs) the phone may download.
+CHAT_FILE_MAX_BYTES = 100 * 1024 * 1024
 # The wire contract between this bridge and the app. 2 = the WebSocket relay (v1.0.0).
 PROTOCOL = 2
 
@@ -514,6 +518,24 @@ def create_app(cfg: Config, *, locator: BackendLocator | None = None, tailnet: T
         if os.path.getsize(target) > MEDIA_MAX_BYTES:
             raise ApiError(413, "too_large", "Image too large")
         return FileResponse(target, media_type=mime, headers={"Cache-Control": "private, max-age=86400"})
+
+    @app.get("/v1/sessions/{session_id}/file")
+    async def get_chat_file(session_id: str, path: str, profile: str | None = Depends(profile_param),
+                            _: Device = Depends(device_auth)):
+        """A file a chat names (a reply's `MEDIA:` line, or an `@file:` the user sent), for the
+        phone to preview or save. Only paths that chat's own stored messages reference are served."""
+        _check_id(session_id, "session id")
+        home = profile_home(cfg.hermes_home, profile)
+        target = await asyncio.to_thread(referenced_file, home, session_id, path)
+        if target is None:
+            raise ApiError(403, "not_in_chat", "This chat doesn't name that file")
+        if not os.path.isfile(target):
+            raise ApiError(404, "not_found", "File not found on the PC")
+        if os.path.getsize(target) > CHAT_FILE_MAX_BYTES:
+            raise ApiError(413, "too_large", "File too large to send to the phone")
+        mime = mimetypes.guess_type(target)[0] or "application/octet-stream"
+        return FileResponse(target, media_type=mime, filename=os.path.basename(target),
+                            headers={"Cache-Control": "private, no-cache"})
 
     # ------------------------------------------------------------ the live connection
 

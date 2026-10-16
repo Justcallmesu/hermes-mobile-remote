@@ -62,6 +62,7 @@ import io.github.nideta231.hermesremote.data.ImageAttachments
 import io.github.nideta231.hermesremote.data.parseDispatch
 import io.github.nideta231.hermesremote.data.parseSuggestions
 import io.github.nideta231.hermesremote.data.profileParam
+import io.github.nideta231.hermesremote.data.fileName
 import io.github.nideta231.hermesremote.data.reuseKeys
 import io.github.nideta231.hermesremote.data.str
 import io.github.nideta231.hermesremote.data.strings
@@ -1270,7 +1271,12 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
                     val r = rpc("file.attach", { rid -> JSONObject().put("session_id", rid)
                         .put("data_url", FileAttachments.dataUrl(bytes, app.contentResolver.getType(android.net.Uri.parse(uri))))
                         .put("name", name) }, 120_000)
-                    r.str("ref_text") ?: throw IOException("Hermes didn't take $name")
+                    (r.str("ref_text") ?: throw IOException("Hermes didn't take $name")) to (r.str("path") ?: r.str("ref_path"))
+                }.let { staged ->
+                    val paths = staged.mapNotNull { it.second }
+                    if (paths.isNotEmpty()) _chat.update { st -> st.copy(items = st.items.map {
+                        if (it is ChatItem.User && it.key == key) it.copy(files = paths) else it }) }
+                    staged.map { it.first }
                 }
                 if (sent.isNotEmpty()) _chat.update { st -> st.copy(items = st.items.map {
                     if (it is ChatItem.User && it.key == key) it.copy(images = sent) else it }) }
@@ -1420,7 +1426,27 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
         (listOf(display.trim()).filter { it.isNotEmpty() } + files.map { "📎 ${it.second}" }).joinToString("\n")
 
     /** Bytes of a chat image: a phone uri (still sending) or a PC path, fetched over the bridge and cached. */
-    suspend fun loadImage(ref: String): ByteArray? = ImageAttachments.load(app, ref) { path -> client?.media(path) }
+    suspend fun loadImage(ref: String): ByteArray? = ImageAttachments.load(app, ref) { path ->
+        val c = client ?: return@load null
+        try { c.media(path) } catch (e: BridgeException) {
+            // A picture outside Hermes' image folders (e.g. a chart saved in a project): the chat names it.
+            val sid = _chat.value.sessionId
+            if (sid == null || e.httpCode != 403) throw e
+            val f = java.io.File(app.cacheDir, "chat-images/${path.hashCode().toUInt()}")
+            c.chatFile(sid, path, profileParam(profile), f)
+            f.readBytes().also { f.delete() }
+        }
+    }
+
+    /** A file the open chat names, downloaded from the PC into the app's cache (reused when already there). */
+    suspend fun fetchChatFile(path: String): java.io.File {
+        val c = client ?: throw IOException("Not connected to the PC")
+        val sid = _chat.value.sessionId ?: throw IOException("This chat isn't saved yet")
+        val name = fileName(path).replace(Regex("[\\\\/:*?\"<>|\\u0000-\\u001f]"), "_").ifBlank { "file" }
+        val f = java.io.File(app.cacheDir, "chat-files/${(sid + path).hashCode().toUInt()}/$name")
+        if (!f.isFile) c.chatFile(sid, path, profileParam(profile), f)
+        return f
+    }
 
     // ------------------------------------------------------------ models + reasoning
 
