@@ -139,6 +139,8 @@ class SessionActions(
     /** Move a group: (group keys as drawn, key, delta; Int.MIN_VALUE/MAX_VALUE = top/bottom). */
     val moveGroup: (List<String>, String, Int) -> Unit = { _, _, _ -> },
     val resetGroupOrder: () -> Unit = {},
+    /** New chat preselected to a project id (null = no project, Home). */
+    val newChatIn: (String?) -> Unit = {},
 )
 
 /** The session list. On phones it lives in the navigation drawer; on tablets beside the chat. */
@@ -241,7 +243,12 @@ fun SessionsPane(
             GroupMoveSheet(label, keys.indexOf(key), keys.size, view.groupOrder == GroupOrder.CUSTOM,
                 onMove = { d -> actions.moveGroup(keys, key, d) },
                 onReset = { actions.resetGroupOrder(); movingGroup = null },
-                onDismiss = { movingGroup = null })
+                onDismiss = { movingGroup = null },
+                // Project folders get "New chat here": the new chat starts with that project selected.
+                onNewChat = if (view.grouping == SessionGrouping.PROJECT && key.startsWith("p-")) ({
+                    movingGroup = null
+                    actions.newChatIn(key.removePrefix("p-").takeIf { it != SessionView.NO_PROJECT })
+                }) else null)
         }
 
         PullToRefreshBox(isRefreshing = state.loading && state.items.isNotEmpty(), onRefresh = actions.refresh,
@@ -669,13 +676,22 @@ private const val PINNED_KEY = "Pinned"
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun GroupMoveSheet(label: String, index: Int, count: Int, custom: Boolean,
-                           onMove: (Int) -> Unit, onReset: () -> Unit, onDismiss: () -> Unit) {
+                           onMove: (Int) -> Unit, onReset: () -> Unit, onDismiss: () -> Unit,
+                           onNewChat: (() -> Unit)? = null) {
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
         containerColor = MaterialTheme.colorScheme.surfaceContainer) {
         Column(Modifier.fillMaxWidth().padding(horizontal = 20.dp).padding(bottom = 24.dp)) {
             Text(label, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
             Text("Position ${index + 1} of $count", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             Spacer(Modifier.size(8.dp))
+            if (onNewChat != null) {
+                Button(onClick = onNewChat, modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(14.dp)) {
+                    Icon(Glyphs.Compose, null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text("New chat in $label", maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
+                Spacer(Modifier.size(4.dp))
+            }
             val top = index <= 0
             val bottom = index >= count - 1
             TextButton(enabled = !top, onClick = { onMove(Int.MIN_VALUE) }) { Text("Move to top") }

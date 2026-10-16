@@ -3,6 +3,12 @@
 Releases are git tags; the version in the app comes from the tag. `git log v0.9.0..vX.Y.Z` is the
 authoritative history — this file only summarises what is worth knowing before upgrading.
 
+## v1.15.1
+
+- Drawer: long-press a project folder (grouped by Project) → "New chat in <project>" starts a chat
+  with that project already selected ("Home" starts one with no project).
+- Project picker: a search field filters projects by name or folder.
+
 ## v1.15.0
 
 - Drawer is compact so more chats fit: Scheduled and Settings are icons in the header, New chat is a

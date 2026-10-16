@@ -258,6 +258,7 @@ class MainActivity : ComponentActivity() {
             delete = vm::delete,
             setPinned = vm::setPinned,
             newChat = { vm.newChat(); go(Page.CHAT) },
+            newChatIn = { id -> vm.newChat(); vm.chooseProject(id); go(Page.CHAT) },
             openSettings = { go(Page.SETTINGS) },
             switchPc = { vm.switchPc(it); go(Page.CHAT) },
             addPc = { scope.launch { drawer.close() }; vm.startAddingPc() },

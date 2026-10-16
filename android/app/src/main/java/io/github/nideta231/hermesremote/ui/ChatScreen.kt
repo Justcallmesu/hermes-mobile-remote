@@ -1060,17 +1060,29 @@ private fun ProjectSheet(
 ) {
     val sheet = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     var creating by remember { mutableStateOf(false) }
+    var query by remember { mutableStateOf("") }
+    val shown = remember(projects, query) {
+        val q = query.trim()
+        if (q.isEmpty()) projects else projects.filter { it.label.contains(q, true) || it.path?.contains(q, true) == true }
+    }
     if (creating) NewProjectDialog(onDismiss = { creating = false }, onCreate = onCreate, onCreated = { creating = false; onDismiss() })
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheet, containerColor = MaterialTheme.colorScheme.surfaceContainer) {
         Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
             Text("Project", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
             Text("The new chat starts in this project's folder and shows under it on the desktop.",
                 style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            Spacer(Modifier.size(12.dp))
+            Spacer(Modifier.size(8.dp))
+            SearchField(query, { query = it }, "Search projects", Modifier.fillMaxWidth())
+            Spacer(Modifier.size(8.dp))
             LazyColumn(Modifier.fillMaxWidth().heightIn(max = 520.dp), contentPadding = PaddingValues(bottom = 24.dp)) {
-                item { SheetOption("+ New project", "Create one on the PC from a folder", selected = false) { creating = true } }
-                item { SheetOption("No project", "Hermes' default folder", selected = current == null) { onPick(null) } }
-                items(projects, key = { it.id }) { p ->
+                if (query.isBlank()) {
+                    item { SheetOption("+ New project", "Create one on the PC from a folder", selected = false) { creating = true } }
+                    item { SheetOption("No project", "Hermes' default folder", selected = current == null) { onPick(null) } }
+                }
+                if (shown.isEmpty()) item {
+                    Text("No project matches “$query”.", color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(12.dp))
+                }
+                items(shown, key = { it.id }) { p ->
                     SheetOption(p.label, p.path, selected = current == p.id) { onPick(p.id) }
                 }
             }
