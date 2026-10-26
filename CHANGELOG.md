@@ -5,6 +5,22 @@ authoritative history — this file only summarises what is worth knowing before
 
 ## Unreleased
 
+- PC Glance is now part of the app. The drawer header has a PC page (live CPU/RAM/temperature,
+  disk, network, per-core bars, history from 1 hour to 1 year, alerts), a process list where you
+  can stop or force-stop a process, and Claude plan usage (session and weekly limits with reset
+  times and history). Two home-screen widgets: *PC stats* and *Claude usage*. Update the bridge
+  on the PC for these; the separate PC Glance app and agent can be uninstalled.
+- Terminal: a shell on your PC from the phone (the `>_` icon), with colours and a key bar (Esc,
+  Tab, Ctrl, ^C, arrows). Turn it off with `terminal = false` in the bridge's config.toml.
+- Re-pair: when a pairing breaks, Settings > Re-pair this PC (or the PC's ⋮ in the PC switcher)
+  takes a fresh code and keeps the PC's chats, drafts and name; no more delete and pair again.
+  When the PC refuses the phone's token, the app now says so and offers Re-pair instead of
+  "can't reach your PC". On the PC: tray > Devices > (phone) > Re-pair, or
+  `hermes-remote-bridge pair <name> --replace`, which issues a new code and revokes the old one.
+- Tray (Linux and Windows): *Run doctor...* shows every check with its verdict.
+- Typing `/` and picking a skill or command from the suggestions no longer drops the slash (the
+  skill ran as plain text before).
+- Chat top bar: removed the New chat and Pin buttons; they are in the drawer and the chat's ⋮ menu.
 - Bridge: no longer crash-loops on start when Tailscale is installed but stopped; it listens on
   the remaining addresses instead of failing with "Cannot assign requested address".
 - Bridge on Windows: a project description saved from the phone keeps its line endings as written.
