@@ -79,10 +79,29 @@ Never point a probe run at a live conversation session. Create a throwaway sessi
 Versions ship by tag. The version comes from the tag — `v0.8.1` becomes versionName `0.8.1` and
 versionCode `801`. The default in `build.gradle.kts` is the next development version.
 
+Before tagging, check that the changelog covers everything since the last release, including
+pull requests merged by other people:
+
 ```bash
-git push origin main                       # wait for CI to go green
+git fetch --tags && git switch main && git pull
+last=$(git describe --tags --abbrev=0)
+git log --format='%h %an: %s' $last..HEAD  # every change since the last release
+git diff --stat $last..HEAD                # every file
+.github/scripts/check-changelog.sh $last HEAD
+```
+
+Then compare the `## Unreleased` entries with that log: every user-visible change needs a line,
+whoever made it. Rename `## Unreleased` to `## v0.9.1`, commit that as `docs: changelog for
+v0.9.1` on a branch, merge it, and tag the merge:
+
+```bash
 git tag -a v0.9.1 -m v0.9.1 && git push origin v0.9.1
 ```
+
+The release workflow refuses a tag whose `## vX.Y.Z` section is missing, that still has an
+`## Unreleased` heading, or whose diff from the previous tag changes shipped code without touching
+`CHANGELOG.md`. It cannot judge whether the entries are *complete*; that is what the log above is
+for.
 
 `.github/workflows/release.yml` then builds, verifies the APK against the pinned signing
 certificate (SHA-256) and publishes `HermesRemote-X.Y.Z.apk`. Installed apps see it in the System
