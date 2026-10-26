@@ -1,1 +1,1 @@
-{"test": [{"name": "bridge", "cmd": "uv run pytest -q", "cwd": "bridge"}, {"name": "android", "cmd": "./build.sh test", "cwd": "android"}], "path": ["C:/home/tools/jdk-17/bin"]}
+{"test": [{"name": "bridge", "cmd": "uv run pytest -q", "cwd": "bridge"}, {"name": "android", "cmd": "bash build.sh test", "cwd": "android"}], "path": ["C:/home/tools/jdk-17/bin"]}
