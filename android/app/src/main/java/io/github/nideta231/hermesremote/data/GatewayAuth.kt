@@ -10,6 +10,10 @@ import org.json.JSONObject
 /** Minimal HTTP seam: the app wires OkHttp behind it, tests fake it. */
 interface HttpTransport {
     suspend fun post(url: String, bearer: String?, jsonBody: String): HttpReply
+
+    /** GET / PATCH / ... for the gateway's REST routes ([jsonBody] null = no body). Transports that only sign in need not offer it. */
+    suspend fun send(method: String, url: String, bearer: String?, jsonBody: String?): HttpReply =
+        throw UnsupportedOperationException("$method is not supported by this transport")
 }
 
 class HttpReply(val status: Int, val body: String)

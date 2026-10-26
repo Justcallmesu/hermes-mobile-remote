@@ -24,7 +24,7 @@ class BridgeClient(
     // real rule (tailnet, or LAN over pinned HTTPS).
     private val hostGuard: (host: String, https: Boolean) -> Boolean =
         { host, https -> Transport.allowsToken(host, https, pairing.pin != null) },
-) {
+) : SessionsSource {
     private val base = pairing.url.trimEnd('/')
     private val jsonType = "application/json".toMediaType()
 
@@ -94,7 +94,7 @@ class BridgeClient(
     suspend fun me() = call("GET", "/v1/me")
 
     /** An image a chat shows, by the PC path Hermes stored for it (`/v1/media`; bridges before 1.11 answer 404). */
-    suspend fun media(path: String): ByteArray = runInterruptible(Dispatchers.IO) {
+    override suspend fun media(path: String): ByteArray = runInterruptible(Dispatchers.IO) {
         http.newCall(Request.Builder().url(url("/v1/media", mapOf("path" to path))).build()).execute().use { resp ->
             if (!resp.isSuccessful) throw parseError(resp, resp.body?.string().orEmpty())
             resp.body?.bytes() ?: ByteArray(0)
@@ -127,15 +127,15 @@ class BridgeClient(
         }.getOrDefault(false)
     }
 
-    suspend fun status(): List<ComponentStatus> = StatusMapper.map(call("GET", "/v1/status").getJSONObject("components"))
+    override suspend fun status(): List<ComponentStatus> = StatusMapper.map(call("GET", "/v1/status").getJSONObject("components"))
 
     /** Hermes profiles the phone may use. Older bridges have no such route (404): treat as default only. */
-    suspend fun profiles(): List<HermesProfile> = parseProfiles(call("GET", "/v1/profiles"))
+    override suspend fun profiles(): List<HermesProfile> = parseProfiles(call("GET", "/v1/profiles"))
 
     // Every call below acts on one Hermes profile: [profile] null (or "default") is the default profile.
 
     /** The desktop sidebar's list: same query, same order (newest activity first). */
-    suspend fun sessions(limit: Int = 50, offset: Int = 0, profile: String? = null): Pair<List<SessionSummary>, Boolean> {
+    override suspend fun sessions(limit: Int, offset: Int, profile: String?): Pair<List<SessionSummary>, Boolean> {
         val o = call("GET", "/v1/sessions", mapOf("limit" to limit, "offset" to offset) + scoped(profile))
         val list = o.optJSONArray("sessions").objects().map(::parseSession)
         val total = if (o.isNull("total")) null else o.optInt("total")
@@ -149,10 +149,10 @@ class BridgeClient(
     suspend fun setProjectIdea(id: String, text: String, profile: String? = null) =
         call("PUT", "/v1/projects/${enc(id)}/idea", scoped(profile), JSONObject().put("text", text))
 
-    suspend fun renameSession(id: String, title: String, profile: String? = null) =
+    override suspend fun renameSession(id: String, title: String, profile: String?) =
         call("PATCH", "/v1/sessions/${enc(id)}", scoped(profile), JSONObject().put("title", title))
 
-    suspend fun setPinned(id: String, pinned: Boolean, profile: String? = null) =
+    override suspend fun setPinned(id: String, pinned: Boolean, profile: String?) =
         call("PATCH", "/v1/sessions/${enc(id)}", scoped(profile), JSONObject().put("pinned", pinned))
 
     suspend fun approvalMode(profile: String? = null): String =

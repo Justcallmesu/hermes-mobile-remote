@@ -47,9 +47,12 @@ private fun ProjectFields(
         OutlinedTextField(path, onPath, label = { Text("Folder on the PC (optional)") }, singleLine = true,
             placeholder = { Text("~/Workspace/my-app") }, modifier = Modifier.fillMaxWidth())
         Text(pathHint, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        OutlinedTextField(description, onDescription, label = { Text("Description (optional)") }, minLines = 4, maxLines = 12,
-            placeholder = { Text("# My app\nWhat it is, the stack, goals…") }, modifier = Modifier.fillMaxWidth())
-        Text(DESCRIPTION_HINT, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        // The description is written to IDEA.md on the PC through the bridge: a gateway host has no such route.
+        if (io.github.nideta231.hermesremote.data.HostFeature.PROJECT_IDEA !in LocalHiddenFeatures.current) {
+            OutlinedTextField(description, onDescription, label = { Text("Description (optional)") }, minLines = 4, maxLines = 12,
+                placeholder = { Text("# My app\nWhat it is, the stack, goals…") }, modifier = Modifier.fillMaxWidth())
+            Text(DESCRIPTION_HINT, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
         error?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error) }
     }
 }

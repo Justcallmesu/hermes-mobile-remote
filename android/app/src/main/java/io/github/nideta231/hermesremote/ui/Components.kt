@@ -55,6 +55,9 @@ import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.unit.Dp
 import kotlinx.coroutines.delay
 
+/** Bridge-only features the active host lacks (a gateway host): screens and controls behind them are not drawn. */
+val LocalHiddenFeatures = androidx.compose.runtime.staticCompositionLocalOf<Set<io.github.nideta231.hermesremote.data.HostFeature>> { emptySet() }
+
 /** Line icons drawn from SVG paths (24×24), so the app needs no icon dependency beyond the core set. */
 object Glyphs {
     private fun line(vararg paths: String) = ImageVector.Builder(defaultWidth = 24.dp, defaultHeight = 24.dp, viewportWidth = 24f, viewportHeight = 24f)

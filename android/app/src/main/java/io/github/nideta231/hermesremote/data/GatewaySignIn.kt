@@ -98,4 +98,12 @@ class OkHttpTransport(private val client: OkHttpClient = OkHttpClient()) : HttpT
             .build()
         client.newCall(req).execute().use { HttpReply(it.code, it.body?.string().orEmpty()) }
     }
+
+    override suspend fun send(method: String, url: String, bearer: String?, jsonBody: String?): HttpReply = withContext(Dispatchers.IO) {
+        val req = Request.Builder().url(url)
+            .method(method, jsonBody?.toRequestBody("application/json".toMediaType()))
+            .apply { if (bearer != null) header("Authorization", "Bearer $bearer") }
+            .build()
+        client.newCall(req).execute().use { HttpReply(it.code, it.body?.string().orEmpty()) }
+    }
 }

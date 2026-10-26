@@ -98,6 +98,7 @@ import io.github.nideta231.hermesremote.ProfilesState
 import io.github.nideta231.hermesremote.SessionsState
 import io.github.nideta231.hermesremote.data.SystemState
 import io.github.nideta231.hermesremote.data.UpdateState
+import io.github.nideta231.hermesremote.data.HostFeature
 import io.github.nideta231.hermesremote.data.Pairing
 import io.github.nideta231.hermesremote.data.PairingParser
 import io.github.nideta231.hermesremote.data.ProjectRef
@@ -214,7 +215,8 @@ fun SessionsPane(
                 }
                 Icon(Glyphs.Chevron, "Switch PC", modifier = Modifier.padding(start = 4.dp).size(18.dp))
             }
-            IconButton(onClick = actions.openScheduled) { Icon(Glyphs.Clock, "Scheduled", modifier = Modifier.size(20.dp)) }
+            if (HostFeature.SCHEDULED !in LocalHiddenFeatures.current)
+                IconButton(onClick = actions.openScheduled) { Icon(Glyphs.Clock, "Scheduled", modifier = Modifier.size(20.dp)) }
             IconButton(onClick = actions.openSettings) { Icon(Glyphs.Settings, "Settings", modifier = Modifier.size(20.dp)) }
         }
         if (pcSheet) PcSheet(pcs, actions, onDismiss = { pcSheet = false })
@@ -776,24 +778,31 @@ fun SettingsScreen(
 ) {
     var confirmUnpair by remember { mutableStateOf(false) }
     var modelSheet by remember { mutableStateOf(false) }
+    val hidden = LocalHiddenFeatures.current
     LaunchedEffect(Unit) { actions.refresh() }
     PageScaffold("Settings", onBack) {
         PullToRefreshBox(isRefreshing = state.loading, onRefresh = actions.refresh, modifier = Modifier.fillMaxSize()) {
             Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).navigationBarsPadding()
                 .padding(horizontal = 16.dp, vertical = 4.dp)) {
                 UpdateBanner(update, actions.openUpdate)
-                SettingsSection("Connection", "How this phone reaches your PC.") {
+                // The bridge's status card, transport choice, approvals and default model are bridge routes.
+                val bridgeCard = HostFeature.BRIDGE_STATUS !in hidden
+                if (bridgeCard) SettingsSection("Connection", "How this phone reaches your PC.") {
                     ConnectionPanel(conn, state.error, actions)
                 }
                 SettingsSection("Hermes on your PC", "Shared with the desktop app and messaging.") {
                     StatusPanel(state)
-                    Spacer(Modifier.size(10.dp))
-                    DefaultModelPanel(state, models) { actions.loadModels(); modelSheet = true }
-                    Spacer(Modifier.size(10.dp))
-                    ApprovalPanel(state, actions.setApprovalMode)
-                    Spacer(Modifier.size(10.dp))
-                    Panel {
-                        PanelRow("Vault", "Saved logins, cards and addresses Hermes can fill", Glyphs.Shield, onClick = actions.openVault)
+                    if (bridgeCard) {
+                        Spacer(Modifier.size(10.dp))
+                        DefaultModelPanel(state, models) { actions.loadModels(); modelSheet = true }
+                        Spacer(Modifier.size(10.dp))
+                        ApprovalPanel(state, actions.setApprovalMode)
+                    }
+                    if (HostFeature.VAULT !in hidden) {
+                        Spacer(Modifier.size(10.dp))
+                        Panel {
+                            PanelRow("Vault", "Saved logins, cards and addresses Hermes can fill", Glyphs.Shield, onClick = actions.openVault)
+                        }
                     }
                 }
                 SettingsSection("Appearance", "Only changes this phone.") {

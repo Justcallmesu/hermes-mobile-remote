@@ -30,6 +30,8 @@ data class SystemState(
 class SystemSettings(
     private val scope: CoroutineScope,
     private val client: () -> BridgeClient?,
+    /** Where the health rows come from: the bridge, or a gateway host's `/api/status`. */
+    private val source: () -> SessionsSource? = client,
     private val profile: () -> String,
     private val describe: (Throwable) -> String,
     private val say: (String) -> Unit,
@@ -41,14 +43,15 @@ class SystemSettings(
 
 
     fun refresh() {
-        val c = client() ?: return
+        val src = source() ?: return
+        val c = client()  // null on a gateway host: no approval mode or default model there
         val asked = profile()
         _system.update { it.copy(loading = true) }
         scope.launch {
             try {
-                val comps = c.status()
-                val mode = runCatching { c.approvalMode(asked) }.getOrNull()
-                val def = runCatching { c.defaultModel(asked) }.getOrNull()
+                val comps = src.status()
+                val mode = c?.let { runCatching { it.approvalMode(asked) }.getOrNull() }
+                val def = c?.let { runCatching { it.defaultModel(asked) }.getOrNull() }
                 if (asked != profile()) return@launch
                 _system.update {
                     it.copy(components = comps, loading = false, error = null, checkedAt = System.currentTimeMillis(),

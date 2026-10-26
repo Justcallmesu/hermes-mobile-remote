@@ -54,7 +54,9 @@ import io.github.nideta231.hermesremote.data.HostKind
 import io.github.nideta231.hermesremote.data.decideConnection
 import io.github.nideta231.hermesremote.data.gatewayAuthFor
 import io.github.nideta231.hermesremote.data.LoopbackListener
+import io.github.nideta231.hermesremote.data.GatewayRestClient
 import io.github.nideta231.hermesremote.data.OkHttpTransport
+import io.github.nideta231.hermesremote.data.SessionsSource
 import io.github.nideta231.hermesremote.data.Pkce
 import io.github.nideta231.hermesremote.data.Notifier
 import io.github.nideta231.hermesremote.data.Pairing
@@ -180,6 +182,8 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
     private var drafts = DraftStore(app, ProfileStore.draftsFile(profiles.activeId))
     private var bridgeAddresses: Map<String, List<String>>? = null
     private var client: BridgeClient? = null
+    /** Sessions, profiles, pin/rename, status and pictures of the active host: [client] for a bridge, the gateway's own REST routes otherwise. */
+    private var source: SessionsSource? = null
     private var gateway: Gateway? = null
     private var gatewayJobs: List<Job> = emptyList()
 
@@ -306,7 +310,7 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
         call = { method, params -> (gateway ?: throw IOException("Not connected to your PC")).call(method, scoped(params), 30_000) },
         describe = ::describe, say = { _toast.value = it })
     /** Settings > PC: the bridge's health, and the profile's approval mode and default model. */
-    val settings = SystemSettings(viewModelScope, client = { client }, profile = { profile },
+    val settings = SystemSettings(viewModelScope, client = { client }, source = { source }, profile = { profile },
         describe = ::describe, say = { _toast.value = it },
         onDefaultModel = { option -> _models.update { cat -> cat?.copy(options = cat.options.map { o ->
             o.copy(current = o.id == option.id && o.provider == option.provider) }) } })
@@ -450,6 +454,7 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
     /** Point the app (REST and the live socket) at [c]. */
     private fun useClient(c: BridgeClient) {
         client = c
+        source = c
         attach(LiveLink.connect(app, c))
     }
 
@@ -469,8 +474,13 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
                 _gatewayHost.value = GatewayHostState(pr.id, pr.name.ifBlank { GatewayUrl.hostName(c.baseUrl) }, c.baseUrl, signedOut = false)
                 refreshPcs()
                 _conn.update { it.copy(activeUrl = c.baseUrl) }
-                // No BridgeClient: REST-backed screens stay empty (ticket 06) and nothing calls /v1/*.
-                attach(LiveLink.connectGateway(app, c, gatewayAuthFor(c, GatewayCredentialStore(app, pr.id), OkHttpTransport())))
+                // No BridgeClient: nothing calls the bridge's /v1 routes. Sessions, profiles and status come from the gateway's /api routes.
+                val auth = gatewayAuthFor(c, GatewayCredentialStore(app, pr.id), OkHttpTransport())
+                source = GatewayRestClient(c.baseUrl, auth, OkHttpTransport()) { _gatewayHost.update { it?.copy(signedOut = true) } }
+                attach(LiveLink.connectGateway(app, c, auth))
+                refreshProfiles()
+                refreshSessions()
+                settings.refresh()
             }
             HostConnection.NeedsSignIn -> {
                 _gatewayHost.value = GatewayHostState(pr.id, pr.name.ifBlank { "Gateway" }, null, signedOut = true)
@@ -741,6 +751,7 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
         LiveLink.close()
         gateway = null
         client = null
+        source = null
         bridgeAddresses = null
         _pairing.value = null
         _gatewayHost.value = null
@@ -980,7 +991,7 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
      * the list jumped on every refresh.
      */
     private fun refreshSessionsHead() {
-        val c = client ?: return
+        val c = source ?: return
         if (_sessions.value.items.isEmpty()) return refreshSessions(quiet = true)
         val asked = profile
         viewModelScope.launch {
@@ -1110,7 +1121,7 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
 
     /** Which profiles the PC has. A bridge too old to list them leaves the app on the default profile. */
     fun refreshProfiles() {
-        val c = client ?: return
+        val c = source ?: return
         viewModelScope.launch {
             val items = try {
                 c.profiles()
@@ -1151,7 +1162,7 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
     // ------------------------------------------------------------ sessions
 
     fun refreshSessions(quiet: Boolean = false) {
-        val c = client ?: return
+        val c = source ?: return
         val asked = profile
         if (!quiet) _sessions.update { it.copy(loading = true, error = null) }
         viewModelScope.launch {
@@ -1202,7 +1213,7 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
     }
 
     fun loadMoreSessions() {
-        val c = client ?: return
+        val c = source ?: return
         val cur = _sessions.value
         if (cur.loading || !cur.hasMore) return
         _sessions.update { it.copy(loading = true) }
@@ -1365,7 +1376,7 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
 
     /** Pin or unpin any session; updates the list and the open chat optimistically. */
     fun setPinned(id: String, pinned: Boolean) {
-        val c = client ?: return
+        val c = source ?: return
         fun apply(value: Boolean) {
             if (_chat.value.sessionId == id) _chat.update { it.copy(pinned = value) }
             _sessions.update { s -> s.copy(items = s.items.map { if (it.id == id) it.copy(pinned = value) else it }) }
@@ -1383,7 +1394,7 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
     }
 
     fun rename(id: String, title: String) {
-        val c = client ?: return
+        val c = source ?: return
         viewModelScope.launch {
             try {
                 c.renameSession(id, title, profile)
@@ -1609,13 +1620,14 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
 
     /** Bytes of a chat image: a phone uri (still sending) or a PC path, fetched over the bridge and cached. */
     suspend fun loadImage(ref: String): ByteArray? = ImageAttachments.load(app, ref) { path ->
-        val c = client ?: return@load null
+        val c = source ?: return@load null
         try { c.media(path) } catch (e: BridgeException) {
             // A picture outside Hermes' image folders (e.g. a chart saved in a project): the chat names it.
             val sid = _chat.value.sessionId
-            if (sid == null || e.httpCode != 403) throw e
+            val bridge = client
+            if (sid == null || bridge == null || e.httpCode != 403) throw e
             val f = java.io.File(app.cacheDir, "chat-images/${path.hashCode().toUInt()}")
-            c.chatFile(sid, path, profileParam(profile), f)
+            bridge.chatFile(sid, path, profileParam(profile), f)
             f.readBytes().also { f.delete() }
         }
     }

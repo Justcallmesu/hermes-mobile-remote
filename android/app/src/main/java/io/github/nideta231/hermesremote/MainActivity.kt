@@ -57,7 +57,10 @@ import androidx.compose.ui.unit.dp
 import com.journeyapps.barcodescanner.ScanContract
 import com.journeyapps.barcodescanner.ScanOptions
 import io.github.nideta231.hermesremote.data.DEFAULT_HERMES_PROFILE
+import io.github.nideta231.hermesremote.data.HostKind
 import io.github.nideta231.hermesremote.data.Notifier
+import io.github.nideta231.hermesremote.data.hiddenFeatures
+import io.github.nideta231.hermesremote.ui.LocalHiddenFeatures
 import io.github.nideta231.hermesremote.ui.ChatActions
 import io.github.nideta231.hermesremote.ui.ProjectActions
 import io.github.nideta231.hermesremote.ui.CronActions
@@ -222,7 +225,8 @@ class MainActivity : ComponentActivity() {
                 }, onCancelSignIn = vm::cancelGatewaySignIn, imageError = imageError.value,
                     onCancel = if (hasHost) ({ pairUri.value = null; imageError.value = null; vm.cancelAddingPc() }) else null)
             } else {
-                PairedApp()
+                val hidden = hiddenFeatures(if (gw != null) HostKind.GATEWAY else HostKind.BRIDGE)
+                androidx.compose.runtime.CompositionLocalProvider(LocalHiddenFeatures provides hidden) { PairedApp() }
             }
         }
     }
