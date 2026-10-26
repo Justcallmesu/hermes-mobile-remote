@@ -44,7 +44,7 @@ object LiveLink {
 
     /** The same for a gateway host: its socket takes a fresh ticket from [auth] on every connect. */
     fun connectGateway(context: Context, creds: GatewayCredentials, auth: GatewayAuth): Gateway =
-        adopt(context, buildGateway(okhttp3.OkHttpClient(), creds.baseUrl, auth))
+        adopt(context, buildGateway(SharedHttp.client, creds.baseUrl, auth))
 
     private fun adopt(context: Context, fresh: Gateway): Gateway {
         gateway?.let { g ->

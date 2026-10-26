@@ -90,7 +90,7 @@ object GatewayUrl {
 }
 
 /** [HttpTransport] over OkHttp: non-2xx replies are returned, only I/O failures throw. */
-class OkHttpTransport(private val client: OkHttpClient = OkHttpClient()) : HttpTransport {
+class OkHttpTransport(private val client: OkHttpClient = SharedHttp.client) : HttpTransport {
     override suspend fun post(url: String, bearer: String?, jsonBody: String): HttpReply = withContext(Dispatchers.IO) {
         val req = Request.Builder().url(url)
             .post(jsonBody.toRequestBody("application/json".toMediaType()))

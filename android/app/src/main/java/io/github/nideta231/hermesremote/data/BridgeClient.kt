@@ -19,7 +19,7 @@ import java.util.concurrent.TimeUnit
  */
 class BridgeClient(
     private val pairing: Pairing,
-    baseClient: OkHttpClient = OkHttpClient(),
+    baseClient: OkHttpClient = SharedHttp.client,
     // Tests only: lets a loopback TLS server stand in for the PC. Production always uses the
     // real rule (tailnet, or LAN over pinned HTTPS).
     private val hostGuard: (host: String, https: Boolean) -> Boolean =
