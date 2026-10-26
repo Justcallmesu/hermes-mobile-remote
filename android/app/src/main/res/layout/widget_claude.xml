@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/widget_root" android:layout_width="match_parent" android:layout_height="match_parent"
+    android:orientation="vertical" android:padding="12dp" android:background="@drawable/widget_bg">
+    <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal">
+        <TextView android:id="@+id/widget_title" android:layout_width="0dp" android:layout_weight="1"
+            android:layout_height="wrap_content" android:text="Claude" android:textColor="#D97757"
+            android:textSize="13sp" android:textStyle="bold" />
+        <TextView android:id="@+id/widget_time" android:layout_width="wrap_content" android:layout_height="wrap_content"
+            android:text="tap to refresh" android:textColor="#E8B54A" android:textSize="11sp" android:paddingStart="8dp" />
+    </LinearLayout>
+    <TextView android:id="@+id/widget_l1" android:layout_width="match_parent" android:layout_height="wrap_content"
+        android:layout_marginTop="6dp" android:text="Session --" android:textColor="#E6E9F0" android:textSize="13sp" />
+    <ProgressBar android:id="@+id/widget_p1" style="@android:style/Widget.ProgressBar.Horizontal"
+        android:layout_width="match_parent" android:layout_height="8dp" android:max="100" android:progress="0"
+        android:progressTint="#D97757" />
+    <TextView android:id="@+id/widget_l2" android:layout_width="match_parent" android:layout_height="wrap_content"
+        android:layout_marginTop="6dp" android:text="Weekly --" android:textColor="#E6E9F0" android:textSize="13sp" />
+    <ProgressBar android:id="@+id/widget_p2" style="@android:style/Widget.ProgressBar.Horizontal"
+        android:layout_width="match_parent" android:layout_height="8dp" android:max="100" android:progress="0"
+        android:progressTint="#5B8DEF" />
+    <TextView android:id="@+id/widget_sub" android:layout_width="match_parent" android:layout_height="wrap_content"
+        android:layout_marginTop="4dp" android:text="" android:textColor="#6B7488" android:textSize="11sp" android:maxLines="2" />
+</LinearLayout>

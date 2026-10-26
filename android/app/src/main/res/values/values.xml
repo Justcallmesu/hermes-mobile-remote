@@ -1,6 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">Hermes Remote</string>
+    <string name="widget_pc_desc">Your PC\'s CPU, RAM and temperature, with the last hour</string>
+    <string name="widget_claude_desc">Claude plan usage: session and weekly limits</string>
     <style name="Theme.HermesRemote" parent="android:Theme.Material.NoActionBar">
         <item name="android:windowBackground">@color/bg</item>
         <item name="android:statusBarColor">@android:color/transparent</item>

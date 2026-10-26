@@ -194,7 +194,10 @@ val REASONING_LEVELS = listOf("none", "minimal", "low", "medium", "high", "xhigh
 data class SlashSuggestion(val text: String, val display: String, val meta: String, val skill: Boolean)
 
 fun parseSuggestions(o: JSONObject): List<SlashSuggestion> = o.optJSONArray("items").objects().mapNotNull { i ->
-    val text = i.str("text")?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
+    // complete.slash returns the text after the "/" (it replaces from index 1), so "/hum" comes back
+    // as "humanizer". The composer replaces the whole draft, so put the slash back.
+    val raw = i.str("text")?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
+    val text = "/" + raw.removePrefix("/")
     val name = "/" + text.removePrefix("/").substringBefore(' ')
     if (name.lowercase() in UNAVAILABLE_COMMANDS) return@mapNotNull null
     SlashSuggestion(text, i.str("display")?.takeIf { it.isNotBlank() } ?: name, i.str("meta").orEmpty(), i.str("kind") == "skill")

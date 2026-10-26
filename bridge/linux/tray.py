@@ -263,6 +263,7 @@ class Tray(QObject):
             for check in h["checks"]:
                 mark = {"ok": "\u2713", "warn": "!"}.get(check.get("level"), "\u2717")
                 self.add(details, f"{mark}  {check.get('message', '')}")
+        self.add(m, "Run doctor...", self.run_doctor)
         self.add(m, "Refresh now", self.changed)
         m.addSeparator()
 
@@ -293,12 +294,14 @@ class Tray(QObject):
                          lambda i=entry["id"]: self.after(lambda: bridge("trust", "--remove", i)))
 
         dev = m.addMenu("Devices")
-        self.add(dev, "Pair a new device...", self.pair)
+        self.add(dev, "Pair a new device...", lambda: self.pair())
         active = [d for d in ((h["devices"] or {}).get("devices") or []) if d.get("active")]
         if active:
             dev.addSeparator()
             for device in active:
-                self.add(dev, f"{device['name']} - revoke", lambda d=device: self.revoke(d))
+                one = dev.addMenu(device["name"])
+                self.add(one, "Re-pair (new code, old one stops working)...", lambda d=device: self.pair(d["name"]))
+                self.add(one, "Revoke", lambda d=device: self.revoke(d))
         m.addSeparator()
 
         self.add(m, "Copy last 50 log lines", self.copy_log)
@@ -339,11 +342,41 @@ class Tray(QObject):
         self.health = {**self.health, "devices": {"devices": [d for d in rows if d.get("id") != device_id]}}
         self.show_health()
 
-    def pair(self) -> None:
-        name, ok = QInputDialog.getText(None, "Pair a device", "Name for this phone:", text="phone")
-        name = name.strip()
-        if not ok or not name:
+    def run_doctor(self) -> None:
+        """Every check with a tick or cross, in a dialog: the same list `doctor` prints."""
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        try:
+            checks = (bridge_json("doctor", "--json") or {}).get("checks") or []
+        finally:
+            QApplication.restoreOverrideCursor()
+        if not checks:
+            QMessageBox.warning(None, "Doctor", f"The doctor did not answer. Run in a terminal:\n\n'{BIN}' doctor")
             return
+        marks = {"ok": "\u2713", "warn": "!"}
+        lines = [f"{marks.get(c.get('level'), chr(0x2717))}  {c.get('message', '')}" for c in checks]
+        failed = sum(c.get("level") not in ("ok", "warn") for c in checks)
+        lines.append("")
+        lines.append("All good." if not failed else f"{failed} problem(s) found.")
+        box = QMessageBox(QMessageBox.Icon.Information if not failed else QMessageBox.Icon.Warning,
+                          "Hermes Remote doctor", "\n".join(lines))
+        box.exec()
+        self.changed()
+
+    def pair(self, replace: str | None = None) -> None:
+        """Pair a new phone, or with [replace] re-pair that one: its old code stops working and
+        the app, scanning the new code, replaces the broken pairing in place."""
+        if replace:
+            if QMessageBox.question(None, "Re-pair device", f"Make a new pairing code for '{replace}'?\n\n"
+                                    "Its current pairing stops working now. Scan the new code in the app "
+                                    "(Settings -> Re-pair this PC) and it picks up where it left off.") \
+                    != QMessageBox.StandardButton.Yes:
+                return
+            name = replace
+        else:
+            name, ok = QInputDialog.getText(None, "Pair a device", "Name for this phone:", text="phone")
+            name = name.strip()
+            if not ok or not name:
+                return
         # Same as the Windows tray: the CLI writes the pairing payload to a mode-600 file (never
         # stdout), the QR is drawn from it, and both files are deleted when the dialog closes.
         STATE_DIR.mkdir(parents=True, exist_ok=True)
@@ -351,7 +384,7 @@ class Tray(QObject):
         cred, qr = work / "pairing.json", work / "pairing-qr.png"
         QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
         try:
-            out = bridge("pair", name, "--token-file", str(cred), timeout=60)
+            out = bridge("pair", name, "--token-file", str(cred), *(["--replace"] if replace else []), timeout=60)
             payload = json.loads(cred.read_text()) if cred.exists() else None
             if payload:
                 run([str(BIN.parent / "python"), "-c", QR_SCRIPT, str(cred), str(qr)], 30)

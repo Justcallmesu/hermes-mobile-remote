@@ -105,6 +105,10 @@ Stated plainly, because a security document that only lists wins is not useful.
   on a network you *did* trust is watching. Use Tailscale when that matters.
 - **A stolen PC while it is unlocked and on.** The token store and the key are readable by your
   user account.
+- **A paired phone is a shell on your PC.** The Terminal page runs `$SHELL` as your user, and the
+  process list can stop your processes. That is no more than Hermes itself can do, but it is
+  direct. Revoke a lost phone at once, or set `terminal = false` (and `monitor = false`) in
+  config.toml if you don't want either.
 - **Hermes' own backend.** The bridge is a gate in front of it, not a sandbox around it. Anything
   that can reach Hermes on loopback with its session token has more access than the bridge
   passes on.

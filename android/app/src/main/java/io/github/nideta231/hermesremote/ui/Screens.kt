@@ -137,6 +137,11 @@ class SessionActions(
     val switchProfile: (String) -> Unit = {},
     val openScheduled: () -> Unit = {},
     val openVault: () -> Unit = {},
+    /** The PC page (stats, processes, Claude usage) and the terminal; null hides the button
+     *  (the bridge doesn't serve it). */
+    val openPc: (() -> Unit)? = null,
+    val openTerminal: (() -> Unit)? = null,
+    val repairPc: () -> Unit = {},
     /** Move a group: (group keys as drawn, key, delta; Int.MIN_VALUE/MAX_VALUE = top/bottom). */
     val moveGroup: (List<String>, String, Int) -> Unit = { _, _, _ -> },
     val resetGroupOrder: () -> Unit = {},
@@ -215,9 +220,11 @@ fun SessionsPane(
                 }
                 Icon(Glyphs.Chevron, "Switch PC", modifier = Modifier.padding(start = 4.dp).size(18.dp))
             }
+            actions.openPc?.let { IconButton(modifier = Modifier.size(40.dp), onClick = it) { Icon(Glyphs.Chip, "PC", modifier = Modifier.size(20.dp)) } }
+            actions.openTerminal?.let { IconButton(modifier = Modifier.size(40.dp), onClick = it) { Icon(Glyphs.Terminal, "Terminal", modifier = Modifier.size(20.dp)) } }
             if (HostFeature.SCHEDULED !in LocalHiddenFeatures.current)
-                IconButton(onClick = actions.openScheduled) { Icon(Glyphs.Clock, "Scheduled", modifier = Modifier.size(20.dp)) }
-            IconButton(onClick = actions.openSettings) { Icon(Glyphs.Settings, "Settings", modifier = Modifier.size(20.dp)) }
+                IconButton(modifier = Modifier.size(40.dp), onClick = actions.openScheduled) { Icon(Glyphs.Clock, "Scheduled", modifier = Modifier.size(20.dp)) }
+            IconButton(modifier = Modifier.size(40.dp), onClick = actions.openSettings) { Icon(Glyphs.Settings, "Settings", modifier = Modifier.size(20.dp)) }
         }
         if (pcSheet) PcSheet(pcs, actions, onDismiss = { pcSheet = false })
         // Only when the PC has more than one profile: with just the default there is nothing to pick.
@@ -405,6 +412,8 @@ private fun PcSheet(pcs: List<PairedPc>, actions: SessionActions, onDismiss: () 
                 Spacer(Modifier.size(8.dp))
                 if (!pc.active) PanelRow("Switch to ${pc.name}", icon = Glyphs.Check, iconTint = Gold,
                     onClick = { menuFor = null; onDismiss(); actions.switchPc(pc.id) })
+                if (pc.active) PanelRow("Re-pair", "Scan a fresh code; chats and drafts stay", icon = Glyphs.Refresh,
+                    onClick = { menuFor = null; onDismiss(); actions.repairPc() })
                 PanelRow("Rename", icon = Glyphs.Edit, onClick = { menuFor = null; renaming = pc })
                 PanelRow("Forget this PC", icon = Glyphs.Trash, iconTint = Bad, titleColor = Bad, onClick = { menuFor = null; forgetting = pc })
             }
@@ -763,6 +772,7 @@ class SettingsActions(
     val setDefaultModel: (ModelOption, Boolean) -> Unit = { _, _ -> },
     val dismissDefaultConfirm: () -> Unit = {},
     val openVault: () -> Unit = {},
+    val repair: () -> Unit = {},
 )
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -832,6 +842,9 @@ fun SettingsScreen(
                     Panel {
                         pairing?.let {
                             PanelRow("Paired as “${it.device}”", it.url, Glyphs.Qr)
+                            PanelDivider()
+                            PanelRow("Re-pair this PC", "Pairing broken or revoked? Scan a fresh code; chats and drafts stay",
+                                Glyphs.Refresh, iconTint = Gold, onClick = actions.repair)
                             PanelDivider()
                         }
                         PanelRow("Unpair this device", "Signs this phone out of your PC", icon = Glyphs.Close, iconTint = Bad, titleColor = Bad, onClick = { confirmUnpair = true })
@@ -1186,6 +1199,8 @@ fun PairScreen(
     onCancel: (() -> Unit)? = null,
     onSignInGateway: (suspend (String) -> String?)? = null,
     onCancelSignIn: (() -> Unit)? = null,
+    /** Re-pairing the PC in use as this device name (its pairing broke). */
+    repairDevice: String? = null,
 ) {
     val scope = rememberCoroutineScope()
     var gatewayMode by remember { mutableStateOf(false) }
@@ -1222,11 +1237,15 @@ fun PairScreen(
             Icon(Glyphs.Spark, null, tint = Gold, modifier = Modifier.size(34.dp))
         }
         Spacer(Modifier.size(20.dp))
-        Text(if (onCancel != null) "Add another PC" else "Hermes Remote", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.SemiBold)
-        Text(if (onCancel != null) "Each PC keeps its own chats. Switch between them from the side menu."
-            else "Your Hermes agent, from your phone.", style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        Spacer(Modifier.size(20.dp))
-        if (onSignInGateway != null) {
+        Text(when { repairDevice != null -> "Re-pair this PC"; onCancel != null -> "Add another PC"; else -> "Hermes Remote" },
+            style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.SemiBold)
+        Text(when {
+            repairDevice != null -> "Get a fresh code from the PC. Chats, drafts and the PC's name stay as they are."
+            onCancel != null -> "Each PC keeps its own chats. Switch between them from the side menu."
+            else -> "Your Hermes agent, from your phone."
+        }, style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Spacer(Modifier.size(28.dp))
+        if (onSignInGateway != null && repairDevice == null) {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 FilterChip(!gatewayMode, { gatewayMode = false; error = null }, label = { Text("Pair a bridge") }, enabled = !busy)
                 FilterChip(gatewayMode, { gatewayMode = true; error = null }, label = { Text("Sign in to a gateway") }, enabled = !busy)
@@ -1258,7 +1277,11 @@ fun PairScreen(
             }
             return@Column
         }
-        Step(1, "On your PC, run", code = "hermes-remote-bridge pair phone")
+        if (repairDevice != null) {
+            Step(1, "On your PC, open the tray: Devices > $repairDevice > Re-pair. Or run", code = "hermes-remote-bridge pair $repairDevice --replace")
+        } else {
+            Step(1, "On your PC, run", code = "hermes-remote-bridge pair phone")
+        }
         Step(2, "Scan the QR code it shows, or pick a picture of it (add --qr-png qr.png to get a file you can send)")
         Spacer(Modifier.size(20.dp))
         Button(onClick = onScan, enabled = !busy, modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp),

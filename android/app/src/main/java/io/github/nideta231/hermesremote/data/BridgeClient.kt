@@ -119,12 +119,18 @@ class BridgeClient(
     }
 
     /** Cheap reachability check with a short timeout: an absent LAN must not stall switching. */
-    suspend fun reachable(): Boolean = runInterruptible(Dispatchers.IO) {
+    suspend fun reachable(): Boolean = probe() == Probe.OK
+
+    enum class Probe { OK, UNAUTHORIZED, UNREACHABLE }
+
+    /** Like [reachable], but tells "the PC answered and refused this token" (revoked, or re-paired
+     *  from the PC) apart from "nothing answered", so the app can offer to re-pair. */
+    suspend fun probe(): Probe = runInterruptible(Dispatchers.IO) {
         runCatching {
             http.newBuilder().connectTimeout(2, TimeUnit.SECONDS).readTimeout(4, TimeUnit.SECONDS).build()
                 .newCall(Request.Builder().url("$base/v1/me").build())
-                .execute().use { it.isSuccessful }
-        }.getOrDefault(false)
+                .execute().use { when { it.isSuccessful -> Probe.OK; it.code == 401 -> Probe.UNAUTHORIZED; else -> Probe.UNREACHABLE } }
+        }.getOrDefault(Probe.UNREACHABLE)
     }
 
     override suspend fun status(): List<ComponentStatus> = StatusMapper.map(call("GET", "/v1/status").getJSONObject("components"))
@@ -184,6 +190,32 @@ class BridgeClient(
     /** [action] is pause, resume or trigger (run now). Returns the job as it is afterwards, when Hermes says. */
     suspend fun cronAction(jobId: String, action: String, profile: String? = null): CronJob? =
         call("POST", "/v1/cron/jobs/${enc(jobId)}/$action", scoped(profile)).optJSONObject("job")?.let(::parseCronJob)
+
+    // PC monitor (bridge 1.18+; older bridges answer 404).
+
+    suspend fun monitorNow(live: Boolean = false): PcNow = parseNow(call("GET", "/v1/monitor/now", mapOf("live" to live)))
+
+    suspend fun monitorHistory(range: String): PcHistory = parseHistory(call("GET", "/v1/monitor/history", mapOf("range" to range)))
+
+    /** (total matching, the first [limit] sorted by [sort]). */
+    suspend fun processes(sort: String, limit: Int, query: String = ""): Pair<Int, List<PcProcess>> =
+        call("GET", "/v1/monitor/processes", mapOf("sort" to sort, "limit" to limit, "q" to query.ifBlank { null }))
+            .let { it.optInt("total") to it.optJSONArray("processes").objects().map(::parseProcess) }
+
+    /** True when the process is gone afterwards. */
+    suspend fun stopProcess(pid: Int, force: Boolean): Boolean =
+        call("POST", "/v1/monitor/processes/$pid/stop", mapOf("force" to force)).optBoolean("stopped")
+
+    suspend fun claudeUsage(refresh: Boolean = false): ClaudeUsage = parseClaude(call("GET", "/v1/claude/usage", mapOf("refresh" to refresh)))
+
+    suspend fun claudeHistory(range: String): PcHistory = parseHistory(call("GET", "/v1/claude/history", mapOf("range" to range)))
+
+    /** A shell on the PC (bridge 1.18+). The token rides in the upgrade request's header, as for chat. */
+    fun terminal(cols: Int, rows: Int, listener: okhttp3.WebSocketListener): okhttp3.WebSocket {
+        val wsUrl = base.replaceFirst(Regex("^http"), "ws") + "/v1/terminal?cols=$cols&rows=$rows"
+        return http.newBuilder().readTimeout(0, TimeUnit.MILLISECONDS).build()
+            .newWebSocket(Request.Builder().url(wsUrl).build(), listener)
+    }
 
     private fun scoped(profile: String?): Map<String, Any?> = mapOf("profile" to profileParam(profile))
 }

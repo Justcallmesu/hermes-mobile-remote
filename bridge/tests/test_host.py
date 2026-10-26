@@ -141,6 +141,12 @@ def test_tailscale_cli_path_returns_the_same_answers(monkeypatch):
     assert tailnet.sync_tailscale_ips(None) == (["100.64.0.10", "fd7a:115c:a1e0::1"], "me@example.com")
 
 
+def test_stopped_tailscale_offers_no_addresses(monkeypatch):
+    # `tailscale down` keeps the IPs in status, but they are unbindable (EADDRNOTAVAIL crash loop).
+    monkeypatch.setattr(tailnet, "_cli_json", lambda *a: {**STATUS, "BackendState": "Stopped"})
+    assert tailnet.sync_tailscale_ips(None) == ([], "me@example.com")
+
+
 async def test_cli_backed_client_status_and_whois(monkeypatch):
     whois = {"UserProfile": {"LoginName": "me@example.com"}, "Node": {"ComputedName": "phone", "Hostinfo": {"OS": "android"}}}
     monkeypatch.setattr(tailnet, "_cli_json", lambda *a: whois if a[0] == "whois" else STATUS)

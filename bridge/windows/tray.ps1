@@ -270,6 +270,7 @@ function Build-Menu {
         }
         $menu.Items.Add($checksMenu) | Out-Null
     }
+    $menu.Items.Add((New-MenuItem 'Run doctor...' { Show-Doctor })) | Out-Null
     $menu.Items.Add((New-MenuItem 'Refresh now' { Refresh-Health; Update-Tray })) | Out-Null
     $menu.Items.Add((New-Object System.Windows.Forms.ToolStripSeparator)) | Out-Null
 
@@ -336,7 +337,13 @@ function Build-Menu {
             $revokeOne = { Invoke-Bridge -BridgeArgs @('revoke', $name) | Out-Null
                            $Health['devices'] = Get-BridgeJson @('devices', '--json')
                            Update-TrayAndMenu }.GetNewClosure()
-            $devMenu.DropDownItems.Add((New-MenuItem "$name - revoke" $revokeOne)) | Out-Null
+            # Re-pair: a new code for the same name; the old one stops working, and the app
+            # replaces the broken pairing in place when it scans the new code.
+            $repairOne = { Show-PairWindow -Replace $name }.GetNewClosure()
+            $oneMenu = New-Object System.Windows.Forms.ToolStripMenuItem($name)
+            $oneMenu.DropDownItems.Add((New-MenuItem 'Re-pair (new code, old one stops working)...' $repairOne)) | Out-Null
+            $oneMenu.DropDownItems.Add((New-MenuItem 'Revoke' $revokeOne)) | Out-Null
+            $devMenu.DropDownItems.Add($oneMenu) | Out-Null
         }
     }
     $menu.Items.Add($devMenu) | Out-Null
@@ -426,15 +433,45 @@ function Set-StartAtLogon([bool]$Enabled) {
 }
 
 # ---------------------------------------------------------------- pairing
+function Show-Doctor {
+    # Every check with its verdict, the same list `hermes-remote-bridge doctor` prints.
+    $doctor = Get-BridgeJson @('doctor', '--json')
+    if (-not $doctor) {
+        Show-Problem 'doctor' 'The doctor did not answer. Open a terminal and run: hermes-remote-bridge doctor'
+        return
+    }
+    $Health['doctor'] = $doctor
+    $lines = foreach ($check in $doctor.checks) {
+        $mark = switch ($check.level) { 'ok' { '[ok]  ' } 'warn' { '[warn]' } default { '[FAIL]' } }
+        "$mark $($check.message)"
+    }
+    $failed = @($doctor.checks | Where-Object { $_.level -ne 'ok' -and $_.level -ne 'warn' }).Count
+    $summary = if ($failed -eq 0) { 'All good.' } else { "$failed problem(s) found." }
+    $icon = if ($failed -eq 0) { 'Information' } else { 'Warning' }
+    [System.Windows.Forms.MessageBox]::Show((($lines + '', $summary) -join "`r`n"), 'Hermes Remote doctor', 'OK', $icon) | Out-Null
+    Update-TrayAndMenu
+}
+
 function Show-PairWindow {
+    param([string]$Replace)
     # The bridge writes the QR as a PNG; draw it in our own window instead of handing the file
     # to the Photos app, which is what the CLI does when nothing can draw it.
     $qr = Join-Path $StateDir 'pairing-qr.png'
     if (Test-Path $qr) { Remove-Item $qr -Force }
-    $name = [Microsoft.VisualBasic.Interaction]::InputBox('Name for this phone:', 'Pair a device', 'phone')
-    if (-not $name) { return }
+    $pairArgs = @()
+    if ($Replace) {
+        $answer = [System.Windows.Forms.MessageBox]::Show(
+            "Make a new pairing code for '$Replace'?`r`n`r`nIts current pairing stops working now. Scan the new code in the app (Settings > Re-pair this PC) and it picks up where it left off.",
+            'Re-pair device', 'YesNo', 'Question')
+        if ($answer -ne 'Yes') { return }
+        $name = $Replace
+        $pairArgs = @('--replace')
+    } else {
+        $name = [Microsoft.VisualBasic.Interaction]::InputBox('Name for this phone:', 'Pair a device', 'phone')
+        if (-not $name) { return }
+    }
 
-    $details = Invoke-Bridge -BridgeArgs @('pair', $name, '--qr-png', $qr) -TimeoutSeconds 60
+    $details = Invoke-Bridge -BridgeArgs (@('pair', $name, '--qr-png', $qr) + $pairArgs) -TimeoutSeconds 60
     if (-not (Test-Path $qr)) {
         Show-Problem 'pairing failed' "No QR code was produced.`n`n$details"
         return

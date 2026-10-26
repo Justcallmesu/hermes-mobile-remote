@@ -12,9 +12,10 @@ dependencies = [
     "websockets>=13",
     "segno>=1.6",
     "cryptography>=43",
-    # Used where the OS gives no simpler answer: interface addresses and mDNS off Linux.
-    "psutil>=6; sys_platform != 'linux'",
+    # The PC monitor (stats, processes) everywhere; interface addresses off Linux.
+    "psutil>=6",
     "zeroconf>=0.132; sys_platform != 'linux'",
+    "pyte>=0.8.2",
 ]
 
 [project.scripts]

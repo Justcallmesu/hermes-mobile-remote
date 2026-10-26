@@ -51,7 +51,8 @@ def write_idea(home: Path, project_id: str, text: str) -> dict:
     body = text.strip()
     if body:
         tmp = path + ".tmp"
-        with open(tmp, "w", encoding="utf-8") as f:
+        # newline="": write the phone's text as-is; Windows would otherwise turn every \n into \r\n.
+        with open(tmp, "w", encoding="utf-8", newline="") as f:
             f.write(body + "\n")
         os.replace(tmp, path)
     elif os.path.isfile(path):
