@@ -181,6 +181,11 @@ class MainActivity : ComponentActivity() {
             .setBeepEnabled(false).setOrientationLocked(false))
     }
 
+    /** The gateway's own login runs in a Custom Tab (not a WebView) so its login cookie survives. */
+    private fun openCustomTab(url: String) = runOnUiThread {
+        androidx.browser.customtabs.CustomTabsIntent.Builder().build().launchUrl(this, android.net.Uri.parse(url))
+    }
+
     private fun pickImage() = runCatching { imagePicker.launch("image/*") }
 
     @Composable
@@ -197,7 +202,14 @@ class MainActivity : ComponentActivity() {
                             askForNotifications()
                         }
                     }
-                }, imageError = imageError.value,
+                }, onSignInGateway = { raw ->
+                    vm.signInGateway(raw, ::openCustomTab).also { err ->
+                        if (err == null) {
+                            android.widget.Toast.makeText(this@MainActivity, "Signed in. The gateway is in your host list.", android.widget.Toast.LENGTH_LONG).show()
+                            if (pairing != null) vm.cancelAddingPc()
+                        }
+                    }
+                }, onCancelSignIn = vm::cancelGatewaySignIn, imageError = imageError.value,
                     onCancel = if (pairing != null) ({ pairUri.value = null; imageError.value = null; vm.cancelAddingPc() }) else null)
             } else {
                 PairedApp()

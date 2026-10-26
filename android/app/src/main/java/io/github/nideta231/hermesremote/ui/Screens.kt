@@ -1128,8 +1128,12 @@ fun PairScreen(
     onPair: suspend (Pairing) -> String?,
     imageError: String? = null,
     onCancel: (() -> Unit)? = null,
+    onSignInGateway: (suspend (String) -> String?)? = null,
+    onCancelSignIn: (() -> Unit)? = null,
 ) {
     val scope = rememberCoroutineScope()
+    var gatewayMode by remember { mutableStateOf(false) }
+    var gatewayUrl by remember { mutableStateOf("https://") }
     var url by remember { mutableStateOf("https://") }
     var token by remember { mutableStateOf("") }
     var error by remember { mutableStateOf<String?>(null) }
@@ -1165,7 +1169,39 @@ fun PairScreen(
         Text(if (onCancel != null) "Add another PC" else "Hermes Remote", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.SemiBold)
         Text(if (onCancel != null) "Each PC keeps its own chats. Switch between them from the side menu."
             else "Your Hermes agent, from your phone.", style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        Spacer(Modifier.size(28.dp))
+        Spacer(Modifier.size(20.dp))
+        if (onSignInGateway != null) {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                FilterChip(!gatewayMode, { gatewayMode = false; error = null }, label = { Text("Pair a bridge") }, enabled = !busy)
+                FilterChip(gatewayMode, { gatewayMode = true; error = null }, label = { Text("Sign in to a gateway") }, enabled = !busy)
+            }
+        }
+        Spacer(Modifier.size(8.dp))
+        if (gatewayMode && onSignInGateway != null) {
+            Text("Enter the gateway's address. Its own login opens in your browser.", style = MaterialTheme.typography.bodyLarge)
+            Spacer(Modifier.size(10.dp))
+            OutlinedTextField(gatewayUrl, { gatewayUrl = it }, label = { Text("Gateway URL") }, singleLine = true, enabled = !busy,
+                modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(14.dp), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri))
+            Spacer(Modifier.size(10.dp))
+            Button(onClick = {
+                busy = true; error = null
+                scope.launch { error = onSignInGateway(gatewayUrl); busy = false }
+            }, enabled = !busy && gatewayUrl.isNotBlank(), modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp),
+                contentPadding = PaddingValues(vertical = 16.dp)) { Text("Sign in", fontWeight = FontWeight.SemiBold) }
+            AnimatedVisibility(busy) {
+                Row(Modifier.fillMaxWidth().padding(top = 16.dp), verticalAlignment = Alignment.CenterVertically) {
+                    TypingDots(Gold); Spacer(Modifier.width(10.dp)); Text("Waiting for the sign-in", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Spacer(Modifier.weight(1f))
+                    TextButton(onClick = { onCancelSignIn?.invoke() }) { Text("Cancel sign-in") }
+                }
+            }
+            AnimatedVisibility(error != null) {
+                Surface(color = Bad.copy(alpha = 0.14f), shape = RoundedCornerShape(14.dp), modifier = Modifier.fillMaxWidth().padding(top = 16.dp)) {
+                    Text(error ?: "", color = Bad, modifier = Modifier.padding(14.dp), style = MaterialTheme.typography.bodyMedium)
+                }
+            }
+            return@Column
+        }
         Step(1, "On your PC, run", code = "hermes-remote-bridge pair phone")
         Step(2, "Scan the QR code it shows, or pick a picture of it (add --qr-png qr.png to get a file you can send)")
         Spacer(Modifier.size(20.dp))

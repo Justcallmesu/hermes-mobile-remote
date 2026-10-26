@@ -44,6 +44,15 @@ import io.github.nideta231.hermesremote.data.LiveReducer
 import io.github.nideta231.hermesremote.data.ModelCatalog
 import io.github.nideta231.hermesremote.data.ModelOption
 import io.github.nideta231.hermesremote.data.ProfileStore
+import io.github.nideta231.hermesremote.data.GatewayAuth
+import io.github.nideta231.hermesremote.data.GatewayAuthException
+import io.github.nideta231.hermesremote.data.GatewayCredentialStore
+import io.github.nideta231.hermesremote.data.GatewayCredentials
+import io.github.nideta231.hermesremote.data.GatewayUrl
+import io.github.nideta231.hermesremote.data.HostKind
+import io.github.nideta231.hermesremote.data.LoopbackListener
+import io.github.nideta231.hermesremote.data.OkHttpTransport
+import io.github.nideta231.hermesremote.data.Pkce
 import io.github.nideta231.hermesremote.data.Notifier
 import io.github.nideta231.hermesremote.data.Pairing
 import io.github.nideta231.hermesremote.data.REASONING_LEVELS
@@ -72,6 +81,8 @@ import io.github.nideta231.hermesremote.data.withInflight
 import io.github.nideta231.hermesremote.data.turnPromptKey
 import io.github.nideta231.hermesremote.data.withLiveUser
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -643,6 +654,7 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
     fun switchPc(id: String) {
         if (id == profiles.activeId && _pairing.value != null) return
         if (profiles.list().none { it.id == id }) return
+        if (profiles.list().first { it.id == id }.kind == HostKind.GATEWAY) return // going live on a gateway is ticket 05b
         teardown()
         activate(id)
         _pairing.value = store.load()
@@ -703,9 +715,48 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
         _conn.value = ConnectionState()
     }
 
+    private var signInListener: LoopbackListener? = null
+
+    /**
+     * Sign in to a gateway: [openBrowser] gets the gateway's login URL (a Custom Tab), the loopback
+     * listener catches the redirect, and only a finished sign-in adds a [HostKind.GATEWAY] host with
+     * its tokens. Returns null on success, else the message to show; nothing is stored on failure.
+     */
+    suspend fun signInGateway(rawUrl: String, openBrowser: (String) -> Unit): String? {
+        val base = try { GatewayUrl.validate(rawUrl) } catch (e: IllegalArgumentException) { return e.message }
+        val auth = GatewayAuth(base, OkHttpTransport())
+        val state = Pkce.newVerifier()
+        val verifier = Pkce.newVerifier()
+        return try {
+            val code = withContext(Dispatchers.IO) {
+                LoopbackListener(state).also { signInListener = it }.let { l ->
+                    openBrowser(auth.authorizeUrl(Pkce.challenge(verifier), l.redirectUri, state))
+                    l.awaitCode()
+                }
+            }
+            val t = auth.signIn(code, verifier, state, state)
+            val host = profiles.add(GatewayUrl.hostName(base), HostKind.GATEWAY)
+            GatewayCredentialStore(app, host.id).save(GatewayCredentials(base, t.accessToken, t.refreshToken, t.expiresAt))
+            refreshPcs()
+            null
+        } catch (t: Throwable) {
+            if (t is CancellationException) throw t
+            if (t is GatewayAuthException) "The gateway did not accept the sign-in (${t.message})." else describe(t)
+        } finally {
+            signInListener?.close()
+            signInListener = null
+        }
+    }
+
+    fun cancelGatewaySignIn() { signInListener?.close() }
+
     private fun refreshPcs() {
         val active = profiles.activeId
         _pcs.value = profiles.list().mapNotNull { pr ->
+            if (pr.kind == HostKind.GATEWAY) {
+                val gw = GatewayCredentialStore(app, pr.id).load() ?: return@mapNotNull null
+                return@mapNotNull PairedPc(pr.id, pr.name.ifBlank { GatewayUrl.hostName(gw.baseUrl) }, gw.baseUrl, false)
+            }
             val saved = if (pr.id == active) _pairing.value ?: store.load()
                 else CredentialStore(app, ProfileStore.pairingFile(pr.id)).load()
             saved ?: return@mapNotNull null
