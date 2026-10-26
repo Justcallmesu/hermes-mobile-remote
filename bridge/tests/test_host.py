@@ -231,9 +231,15 @@ def test_terminal_qr_survives_a_console_that_cannot_encode_blocks(monkeypatch, t
     from hermes_remote_bridge import cli
     from hermes_remote_bridge.config import Config
     monkeypatch.setattr(cli.sys, "stdout", io.TextIOWrapper(io.BytesIO(), encoding="cp1252"))
+    # A real Windows host would open the PNG in Photos on every test run; fake it.
+    opened = []
+    fake = type("H", (), {"name": "linux", "qr_as_image": lambda s: False,
+                          "open_file": lambda s, p: opened.append(p) or True})()
+    monkeypatch.setattr(cli, "host", lambda: fake)
     cfg = Config(audit_log=tmp_path / "audit.log")
     cli._show_qr("hermesremote://pair?v=2", cfg)  # must not raise UnicodeEncodeError
     assert (tmp_path / "pairing-qr.png").exists()
+    assert opened == [tmp_path / "pairing-qr.png"]
 
 
 def test_pairing_warns_when_the_firewall_blocks_the_port(monkeypatch):
