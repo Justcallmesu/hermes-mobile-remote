@@ -186,8 +186,6 @@ class BridgeClient(
         call("POST", "/v1/cron/jobs/${enc(jobId)}/$action", scoped(profile)).optJSONObject("job")?.let(::parseCronJob)
 
     private fun scoped(profile: String?): Map<String, Any?> = mapOf("profile" to profileParam(profile))
-
-    private fun enc(s: String) = URLEncoder.encode(s, "UTF-8").replace("+", "%20")
 }
 
 object StatusMapper {

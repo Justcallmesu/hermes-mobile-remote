@@ -17,7 +17,10 @@ interface SessionsSource {
 }
 
 /** Things only a bridge serves; a gateway host hides the screens and controls behind them. */
-enum class HostFeature { VAULT, SCHEDULED, PROJECT_IDEA, CHAT_FILE_DOWNLOAD, BRIDGE_STATUS, DESKTOP_HANDOFF }
+enum class HostFeature { VAULT, SCHEDULED, PROJECT_IDEA, CHAT_FILE_DOWNLOAD, BRIDGE_STATUS }
+
+/** One URL path segment, percent-encoded (spaces as %20); shared by [BridgeClient] and [GatewayRestClient]. */
+internal fun enc(s: String) = URLEncoder.encode(s, "UTF-8").replace("+", "%20")
 
 fun hiddenFeatures(kind: HostKind): Set<HostFeature> =
     if (kind == HostKind.GATEWAY) HostFeature.entries.toSet() else emptySet()
@@ -46,8 +49,6 @@ class GatewayRestClient(
         query.forEach { (k, v) -> if (v != null) b.addQueryParameter(k, v.toString()) }
         return b.build().toString()
     }
-
-    private fun enc(s: String) = URLEncoder.encode(s, "UTF-8").replace("+", "%20")
 
     private fun isSessionExpired(r: HttpReply) = r.status == 401 &&
         runCatching { JSONObject(r.body).optString("error") }.getOrNull() == "session_expired"

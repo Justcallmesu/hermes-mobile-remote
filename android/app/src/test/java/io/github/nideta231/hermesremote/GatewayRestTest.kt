@@ -81,7 +81,7 @@ class GatewayRestTest {
     @Test fun gatewayHidesBridgeOnlyFeaturesAndBridgeHidesNone() {
         assertEquals(
             setOf(HostFeature.VAULT, HostFeature.SCHEDULED, HostFeature.PROJECT_IDEA,
-                HostFeature.CHAT_FILE_DOWNLOAD, HostFeature.BRIDGE_STATUS, HostFeature.DESKTOP_HANDOFF),
+                HostFeature.CHAT_FILE_DOWNLOAD, HostFeature.BRIDGE_STATUS),
             hiddenFeatures(HostKind.GATEWAY),
         )
         assertTrue(hiddenFeatures(HostKind.BRIDGE).isEmpty())
