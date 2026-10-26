@@ -3,7 +3,7 @@
 Releases are git tags; the version in the app comes from the tag. `git log v0.9.0..vX.Y.Z` is the
 authoritative history — this file only summarises what is worth knowing before upgrading.
 
-## Unreleased
+## v1.18.0
 
 - PC Glance is now part of the app. The drawer header has a PC page (live CPU/RAM/temperature,
   disk, network, per-core bars, history from 1 hour to 1 year, alerts), a process list where you
