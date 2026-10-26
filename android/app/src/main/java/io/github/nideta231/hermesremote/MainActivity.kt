@@ -62,6 +62,11 @@ import io.github.nideta231.hermesremote.ui.ChatActions
 import io.github.nideta231.hermesremote.ui.ProjectActions
 import io.github.nideta231.hermesremote.ui.CronActions
 import io.github.nideta231.hermesremote.ui.CronScreen
+import io.github.nideta231.hermesremote.ui.PcActions
+import io.github.nideta231.hermesremote.ui.PcScreen
+import io.github.nideta231.hermesremote.ui.TerminalScreen
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.TextButton
 import io.github.nideta231.hermesremote.ui.VaultActions
 import io.github.nideta231.hermesremote.ui.VaultScreen
 import io.github.nideta231.hermesremote.ui.ChatScreen
@@ -86,12 +91,14 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 /** Chat is home; the others are pages pushed on top of it. */
-enum class Page { CHAT, SCHEDULED, VAULT, SETTINGS }
+enum class Page { CHAT, SCHEDULED, PC, TERMINAL, VAULT, SETTINGS }
 
 class MainActivity : ComponentActivity() {
     private val vm: AppViewModel by viewModels()
     private val pairUri = mutableStateOf<String?>(null)
     private val showChat = mutableStateOf(false)
+    /** A page to open, from a home-screen widget tap. */
+    private val openPage = mutableStateOf<Page?>(null)
 
     private val scanner = registerForActivityResult(ScanContract()) { result ->
         result.contents?.let { pairUri.value = it }
@@ -168,6 +175,10 @@ class MainActivity : ComponentActivity() {
             vm.openSession(sid, profile)
             showChat.value = true
         }
+        intent?.getStringExtra(io.github.nideta231.hermesremote.data.PcWidgets.EXTRA_PAGE)?.let { name ->
+            intent.removeExtra(io.github.nideta231.hermesremote.data.PcWidgets.EXTRA_PAGE)
+            runCatching { Page.valueOf(name) }.getOrNull()?.let { openPage.value = it }
+        }
         val data = intent?.data ?: return
         if (data.scheme == "hermesremote") {
             // A new code while paired adds that PC (or re-pairs it) without dropping the current one.
@@ -187,6 +198,7 @@ class MainActivity : ComponentActivity() {
     private fun App() {
         val pairing by vm.pairing.collectAsState()
         val adding by vm.addingPc.collectAsState()
+        val repairDevice by vm.repairDevice.collectAsState()
         AnimatedContent(pairing != null && !adding, transitionSpec = { fadeIn(tween(300)) togetherWith fadeOut(tween(200)) }, label = "root") { paired ->
             if (!paired) {
                 PairScreen(pairUri.value, onScan = ::scan, onPickImage = { pickImage() }, onPair = {
@@ -198,7 +210,8 @@ class MainActivity : ComponentActivity() {
                         }
                     }
                 }, imageError = imageError.value,
-                    onCancel = if (pairing != null) ({ pairUri.value = null; imageError.value = null; vm.cancelAddingPc() }) else null)
+                    onCancel = if (pairing != null) ({ pairUri.value = null; imageError.value = null; vm.cancelAddingPc() }) else null,
+                    repairDevice = repairDevice)
             } else {
                 PairedApp()
             }
@@ -226,6 +239,9 @@ class MainActivity : ComponentActivity() {
         val hermesProfiles by vm.hermesProfiles.collectAsState()
         val cron by vm.cron.state.collectAsState()
         val vaultState by vm.vault.state.collectAsState()
+        val pcState by vm.monitor.state.collectAsState()
+        val features by vm.features.collectAsState()
+        val unauthorized by vm.unauthorized.collectAsState()
         var updateSheet by rememberSaveable { mutableStateOf(false) }
         var changelogSheet by rememberSaveable { mutableStateOf(false) }
 
@@ -247,6 +263,10 @@ class MainActivity : ComponentActivity() {
 
         BackHandler(enabled = drawer.isOpen) { scope.launch { drawer.close() } }
         BackHandler(enabled = !drawer.isOpen && page != Page.CHAT) { page = if (page == Page.VAULT) Page.SETTINGS else Page.CHAT }
+        // Opened from a home-screen widget.
+        if (openPage.value != null) { page = openPage.value!!; openPage.value = null; scope.launch { drawer.close() } }
+        val hasMonitor = "monitor" in features
+        val hasTerminal = "terminal" in features
 
         val projectActions = remember(vm) {
             ProjectActions(create = vm::createProject, details = vm::projectDetails, save = vm::saveProject, delete = vm::deleteProject)
@@ -272,6 +292,9 @@ class MainActivity : ComponentActivity() {
             switchProfile = { vm.switchProfile(it); go(Page.CHAT) },
             openScheduled = { go(Page.SCHEDULED) },
             openVault = { go(Page.VAULT) },
+            openPc = if (hasMonitor) ({ go(Page.PC) }) else null,
+            openTerminal = if (hasTerminal) ({ go(Page.TERMINAL) }) else null,
+            repairPc = vm::startRepair,
         )
         val chatActions = ChatActions(
             send = vm::send, stop = vm::stop, steer = vm::steer, approve = vm::answerApproval,
@@ -294,7 +317,12 @@ class MainActivity : ComponentActivity() {
             openUpdate = { updateSheet = true }, openChangelog = { changelogSheet = true },
             loadModels = vm::loadModels, setDefaultModel = vm.settings::setDefaultModel, dismissDefaultConfirm = vm.settings::dismissDefaultConfirm,
             openVault = { page = Page.VAULT },
+            repair = vm::startRepair,
         )
+        val pcActions = PcActions(watch = { vm.monitor.watch() }, unwatch = vm.monitor::stop, refresh = vm.monitor::refresh,
+            setRange = vm.monitor::setRange, setSort = vm.monitor::setSort, setQuery = vm.monitor::setQuery,
+            stopProcess = vm.monitor::stopProcess, refreshClaude = vm.monitor::refreshClaude,
+            openTerminal = if (hasTerminal) ({ page = Page.TERMINAL }) else null)
         val cronActions = CronActions(refresh = vm.cron::refresh, loadRuns = vm.cron::loadRuns,
             pause = vm.cron::pause, resume = vm.cron::resume, runNow = vm.cron::runNow, create = vm.cron::create)
         val openUpdate = { scope.launch { drawer.close() }; updateSheet = true }
@@ -314,12 +342,20 @@ class MainActivity : ComponentActivity() {
                             projects = sessions.projects.filter { it.path != null },
                             profile = hermesProfiles.headerLabel)
                         Page.SCHEDULED -> CronScreen(cron, hermesProfiles.active.takeIf { hermesProfiles.items.size > 1 }, cronActions, onBack = { page = Page.CHAT })
+                        Page.PC -> PcScreen(pcState, pcActions, onBack = { page = Page.CHAT })
+                        Page.TERMINAL -> TerminalScreen(open = vm::openTerminal, onBack = { page = Page.CHAT })
                         Page.VAULT -> VaultScreen(vaultState, VaultActions(refresh = vm.vault::refresh, save = vm.vault::save,
                             remove = vm.vault::remove), onBack = { page = Page.SETTINGS })
                         Page.SETTINGS -> SettingsScreen(system, pairing, conn, update, settingsActions, onBack = { page = Page.CHAT }, models = models)
                     }
                 }
                 SnackbarHost(snack, Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(bottom = 72.dp))
+            }
+            if (unauthorized) {
+                AlertDialog(onDismissRequest = {}, title = { Text("This PC no longer accepts this phone") },
+                    text = { Text("Its pairing was revoked or replaced on the PC. Re-pair to get back in; chats, drafts and the PC's name stay.") },
+                    confirmButton = { TextButton(onClick = vm::startRepair) { Text("Re-pair") } },
+                    dismissButton = { TextButton(onClick = { vm.dismissUnauthorized(); page = Page.SETTINGS }) { Text("Later") } })
             }
             if (updateSheet && update.available != null) UpdateSheet(update, onInstall = vm.updates::installUpdate, onDismiss = { updateSheet = false })
             if (changelogSheet) NotesSheet("Changelog", "You have ${update.installed}", remember { fullChangelog(vm.updates.changelog) },

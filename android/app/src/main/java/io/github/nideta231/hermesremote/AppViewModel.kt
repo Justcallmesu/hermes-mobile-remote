@@ -10,6 +10,8 @@ import androidx.lifecycle.ProcessLifecycleOwner
 import androidx.lifecycle.viewModelScope
 import io.github.nideta231.hermesremote.data.mergeSessionHead
 import io.github.nideta231.hermesremote.data.BridgeClient
+import io.github.nideta231.hermesremote.data.PcMonitor
+import io.github.nideta231.hermesremote.data.TerminalSession
 import io.github.nideta231.hermesremote.data.BridgeException
 import io.github.nideta231.hermesremote.data.ProjectRef
 import io.github.nideta231.hermesremote.data.ProjectDetails
@@ -286,6 +288,21 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
         onDefaultModel = { option -> _models.update { cat -> cat?.copy(options = cat.options.map { o ->
             o.copy(current = o.id == option.id && o.provider == option.provider) }) } })
 
+    /** The PC page: live stats, history, processes and Claude usage (bridge 1.18+). */
+    val monitor = PcMonitor(viewModelScope, client = { client }, describe = ::describe, say = { _toast.value = it })
+
+    /** A shell on the PC for the Terminal page; null when not connected. Closed by the caller. */
+    fun openTerminal(cols: Int, rows: Int): TerminalSession? = client?.let { TerminalSession(it, cols, rows) }
+
+    /** What the PC's bridge serves beyond chat ("monitor", "claude_usage", "terminal"), from /v1/me. */
+    private val _features = MutableStateFlow<Set<String>>(emptySet())
+    val features: StateFlow<Set<String>> = _features.asStateFlow()
+
+    /** The PC refused this phone's token (revoked or re-paired from the PC): offer to re-pair. */
+    private val _unauthorized = MutableStateFlow(false)
+    val unauthorized: StateFlow<Boolean> = _unauthorized.asStateFlow()
+    fun dismissUnauthorized() { _unauthorized.value = false }
+
     /** Self-update from GitHub releases, and "What's new" after one. */
     val updates = AppUpdates(app, viewModelScope, describe = ::describe, say = { _toast.value = it })
 
@@ -440,7 +457,8 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
                         GatewayState.CONNECTING, GatewayState.RECONNECTING -> Link.RECONNECTING
                         else -> Link.IDLE
                     }) }
-                    if (s == GatewayState.UNAUTHORIZED) _toast.value = g.lastError
+                    if (s == GatewayState.UNAUTHORIZED) _unauthorized.value = true
+                    if (s == GatewayState.OPEN) _unauthorized.value = false
                 }
             },
         )
@@ -459,6 +477,7 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
                 if (me == null && !_conn.value.searching) reconnect()
                 return@launch
             }
+            _features.value = me.optJSONArray("features").strings().toSet()
             if (me.optInt("protocol", 0) < MIN_BRIDGE_PROTOCOL) {
                 _toast.value = "Your PC runs an older bridge. Update it: run install.sh on the PC."
             }
@@ -519,7 +538,16 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
                     if (ep.transport == Transport.LAN && p.pin == null) continue
                     val candidate = p.copy(url = ep.url)
                     try {
-                        if (!BridgeClient(candidate).reachable()) { last = IOException("${ep.label} is not reachable"); continue }
+                        when (BridgeClient(candidate).probe()) {
+                            BridgeClient.Probe.OK -> {}
+                            BridgeClient.Probe.UNAUTHORIZED -> {
+                                // The PC is right there and refused the token: no other address will do better.
+                                _unauthorized.value = true
+                                _conn.update { it.copy(searching = false) }
+                                return true
+                            }
+                            BridgeClient.Probe.UNREACHABLE -> { last = IOException("${ep.label} is not reachable"); continue }
+                        }
                         _conn.update { it.copy(activeUrl = ep.url, transport = ep.transport, searching = false) }
                         if (_pairing.value?.url != ep.url) _pairing.update { it?.copy(url = ep.url) }
                         store.save(clientPairing())
@@ -608,6 +636,8 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
                     activate((same ?: profiles.add()).id)
                 }
                 _addingPc.value = false
+                _repairDevice.value = null
+                _unauthorized.value = false
                 store.save(candidate)
                 val known = (listOf(p.url) + p.alternates).groupBy { u ->
                     if (Tailnet.isLanHost(EndpointResolver.hostOf(u).orEmpty())) "lan" else "tailnet"
@@ -666,8 +696,20 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
         refreshPcs()
     }
 
-    fun startAddingPc() { _addingPc.value = true }
-    fun cancelAddingPc() { _addingPc.value = false }
+    fun startAddingPc() { _repairDevice.value = null; _addingPc.value = true }
+    fun cancelAddingPc() { _addingPc.value = false; _repairDevice.value = null }
+
+    /** Re-pair the PC in use: the pairing screen asks for a fresh code for this device name, and
+     *  scanning it replaces the broken pairing in place (same certificate = same PC), keeping
+     *  its chats, drafts and name. Null when not re-pairing. */
+    private val _repairDevice = MutableStateFlow<String?>(null)
+    val repairDevice: StateFlow<String?> = _repairDevice.asStateFlow()
+
+    fun startRepair() {
+        val p = _pairing.value ?: return
+        _repairDevice.value = p.device.ifBlank { "phone" }
+        _addingPc.value = true
+    }
 
     private fun activate(id: String) {
         profiles.activeId = id
@@ -694,6 +736,9 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
         settings.clear()
         cron.clear()
         vault.clear()
+        monitor.clear()
+        _features.value = emptySet()
+        _unauthorized.value = false
         _models.value = null
         _modelChoice.value = null
         _confirm.value = null
