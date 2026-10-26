@@ -24,7 +24,7 @@ class BridgeClient(
     // real rule (tailnet, or LAN over pinned HTTPS).
     private val hostGuard: (host: String, https: Boolean) -> Boolean =
         { host, https -> Transport.allowsToken(host, https, pairing.pin != null) },
-) : SessionsSource {
+) : SessionsSource, CronSource {
     private val base = pairing.url.trimEnd('/')
     private val jsonType = "application/json".toMediaType()
 
@@ -177,18 +177,18 @@ class BridgeClient(
             .put("confirm_expensive_model", confirmed))
 
     /** The profile's scheduled jobs. Bridges older than this route answer 404. */
-    suspend fun cronJobs(profile: String? = null): List<CronJob> = parseCronJobs(call("GET", "/v1/cron/jobs", scoped(profile)))
+    override suspend fun cronJobs(profile: String?): List<CronJob> = parseCronJobs(call("GET", "/v1/cron/jobs", scoped(profile)))
 
-    suspend fun cronRuns(jobId: String, profile: String? = null, limit: Int = 10): List<CronRun> =
+    override suspend fun cronRuns(jobId: String, profile: String?, limit: Int): List<CronRun> =
         parseCronRuns(call("GET", "/v1/cron/jobs/${enc(jobId)}/runs", mapOf("limit" to limit) + scoped(profile)))
 
     /** A new job: [prompt] run on [schedule] ("every 30m", "every day 8am", "0 9 * * 1-5"), saved locally. */
-    suspend fun createCronJob(name: String, schedule: String, prompt: String, profile: String? = null): CronJob? =
+    override suspend fun createCronJob(name: String, schedule: String, prompt: String, profile: String?): CronJob? =
         call("POST", "/v1/cron/jobs", scoped(profile), JSONObject().put("name", name).put("schedule", schedule)
             .put("prompt", prompt)).optJSONObject("job")?.let(::parseCronJob)
 
     /** [action] is pause, resume or trigger (run now). Returns the job as it is afterwards, when Hermes says. */
-    suspend fun cronAction(jobId: String, action: String, profile: String? = null): CronJob? =
+    override suspend fun cronAction(jobId: String, action: String, profile: String?): CronJob? =
         call("POST", "/v1/cron/jobs/${enc(jobId)}/$action", scoped(profile)).optJSONObject("job")?.let(::parseCronJob)
 
     // PC monitor (bridge 1.18+; older bridges answer 404).

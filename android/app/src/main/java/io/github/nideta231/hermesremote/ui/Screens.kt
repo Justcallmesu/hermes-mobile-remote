@@ -222,8 +222,7 @@ fun SessionsPane(
             }
             actions.openPc?.let { IconButton(modifier = Modifier.size(40.dp), onClick = it) { Icon(Glyphs.Chip, "PC", modifier = Modifier.size(20.dp)) } }
             actions.openTerminal?.let { IconButton(modifier = Modifier.size(40.dp), onClick = it) { Icon(Glyphs.Terminal, "Terminal", modifier = Modifier.size(20.dp)) } }
-            if (HostFeature.SCHEDULED !in LocalHiddenFeatures.current)
-                IconButton(modifier = Modifier.size(40.dp), onClick = actions.openScheduled) { Icon(Glyphs.Clock, "Scheduled", modifier = Modifier.size(20.dp)) }
+            IconButton(modifier = Modifier.size(40.dp), onClick = actions.openScheduled) { Icon(Glyphs.Clock, "Scheduled", modifier = Modifier.size(20.dp)) }
             IconButton(modifier = Modifier.size(40.dp), onClick = actions.openSettings) { Icon(Glyphs.Settings, "Settings", modifier = Modifier.size(20.dp)) }
         }
         if (pcSheet) PcSheet(pcs, actions, onDismiss = { pcSheet = false })

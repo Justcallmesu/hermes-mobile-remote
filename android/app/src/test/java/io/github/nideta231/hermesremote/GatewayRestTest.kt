@@ -80,11 +80,58 @@ class GatewayRestTest {
 
     @Test fun gatewayHidesBridgeOnlyFeaturesAndBridgeHidesNone() {
         assertEquals(
-            setOf(HostFeature.SCHEDULED, HostFeature.PROJECT_IDEA,
-                HostFeature.CHAT_FILE_DOWNLOAD, HostFeature.BRIDGE_STATUS),
+            setOf(HostFeature.PROJECT_IDEA, HostFeature.CHAT_FILE_DOWNLOAD, HostFeature.BRIDGE_STATUS),
             hiddenFeatures(HostKind.GATEWAY),
         )
         assertTrue(hiddenFeatures(HostKind.BRIDGE).isEmpty())
+    }
+
+    private val jobJson = """{"id":"j 1","name":"Daily","schedule_display":"every day","state":"paused","failure_streak":0}"""
+
+    @Test fun cronCallsUseTheGatewayRoutesAndParseBothReplyShapes() = runBlocking<Unit> {
+        val seen = mutableListOf<String>()
+        var postBody: String? = null
+        val t = RestFake { m, url, _, body ->
+            seen.add("$m ${url.removePrefix(BASE)}")
+            postBody = body
+            when {
+                m == "GET" && url.contains("/runs") -> HttpReply(200, """[{"id":"r1","title":"T","started_at":1767225600}]""")
+                m == "GET" && url.contains("profile=work") -> HttpReply(200, """{"jobs":[$jobJson]}""")
+                m == "GET" -> HttpReply(200, "[$jobJson]")
+                url.contains("/api/cron/jobs?") -> HttpReply(200, """{"job":$jobJson}""")
+                url.contains("/pause") -> HttpReply(200, jobJson)
+                else -> HttpReply(200, """{"ok":true}""")
+            }
+        }
+        val c = client(t)
+        assertEquals(listOf("j 1"), c.cronJobs(null).map { it.id })
+        assertEquals(listOf("j 1"), c.cronJobs("work").map { it.id })
+        assertEquals(listOf("r1"), c.cronRuns("j 1", "work", 10).map { it.id })
+        assertEquals("j 1", c.createCronJob("Daily", "every day", "hi", "work")?.id)
+        val b = org.json.JSONObject(postBody!!)
+        assertEquals("Daily", b.getString("name")); assertEquals("every day", b.getString("schedule"))
+        assertEquals("hi", b.getString("prompt")); assertEquals("local", b.getString("deliver")); assertFalse(b.getBoolean("paused"))
+        assertEquals(true, c.cronAction("j 1", "pause", "work")?.paused)
+        assertNull(c.cronAction("j 1", "trigger", "work"))
+        assertEquals(
+            listOf("GET /api/cron/jobs?profile=default", "GET /api/cron/jobs?profile=work",
+                "GET /api/cron/jobs/j%201/runs?profile=work&limit=10", "POST /api/cron/jobs?profile=work",
+                "POST /api/cron/jobs/j%201/pause?profile=work", "POST /api/cron/jobs/j%201/trigger?profile=work"),
+            seen,
+        )
+    }
+
+    @Test fun cronCallRefreshesOnceOnSessionExpired() = runBlocking<Unit> {
+        val t = RestFake { _, url, bearer, _ ->
+            when {
+                url.endsWith("/auth/native/refresh") ->
+                    HttpReply(200, """{"access_token":"new","refresh_token":"r2","expires_at":1900000000,"provider":"basic"}""")
+                bearer == "old" -> HttpReply(401, """{"error":"session_expired"}""")
+                else -> HttpReply(200, "[$jobJson]")
+            }
+        }
+        assertEquals(1, client(t, access = "old").cronJobs("default").size)
+        assertEquals(3, t.calls.size)
     }
 
     @Test fun mediaDecodesTheDataUrlAndFallsBackOnRefusals() = runBlocking<Unit> {

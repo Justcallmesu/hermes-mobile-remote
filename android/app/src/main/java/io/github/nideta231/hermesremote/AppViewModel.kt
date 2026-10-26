@@ -305,7 +305,7 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
     val toast: StateFlow<String?> = _toast.asStateFlow()
 
     /** The Scheduled page: cron jobs of the profile in use. */
-    val cron = CronJobs(viewModelScope, client = { client }, profile = { profile },
+    val cron = CronJobs(viewModelScope, source = { source as? io.github.nideta231.hermesremote.data.CronSource }, profile = { profile },
         describe = ::describe, say = { _toast.value = it })
     /** The Vault page: saved logins, cards and addresses on the PC (metadata; secrets stay there). */
     val vault = io.github.nideta231.hermesremote.data.Vault(viewModelScope,

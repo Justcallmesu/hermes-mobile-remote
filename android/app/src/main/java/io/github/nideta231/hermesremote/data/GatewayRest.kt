@@ -16,8 +16,17 @@ interface SessionsSource {
     suspend fun media(path: String): ByteArray?
 }
 
+/** What the Scheduled page needs from the active host: the profile's cron jobs, their runs, create, pause / resume / run now. */
+interface CronSource {
+    suspend fun cronJobs(profile: String? = null): List<CronJob>
+    suspend fun cronRuns(jobId: String, profile: String? = null, limit: Int = 10): List<CronRun>
+    suspend fun createCronJob(name: String, schedule: String, prompt: String, profile: String? = null): CronJob?
+    /** [action] is pause, resume or trigger (run now). Returns the job as it is afterwards, when the host says. */
+    suspend fun cronAction(jobId: String, action: String, profile: String? = null): CronJob?
+}
+
 /** Things only a bridge serves; a gateway host hides the screens and controls behind them. */
-enum class HostFeature { SCHEDULED, PROJECT_IDEA, CHAT_FILE_DOWNLOAD, BRIDGE_STATUS }
+enum class HostFeature { PROJECT_IDEA, CHAT_FILE_DOWNLOAD, BRIDGE_STATUS }
 
 /** One URL path segment, percent-encoded (spaces as %20); shared by [BridgeClient] and [GatewayRestClient]. */
 internal fun enc(s: String) = URLEncoder.encode(s, "UTF-8").replace("+", "%20")
@@ -41,7 +50,7 @@ class GatewayRestClient(
     private val auth: GatewayAuth,
     private val http: HttpTransport,
     private val onSignedOut: () -> Unit = {},
-) : SessionsSource {
+) : SessionsSource, CronSource {
     private val base = baseUrl.trimEnd('/')
 
     private fun url(path: String, query: Map<String, Any?> = emptyMap()): String {
@@ -99,6 +108,33 @@ class GatewayRestClient(
 
     private suspend fun patch(id: String, body: JSONObject, profile: String?) =
         call("PATCH", "/api/sessions/${enc(id)}", body = body.apply { profileParam(profile)?.let { put("profile", it) } })
+
+    // Cron: the server's profile defaults to all, so a profile is always sent.
+    private fun cronProfile(profile: String?) = mapOf("profile" to (profile?.takeIf { it.isNotBlank() } ?: DEFAULT_HERMES_PROFILE))
+
+    /** The reply is a bare array or an object holding it under [key]; the parsers want the object. */
+    private suspend fun callWrapped(key: String, method: String, path: String, query: Map<String, Any?>): JSONObject {
+        val r = raw(method, path, query)
+        if (r.status !in 200..299) throw BridgeException(r.status, "http_${r.status}", "HTTP ${r.status}")
+        val t = r.body.trim()
+        return if (t.startsWith("[")) JSONObject().put(key, org.json.JSONArray(t)) else JSONObject(t.ifEmpty { "{}" })
+    }
+
+    override suspend fun cronJobs(profile: String?): List<CronJob> =
+        parseCronJobs(callWrapped("jobs", "GET", "/api/cron/jobs", cronProfile(profile)))
+
+    override suspend fun cronRuns(jobId: String, profile: String?, limit: Int): List<CronRun> =
+        parseCronRuns(callWrapped("runs", "GET", "/api/cron/jobs/${enc(jobId)}/runs", cronProfile(profile) + ("limit" to limit)))
+
+    override suspend fun createCronJob(name: String, schedule: String, prompt: String, profile: String?): CronJob? =
+        asJob(call("POST", "/api/cron/jobs", cronProfile(profile), JSONObject().put("name", name).put("schedule", schedule)
+            .put("prompt", prompt).put("deliver", "local").put("paused", false)))
+
+    override suspend fun cronAction(jobId: String, action: String, profile: String?): CronJob? =
+        asJob(call("POST", "/api/cron/jobs/${enc(jobId)}/$action", cronProfile(profile)))
+
+    /** The job itself or `{"job": {...}}`; null when the reply is neither. */
+    private fun asJob(o: JSONObject): CronJob? = parseCronJob(o.optJSONObject("job") ?: o)
 
     override suspend fun media(path: String): ByteArray? {
         val r = raw("GET", "/api/media", mapOf("path" to path))
