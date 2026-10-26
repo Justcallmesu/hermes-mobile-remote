@@ -60,7 +60,8 @@ No bridge changes. `CHANGELOG.md`, `docs/FEATURES.md`, `docs/ARCHITECTURE.md` ge
 | Chat, streaming, tools, approvals, clarify | yes | yes (same socket RPC) |
 | Slash commands, model/reasoning, sessions, pin/rename | yes | yes |
 | Session list, profiles | `/v1/*` | `/api/*` equivalents |
-| Cron, project IDEA.md, chat files, status card | yes | **hidden** (bridge-only; cron and chat files have gateway `/api/*` equivalents, see Design corrections) |
+| Project IDEA.md, chat files, status card | yes | **hidden** (bridge-only; chat files have a gateway `/api/files/download`, shape not read) |
+| Cron (Scheduled) | `/v1/cron/*` | yes, via the gateway's own `/api/cron/jobs` |
 | Vault (`vault.*` RPC over the socket) | yes | yes (Hermes' own RPC, not a bridge feature) |
 | Notifications while app closed | yes | follow-up |
 
@@ -129,6 +130,6 @@ confirmed; the app must not rely on it.
 - **Chat files:** `/api/files/download` exists (W14). It stays hidden in the first cut because its shape is unread.
 - **401 handling (ticket 04/06):** only `error: "session_expired"` should trigger a refresh. `error: "unauthenticated"` with no bearer sent is a bug, not a refresh case. A refresh that returns 401 `session_expired` is the sign-out case.
 - **Socket credential:** `?token=<access token>` also works on `/api/ws` (W9), which would skip the ticket call. Keep the ticket (shorter-lived secret in a URL), but it is a fallback if the ticket call misbehaves.
-- **Vault is not bridge-only:** it is Hermes' own `vault.list/sources/add/remove` RPC (`tui_gateway/methods_vault.py`); the bridge only allowlists it. A direct socket has it, so a gateway host shows Vault. **Cron** has gateway routes too (`/api/cron/jobs`, which the bridge wraps), so Scheduled can come to gateway hosts.
+- **Vault is not bridge-only:** it is Hermes' own `vault.list/sources/add/remove` RPC (`tui_gateway/methods_vault.py`); the bridge only allowlists it. A direct socket has it, so a gateway host shows Vault. **Cron** has gateway routes too (`/api/cron/jobs`, which the bridge wraps); ticket 08 serves the Scheduled page from them, so gateway hosts have it.
 - **Version skew:** source claims are from v0.22.5, WorkLab runs 0.22.2. Re-check W10-W13 against WorkLab once signed in.
 

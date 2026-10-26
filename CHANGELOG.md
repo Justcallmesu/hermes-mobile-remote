@@ -29,7 +29,7 @@ authoritative history — this file only summarises what is worth knowing before
   "Sign in to a gateway" and type its address. The gateway's login page opens in a browser tab; you
   type the password there, never in the app. Tokens are kept in the Android Keystore and refreshed
   automatically. Plain `http` is accepted only for Tailscale or LAN addresses. Pairing a bridge is unchanged.
-- Gateway hosts hide the features that need the bridge: Scheduled jobs, the project
+- Gateway hosts hide the features that need the bridge: the project
   description (IDEA.md), chat file download, the bridge status card, and the default-model and
   approval settings. Notifications while the app is closed do not work for a gateway host yet.
 - Not yet tried on a real phone against a signed-in gateway; the build and unit tests pass.
