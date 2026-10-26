@@ -124,4 +124,38 @@ class GatewayUrlProviderTest {
             assertNotEquals(gw.lastError, br.lastError)
         } finally { br.close() }
     }
+
+    /** The ticket call itself says "session expired" [failures] times before it works. */
+    private class ExpiringTicketProvider(val base: String, var failures: Int) : SocketUrlProvider {
+        override val gatewayMode = true
+        val refreshes = AtomicInteger()
+        override suspend fun url(): String {
+            if (failures > 0) { failures--; throw GatewayAuthException(GatewayAuthError.SIGNED_OUT, "session expired") }
+            return "$base/api/ws?ticket=ok"
+        }
+        override suspend fun refresh() { refreshes.incrementAndGet() }
+    }
+
+    @Test fun aTicketCallThatSaysSessionExpiredRefreshesOnceThenConnects() = runBlocking<Unit> {
+        server.enqueue(MockResponse().withWebSocketUpgrade(okHermes))
+        val p = ExpiringTicketProvider(base(), failures = 1)
+        val g = gateway(p)
+        g.start()
+        try {
+            withTimeout(5_000) { g.state.first { it == GatewayState.OPEN } }
+            assertEquals(1, p.refreshes.get())
+        } finally { g.close() }
+    }
+
+    @Test fun aTicketCallThatStaysExpiredAfterTheRefreshIsUnauthorized() = runBlocking<Unit> {
+        val p = ExpiringTicketProvider(base(), failures = 2)
+        val g = gateway(p)
+        g.start()
+        try {
+            withTimeout(5_000) { g.state.first { it == GatewayState.UNAUTHORIZED } }
+            assertEquals(1, p.refreshes.get())
+            assertEquals(0, server.requestCount)
+            assertTrue(g.lastError!!.contains("Sign in again"))
+        } finally { g.close() }
+    }
 }
