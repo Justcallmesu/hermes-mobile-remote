@@ -3,6 +3,12 @@
 Releases are git tags; the version in the app comes from the tag. `git log v0.9.0..vX.Y.Z` is the
 authoritative history — this file only summarises what is worth knowing before upgrading.
 
+## Unreleased
+
+- Bridge: no longer crash-loops on start when Tailscale is installed but stopped; it listens on
+  the remaining addresses instead of failing with "Cannot assign requested address".
+- Bridge on Windows: a project description saved from the phone keeps its line endings as written.
+
 ## v1.17.0
 
 - Projects can be managed from the phone, like the desktop's project menu: rename, change the
