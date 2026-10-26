@@ -16,7 +16,7 @@ Each line is: action → what you should see.
 - [ ] Wrong password on the login page → the gateway refuses it and no new host appears in the app.
 - [ ] Cancel in the browser (or the app's cancel button) → the host list is unchanged.
 - [ ] Log out or remove the gateway host → the host is gone from the list and its tokens are gone (the app no longer uses them).
-- [ ] On a gateway host, look for Scheduled, Vault, chat file download, and the project description field → none of them is there.
+- [ ] On a gateway host, look for Scheduled, chat file download, and the project description field → none of them is there. Settings → Vault is there and lists your saved items (it runs over the same socket as chat).
 - [ ] Bridge host still shows everything and still works after a gateway host is added.
 - [ ] Switch between a bridge host and a gateway host → only one live connection is open at a time.
 - [ ] Add host → **Pair a bridge** still pairs by QR code.

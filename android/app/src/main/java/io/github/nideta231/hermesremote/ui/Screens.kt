@@ -808,11 +808,10 @@ fun SettingsScreen(
                         Spacer(Modifier.size(10.dp))
                         ApprovalPanel(state, actions.setApprovalMode)
                     }
-                    if (HostFeature.VAULT !in hidden) {
-                        Spacer(Modifier.size(10.dp))
-                        Panel {
-                            PanelRow("Vault", "Saved logins, cards and addresses Hermes can fill", Glyphs.Shield, onClick = actions.openVault)
-                        }
+                    // Vault is Hermes' own vault.* RPC over the live socket, so a gateway host has it too.
+                    Spacer(Modifier.size(10.dp))
+                    Panel {
+                        PanelRow("Vault", "Saved logins, cards and addresses Hermes can fill", Glyphs.Shield, onClick = actions.openVault)
                     }
                 }
                 SettingsSection("Appearance", "Only changes this phone.") {

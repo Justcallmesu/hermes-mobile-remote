@@ -17,7 +17,7 @@ interface SessionsSource {
 }
 
 /** Things only a bridge serves; a gateway host hides the screens and controls behind them. */
-enum class HostFeature { VAULT, SCHEDULED, PROJECT_IDEA, CHAT_FILE_DOWNLOAD, BRIDGE_STATUS }
+enum class HostFeature { SCHEDULED, PROJECT_IDEA, CHAT_FILE_DOWNLOAD, BRIDGE_STATUS }
 
 /** One URL path segment, percent-encoded (spaces as %20); shared by [BridgeClient] and [GatewayRestClient]. */
 internal fun enc(s: String) = URLEncoder.encode(s, "UTF-8").replace("+", "%20")

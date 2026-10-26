@@ -135,7 +135,7 @@ on that page, never in the app.
 - Tokens are kept in the Android Keystore and renewed automatically. If the gateway no longer accepts
   the session, the app shows **Sign in again** and keeps the host. Removing a host deletes its tokens
   and drafts. Whether the gateway also revokes the session on sign-out is not confirmed.
-- Hidden on gateway hosts, because they need the bridge: Vault, Scheduled jobs, the project
+- Hidden on gateway hosts, because they need the bridge: Scheduled jobs, the project
   description (IDEA.md), chat file download, the bridge status card, and the default-model and
   approval settings.
 - Chat, streaming, approvals, sessions and pins use the same socket calls as a bridge host. Chat

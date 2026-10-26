@@ -47,7 +47,7 @@ server-to-client requests, `client.capabilities`, reconnect). So direct mode mos
 | `data/Gateway.kt` | Take a `urlProvider: suspend () -> String` (and an auth-failure hook) instead of a fixed `url`. Bridge mode returns the fixed URL; gateway mode mints a ticket each attempt. Close code / HTTP 401 -> refresh once, then `UNAUTHORIZED`. |
 | Refresh | One in-flight refresh at a time (coalesced): rotating refresh tokens detect reuse. |
 | REST client | A `GatewayRestClient` for the few `/api/*` calls the shared UI needs (sessions list, session PATCH, profiles, status). The bridge's `/v1/*` handlers are thin wrappers over these (`hermes_http` in `app.py`), so the paths and params are the starting point. |
-| UI | "Add host" offers *Pair a bridge* / *Sign in to a gateway* (URL field -> Custom Tab). Gateway hosts hide: Vault, cron, project notes (IDEA.md), chat file download, bridge status card, desktop handoff. |
+| UI | "Add host" offers *Pair a bridge* / *Sign in to a gateway* (URL field -> Custom Tab). Gateway hosts hide: cron, project notes (IDEA.md), chat file download, bridge status card, desktop handoff. |
 | `Tailnet` host check | Applies to bridge pairing. For a gateway, allow `http` only for tailnet/LAN hosts (same rule), require `https` for anything else, never accept bare public `http`. |
 | Background | Foreground service holds the socket only while a phone-started turn runs or waits on a question, then stops. Reuse `WatchService` logic if it fits; otherwise a follow-up. |
 
@@ -60,7 +60,8 @@ No bridge changes. `CHANGELOG.md`, `docs/FEATURES.md`, `docs/ARCHITECTURE.md` ge
 | Chat, streaming, tools, approvals, clarify | yes | yes (same socket RPC) |
 | Slash commands, model/reasoning, sessions, pin/rename | yes | yes |
 | Session list, profiles | `/v1/*` | `/api/*` equivalents |
-| Cron, Vault, project IDEA.md, chat files, `/v1/media` images, status card | yes | **hidden** (bridge-only) |
+| Cron, project IDEA.md, chat files, status card | yes | **hidden** (bridge-only; cron and chat files have gateway `/api/*` equivalents, see Design corrections) |
+| Vault (`vault.*` RPC over the socket) | yes | yes (Hermes' own RPC, not a bridge feature) |
 | Notifications while app closed | yes | follow-up |
 
 Open question: images inside chats come through `/v1/media`. The gateway may serve media itself;
@@ -128,5 +129,6 @@ confirmed; the app must not rely on it.
 - **Chat files:** `/api/files/download` exists (W14). It stays hidden in the first cut because its shape is unread.
 - **401 handling (ticket 04/06):** only `error: "session_expired"` should trigger a refresh. `error: "unauthenticated"` with no bearer sent is a bug, not a refresh case. A refresh that returns 401 `session_expired` is the sign-out case.
 - **Socket credential:** `?token=<access token>` also works on `/api/ws` (W9), which would skip the ticket call. Keep the ticket (shorter-lived secret in a URL), but it is a fallback if the ticket call misbehaves.
+- **Vault is not bridge-only:** it is Hermes' own `vault.list/sources/add/remove` RPC (`tui_gateway/methods_vault.py`); the bridge only allowlists it. A direct socket has it, so a gateway host shows Vault. **Cron** has gateway routes too (`/api/cron/jobs`, which the bridge wraps), so Scheduled can come to gateway hosts.
 - **Version skew:** source claims are from v0.22.5, WorkLab runs 0.22.2. Re-check W10-W13 against WorkLab once signed in.
 
