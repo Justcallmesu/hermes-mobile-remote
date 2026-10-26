@@ -68,7 +68,10 @@ import io.github.nideta231.hermesremote.ui.ChatScreen
 import io.github.nideta231.hermesremote.ui.HermesTheme
 import io.github.nideta231.hermesremote.ui.ThemePrefs
 import io.github.nideta231.hermesremote.ui.isDark
+import io.github.nideta231.hermesremote.data.Root
+import io.github.nideta231.hermesremote.data.rootScreen
 import io.github.nideta231.hermesremote.ui.PairScreen
+import io.github.nideta231.hermesremote.ui.SignInAgainScreen
 import io.github.nideta231.hermesremote.ui.SessionActions
 import io.github.nideta231.hermesremote.ui.SessionsPane
 import io.github.nideta231.hermesremote.ui.UpdateSheet
@@ -171,7 +174,7 @@ class MainActivity : ComponentActivity() {
         val data = intent?.data ?: return
         if (data.scheme == "hermesremote") {
             // A new code while paired adds that PC (or re-pairs it) without dropping the current one.
-            if (vm.pairing.value != null) vm.startAddingPc()
+            if (vm.pairing.value != null || vm.gatewayHost.value != null) vm.startAddingPc()
             pairUri.value = data.toString()
         }
     }
@@ -192,8 +195,15 @@ class MainActivity : ComponentActivity() {
     private fun App() {
         val pairing by vm.pairing.collectAsState()
         val adding by vm.addingPc.collectAsState()
-        AnimatedContent(pairing != null && !adding, transitionSpec = { fadeIn(tween(300)) togetherWith fadeOut(tween(200)) }, label = "root") { paired ->
-            if (!paired) {
+        val gw by vm.gatewayHost.collectAsState()
+        val hasHost = pairing != null || gw != null
+        AnimatedContent(rootScreen(pairing != null, gw?.signedOut, adding), transitionSpec = { fadeIn(tween(300)) togetherWith fadeOut(tween(200)) }, label = "root") { root ->
+            if (root == Root.SIGN_IN) {
+                gw?.let { h ->
+                    SignInAgainScreen(h.name, h.baseUrl, onSignIn = { raw -> vm.signInGateway(raw, ::openCustomTab, h.id) },
+                        onCancelSignIn = vm::cancelGatewaySignIn, onAddHost = vm::startAddingPc)
+                }
+            } else if (root == Root.PAIR) {
                 PairScreen(pairUri.value, onScan = ::scan, onPickImage = { pickImage() }, onPair = {
                     vm.pair(it).also { err ->
                         if (err == null) {
@@ -206,11 +216,11 @@ class MainActivity : ComponentActivity() {
                     vm.signInGateway(raw, ::openCustomTab).also { err ->
                         if (err == null) {
                             android.widget.Toast.makeText(this@MainActivity, "Signed in. The gateway is in your host list.", android.widget.Toast.LENGTH_LONG).show()
-                            if (pairing != null) vm.cancelAddingPc()
+                            if (hasHost) vm.cancelAddingPc()
                         }
                     }
                 }, onCancelSignIn = vm::cancelGatewaySignIn, imageError = imageError.value,
-                    onCancel = if (pairing != null) ({ pairUri.value = null; imageError.value = null; vm.cancelAddingPc() }) else null)
+                    onCancel = if (hasHost) ({ pairUri.value = null; imageError.value = null; vm.cancelAddingPc() }) else null)
             } else {
                 PairedApp()
             }

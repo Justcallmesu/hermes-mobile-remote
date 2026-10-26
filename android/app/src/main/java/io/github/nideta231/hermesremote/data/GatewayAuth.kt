@@ -40,6 +40,8 @@ class GatewayAuth(
     baseUrl: String,
     private val http: HttpTransport,
     tokens: GatewayTokens? = null,
+    /** Called with every refreshed token set, so the caller can persist the rotated refresh token. */
+    private val onRefreshed: (GatewayTokens) -> Unit = {},
 ) {
     private val base = baseUrl.trimEnd('/')
     private val lock = Any()
@@ -88,7 +90,7 @@ class GatewayAuth(
             JSONObject().put("refresh_token", cur.refreshToken).put("provider", cur.provider).toString(),
         )
         when {
-            r.status == 200 -> return parse(r.body, cur.provider).also { tokens = it }
+            r.status == 200 -> return parse(r.body, cur.provider).also { tokens = it; onRefreshed(it) }
             r.status == 401 && errorCode(r.body) == "session_expired" -> {
                 tokens = null
                 fail(GatewayAuthError.SIGNED_OUT, "session expired")

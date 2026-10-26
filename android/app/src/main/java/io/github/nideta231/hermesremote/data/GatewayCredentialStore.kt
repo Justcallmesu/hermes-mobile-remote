@@ -50,7 +50,11 @@ class KeystoreTokenCipher(private val alias: String) : TokenCipher {
 }
 
 /** What a signed-in gateway host keeps: [expiresAt] is epoch millis of the access token. */
-data class GatewayCredentials(val baseUrl: String, val accessToken: String, val refreshToken: String, val expiresAt: Long)
+data class GatewayCredentials(
+    val baseUrl: String, val accessToken: String, val refreshToken: String, val expiresAt: Long,
+    /** The login provider the gateway named at sign-in; a refresh must send it back. */
+    val provider: String = "",
+)
 
 /**
  * Credentials of one gateway host, in its own prefs file ([ProfileStore.gatewayFile]). Tokens are
@@ -67,7 +71,7 @@ class GatewayCredentialStore(private val prefs: SharedPreferences, private val c
         val access = prefs.getString("access", null) ?: return null
         val refresh = prefs.getString("refresh", null) ?: return null
         return try {
-            GatewayCredentials(url, open(access), open(refresh), prefs.getLong("expires_at", 0L))
+            GatewayCredentials(url, open(access), open(refresh), prefs.getLong("expires_at", 0L), prefs.getString("provider", null).orEmpty())
         } catch (e: Exception) {
             clear()
             null
@@ -80,6 +84,7 @@ class GatewayCredentialStore(private val prefs: SharedPreferences, private val c
             .putString("access", seal(c.accessToken))
             .putString("refresh", seal(c.refreshToken))
             .putLong("expires_at", c.expiresAt)
+            .putString("provider", c.provider)
             .apply()
     }
 

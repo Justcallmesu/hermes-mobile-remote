@@ -49,7 +49,10 @@ import io.github.nideta231.hermesremote.data.GatewayAuthException
 import io.github.nideta231.hermesremote.data.GatewayCredentialStore
 import io.github.nideta231.hermesremote.data.GatewayCredentials
 import io.github.nideta231.hermesremote.data.GatewayUrl
+import io.github.nideta231.hermesremote.data.HostConnection
 import io.github.nideta231.hermesremote.data.HostKind
+import io.github.nideta231.hermesremote.data.decideConnection
+import io.github.nideta231.hermesremote.data.gatewayAuthFor
 import io.github.nideta231.hermesremote.data.LoopbackListener
 import io.github.nideta231.hermesremote.data.OkHttpTransport
 import io.github.nideta231.hermesremote.data.Pkce
@@ -182,6 +185,16 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
 
     private val _pairing = MutableStateFlow(store.load())
     val pairing: StateFlow<Pairing?> = _pairing.asStateFlow()
+
+    /**
+     * The active host when it is a gateway (it has no [pairing]): null otherwise. [signedOut] is true when it
+     * holds no tokens or the socket ended unauthorized: the root then asks to sign in again, keeping the host.
+     */
+    data class GatewayHostState(val id: String, val name: String, val baseUrl: String?, val signedOut: Boolean)
+    private val _gatewayHost = MutableStateFlow<GatewayHostState?>(null)
+    val gatewayHost: StateFlow<GatewayHostState?> = _gatewayHost.asStateFlow()
+
+    private fun hasHost() = _pairing.value != null || _gatewayHost.value != null
 
     /** Every paired PC, for the switcher. */
     private val _pcs = MutableStateFlow<List<PairedPc>>(emptyList())
@@ -398,8 +411,7 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
     }
 
     init {
-        refreshPcs()
-        _pairing.value?.let { start(it) }
+        enterActiveHost()
         updates.showWhatsNew()
         ProcessLifecycleOwner.get().lifecycle.addObserver(foregroundObserver)
         runCatching { connectivity?.registerDefaultNetworkCallback(networkCallback) }
@@ -438,7 +450,36 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
     /** Point the app (REST and the live socket) at [c]. */
     private fun useClient(c: BridgeClient) {
         client = c
-        val g = LiveLink.connect(app, c)
+        attach(LiveLink.connect(app, c))
+    }
+
+    /** Make the active host (bridge or gateway) go live: [decideConnection] picks how, from its kind and tokens. */
+    private fun enterActiveHost() {
+        val pr = profiles.active()
+        val creds = if (pr.kind == HostKind.GATEWAY) GatewayCredentialStore(app, pr.id).load() else null
+        _pairing.value = if (pr.kind == HostKind.BRIDGE) store.load() else null
+        when (val how = decideConnection(pr.kind, creds)) {
+            HostConnection.BridgePairing -> {
+                _gatewayHost.value = null
+                refreshPcs()
+                _pairing.value?.let { start(it) }
+            }
+            is HostConnection.GatewayLogin -> {
+                val c = how.credentials
+                _gatewayHost.value = GatewayHostState(pr.id, pr.name.ifBlank { GatewayUrl.hostName(c.baseUrl) }, c.baseUrl, signedOut = false)
+                refreshPcs()
+                _conn.update { it.copy(activeUrl = c.baseUrl) }
+                // No BridgeClient: REST-backed screens stay empty (ticket 06) and nothing calls /v1/*.
+                attach(LiveLink.connectGateway(app, c, gatewayAuthFor(c, GatewayCredentialStore(app, pr.id), OkHttpTransport())))
+            }
+            HostConnection.NeedsSignIn -> {
+                _gatewayHost.value = GatewayHostState(pr.id, pr.name.ifBlank { "Gateway" }, null, signedOut = true)
+                refreshPcs()
+            }
+        }
+    }
+
+    private fun attach(g: Gateway) {
         if (g === gateway && gatewayJobs.all { it.isActive }) return
         gatewayJobs.forEach { it.cancel() }
         gateway = g
@@ -452,7 +493,10 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
                         GatewayState.CONNECTING, GatewayState.RECONNECTING -> Link.RECONNECTING
                         else -> Link.IDLE
                     }) }
-                    if (s == GatewayState.UNAUTHORIZED) _toast.value = g.lastError
+                    if (s == GatewayState.UNAUTHORIZED) {
+                        _toast.value = g.lastError
+                        _gatewayHost.update { it?.copy(signedOut = true) }
+                    }
                 }
             },
         )
@@ -609,7 +653,7 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
             val candidate = p.copy(url = url)
             try {
                 BridgeClient(candidate).me()
-                if (_pairing.value != null) {
+                if (hasHost()) {
                     // Another PC while one is paired: its own profile. The same PC paired again
                     // (same certificate, or same address) replaces its old pairing instead.
                     val same = profiles.list().firstOrNull { pr ->
@@ -645,21 +689,16 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
         // The legacy slot keeps its file names, so it stays in the list as the empty fallback.
         val next = profiles.remove(gone)
         activate(next)
-        _pairing.value = store.load()
-        refreshPcs()
-        _pairing.value?.let { start(it) }
+        enterActiveHost()
     }
 
     /** Talk to another paired PC. Its chats, drafts and addresses come back as they were left. */
     fun switchPc(id: String) {
-        if (id == profiles.activeId && _pairing.value != null) return
+        if (id == profiles.activeId && hasHost()) return
         if (profiles.list().none { it.id == id }) return
-        if (profiles.list().first { it.id == id }.kind == HostKind.GATEWAY) return // going live on a gateway is ticket 05b
-        teardown()
+        teardown() // closes the old socket first: never two live sockets
         activate(id)
-        _pairing.value = store.load()
-        refreshPcs()
-        _pairing.value?.let { start(it) }
+        enterActiveHost()
     }
 
     /** Forget any paired PC; forgetting the one in use is [unpair]. */
@@ -704,6 +743,7 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
         client = null
         bridgeAddresses = null
         _pairing.value = null
+        _gatewayHost.value = null
         _chat.value = ChatState()
         _sessions.value = SessionsState()
         settings.clear()
@@ -722,7 +762,7 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
      * listener catches the redirect, and only a finished sign-in adds a [HostKind.GATEWAY] host with
      * its tokens. Returns null on success, else the message to show; nothing is stored on failure.
      */
-    suspend fun signInGateway(rawUrl: String, openBrowser: (String) -> Unit): String? {
+    suspend fun signInGateway(rawUrl: String, openBrowser: (String) -> Unit, hostId: String? = null): String? {
         val base = try { GatewayUrl.validate(rawUrl) } catch (e: IllegalArgumentException) { return e.message }
         val auth = GatewayAuth(base, OkHttpTransport())
         val state = Pkce.newVerifier()
@@ -735,9 +775,17 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
                 }
             }
             val t = auth.signIn(code, verifier, state, state)
-            val host = profiles.add(GatewayUrl.hostName(base), HostKind.GATEWAY)
-            GatewayCredentialStore(app, host.id).save(GatewayCredentials(base, t.accessToken, t.refreshToken, t.expiresAt))
-            refreshPcs()
+            // [hostId]: signing in again to a host the app already lists (keeps its entry); else a new host.
+            val firstHost = !hasHost()
+            val id = hostId?.takeIf { h -> profiles.list().any { it.id == h } }
+                ?: profiles.add(GatewayUrl.hostName(base), HostKind.GATEWAY).id
+            GatewayCredentialStore(app, id).save(GatewayCredentials(base, t.accessToken, t.refreshToken, t.expiresAt, t.provider))
+            if (firstHost || id == profiles.activeId) {
+                // Nothing else is live (first launch) or this is the active host coming back: go live on it.
+                teardown()
+                activate(id)
+                enterActiveHost()
+            } else refreshPcs()
             null
         } catch (t: Throwable) {
             if (t is CancellationException) throw t
@@ -754,8 +802,10 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
         val active = profiles.activeId
         _pcs.value = profiles.list().mapNotNull { pr ->
             if (pr.kind == HostKind.GATEWAY) {
-                val gw = GatewayCredentialStore(app, pr.id).load() ?: return@mapNotNull null
-                return@mapNotNull PairedPc(pr.id, pr.name.ifBlank { GatewayUrl.hostName(gw.baseUrl) }, gw.baseUrl, false)
+                // The active gateway host stays listed while signed out, so the user can see and remove it.
+                val gw = GatewayCredentialStore(app, pr.id).load()
+                if (gw == null && pr.id != active) return@mapNotNull null
+                return@mapNotNull PairedPc(pr.id, pr.name.ifBlank { gw?.let { GatewayUrl.hostName(it.baseUrl) } ?: "Gateway" }, gw?.baseUrl.orEmpty(), pr.id == active)
             }
             val saved = if (pr.id == active) _pairing.value ?: store.load()
                 else CredentialStore(app, ProfileStore.pairingFile(pr.id)).load()
@@ -768,7 +818,7 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
 
     /** Back on screen: the socket may have died while the process was frozen. Catch up. */
     fun onForeground() {
-        client ?: return
+        if (client == null && gateway == null) return
         gateway?.nudge()
         discoverEndpoints()
         refreshProfiles()

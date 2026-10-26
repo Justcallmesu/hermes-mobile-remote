@@ -10,7 +10,7 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Test
 
-private class MemPrefs : android.content.SharedPreferences {
+internal class MemPrefs : android.content.SharedPreferences {
     val map = mutableMapOf<String, Any?>()
     override fun getAll(): MutableMap<String, *> = map
     override fun getString(key: String?, defValue: String?): String? = map[key] as? String ?: defValue
@@ -44,7 +44,7 @@ private class MemPrefs : android.content.SharedPreferences {
 }
 
 /** Reverses the bytes: enough to prove the stored form is not the plain token. */
-private object ReverseCipher : TokenCipher {
+internal object ReverseCipher : TokenCipher {
     override fun encrypt(plain: ByteArray) = plain.reversedArray()
     override fun decrypt(blob: ByteArray) = blob.reversedArray()
 }

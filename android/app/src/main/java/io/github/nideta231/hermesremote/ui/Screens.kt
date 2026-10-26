@@ -1120,6 +1120,53 @@ private fun ThemeSwatch(label: String, selected: Boolean, bg: Color, dot: Color,
 
 // ================================================================ Pairing
 
+/**
+ * A gateway host whose tokens are gone or refused: say so and offer sign-in again (the host entry stays).
+ * [baseUrl] is null when the tokens were lost with it, then the address is asked again.
+ */
+@Composable
+fun SignInAgainScreen(
+    name: String,
+    baseUrl: String?,
+    onSignIn: suspend (String) -> String?,
+    onCancelSignIn: () -> Unit,
+    onAddHost: () -> Unit,
+) {
+    val scope = rememberCoroutineScope()
+    var url by remember(baseUrl) { mutableStateOf(baseUrl ?: "https://") }
+    var error by remember { mutableStateOf<String?>(null) }
+    var busy by remember { mutableStateOf(false) }
+    Column(Modifier.fillMaxSize().imePadding().verticalScroll(rememberScrollState()).statusBarsPadding().navigationBarsPadding()
+        .padding(horizontal = 24.dp, vertical = 16.dp)) {
+        Spacer(Modifier.size(40.dp))
+        Text(name, style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.SemiBold)
+        Text("Your session ended. Sign in again.", style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Spacer(Modifier.size(20.dp))
+        OutlinedTextField(url, { url = it }, label = { Text("Gateway URL") }, singleLine = true, enabled = !busy,
+            modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(14.dp), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri))
+        Spacer(Modifier.size(10.dp))
+        Button(onClick = {
+            busy = true; error = null
+            scope.launch { error = onSignIn(url); busy = false }
+        }, enabled = !busy && url.isNotBlank(), modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp),
+            contentPadding = PaddingValues(vertical = 16.dp)) { Text("Sign in again", fontWeight = FontWeight.SemiBold) }
+        AnimatedVisibility(busy) {
+            Row(Modifier.fillMaxWidth().padding(top = 16.dp), verticalAlignment = Alignment.CenterVertically) {
+                TypingDots(Gold); Spacer(Modifier.width(10.dp)); Text("Waiting for the sign-in", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Spacer(Modifier.weight(1f))
+                TextButton(onClick = onCancelSignIn) { Text("Cancel sign-in") }
+            }
+        }
+        AnimatedVisibility(error != null) {
+            Surface(color = Bad.copy(alpha = 0.14f), shape = RoundedCornerShape(14.dp), modifier = Modifier.fillMaxWidth().padding(top = 16.dp)) {
+                Text(error ?: "", color = Bad, modifier = Modifier.padding(14.dp), style = MaterialTheme.typography.bodyMedium)
+            }
+        }
+        Spacer(Modifier.size(16.dp))
+        TextButton(onClick = onAddHost, enabled = !busy) { Text("Add another host") }
+    }
+}
+
 @Composable
 fun PairScreen(
     initialUri: String?,
