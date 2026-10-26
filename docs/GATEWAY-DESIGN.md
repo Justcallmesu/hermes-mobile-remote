@@ -1,6 +1,6 @@
 # Direct gateway login: design
 
-Status: **draft, not built.** Branch `feature/gateway-login` (from `origin/main`, v1.17.0). Not pushed.
+Status: **built (app code, JVM tests, APK builds); not verified on a phone or against a signed-in gateway.** Branch `feature/gateway-login` (from `origin/main`, v1.17.0). Not pushed.
 
 ## Goal
 

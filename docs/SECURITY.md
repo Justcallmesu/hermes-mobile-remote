@@ -75,6 +75,21 @@ therefore cannot be replaced by a release build, by design.
 **Firewall changes are narrow and confirmed.** Only private address ranges are opened, only on
 request, and never automatically.
 
+## Gateway hosts
+
+A gateway host has no bridge, so the bridge guarantees above do not apply to it. There is no device
+token, no device pin, no rate limit and no method allowlist. The app is the only filter on what it
+sends, and the gateway's own login and the network it is reached over are the boundary.
+
+- The password is typed on the gateway's login page in a browser, never in the app.
+- The sign-in redirect goes to `127.0.0.1` on a random port. It carries a single-use code, and the
+  app checks the `state` before it uses the code.
+- Gateway tokens (access and refresh) are in Keystore-backed storage and excluded from backup.
+  Refresh rotates them. Signing out clears them on the phone; whether the gateway revokes the
+  session is not confirmed.
+- Plain `http` is accepted only for Tailscale or LAN addresses. Any other address must use `https`.
+- Not checked on a device yet: the browser's loopback redirect, and token expiry in practice.
+
 ## What this does not protect against
 
 Stated plainly, because a security document that only lists wins is not useful.
@@ -93,6 +108,8 @@ Stated plainly, because a security document that only lists wins is not useful.
 - **Hermes' own backend.** The bridge is a gate in front of it, not a sandbox around it. Anything
   that can reach Hermes on loopback with its session token has more access than the bridge
   passes on.
+- **A gateway host's login or network.** A gateway host has no bridge in front of it. Anyone who can
+  sign in to the gateway, or reach it over the network, has what the phone has.
 
 ## Reporting a vulnerability
 

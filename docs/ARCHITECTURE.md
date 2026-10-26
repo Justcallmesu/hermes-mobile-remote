@@ -1,6 +1,7 @@
 # Architecture
 
-Three pieces, with one rule: the phone never holds a credential that can reach Hermes directly.
+Three pieces, with one rule: on a bridge host the phone never holds a credential that can reach Hermes
+directly. Gateway hosts are the exception; see [Direct gateway hosts](#direct-gateway-hosts).
 
 ```
 ┌──────────────┐  WebSocket + REST, HTTPS  ┌──────────────┐   WebSocket, loopback   ┌──────────────┐
@@ -85,6 +86,24 @@ the phone just enough to enforce policy: a method allowlist (what the desktop's 
 only by their `srq-` id, a frame size cap and a per-connection frame rate. Frames from Hermes pass
 through untouched. Each connection is audited on open and close with per-method counts.
 
+## Direct gateway hosts
+
+A gateway host skips the bridge. The app signs in to a gated `hermes serve` itself, using the native
+PKCE flow (RFC 8252), and then talks to the gateway with its own bearer token:
+
+- **Sign-in:** the gateway's login page opens in a Chrome Custom Tab. The gateway redirects to a
+  one-shot listener on `127.0.0.1` (random port), which receives a single-use code and checks the
+  `state`. The app exchanges the code for access and refresh tokens. The password never reaches the app.
+- **Socket:** before each connection the app asks the gateway for a single-use ticket and connects to
+  `ws(s)://<gateway>/api/ws?ticket=…`. A `401 session_expired` triggers one refresh and a retry.
+- **REST:** sessions, pin and rename, profiles, status and chat pictures (`/api/media`) over `/api/*`,
+  with the bearer token.
+
+Here the phone does hold a credential for the gateway, so the rule above does not apply. The
+gateway's login and the network are the boundary; no bridge sits in front of it. The Kotlin pieces are
+`data/GatewaySignIn.kt`, `data/GatewayAuth.kt`, `data/GatewayRest.kt` and `data/GatewayCredentialStore.kt`.
+Security trade-offs are in [SECURITY.md](SECURITY.md#gateway-hosts).
+
 ## The app
 
 Kotlin and Jetpack Compose, one activity, two pages (`CHAT`, `SETTINGS`) swapped with
@@ -94,18 +113,21 @@ Kotlin and Jetpack Compose, one activity, two pages (`CHAT`, `SETTINGS`) swapped
 | Concern | Where |
 |---|---|
 | REST transport, pinning, error mapping | `data/BridgeClient.kt`, `data/CertPin.kt` |
-| The live socket: JSON-RPC calls, events, questions, reconnect | `data/Gateway.kt` |
+| The live socket: JSON-RPC calls, events, questions, reconnect (URL from the bridge or a gateway ticket) | `data/Gateway.kt` |
 | One socket for the whole process, background notifications | `data/LiveLink.kt`, `data/WatchService.kt`, `data/Notifier.kt` |
 | Which path to use, LAN vs Tailscale | `data/EndpointResolver.kt` |
 | Folding Hermes' events into chat items | `data/Chat.kt` (`LiveReducer`) |
 | Hermes' stored transcript into chat items | `data/Chat.kt` (`HistoryMapper`) |
-| Token storage | `data/CredentialStore.kt` (Android Keystore) |
+| Token storage (Android Keystore): bridge pairing | `data/CredentialStore.kt` |
+| Token storage (Android Keystore): gateway tokens | `data/GatewayCredentialStore.kt` |
 | State, slash commands, models | `AppViewModel.kt` |
 | UI | `ui/ChatScreen.kt`, `ui/Screens.kt`, `ui/Components.kt` |
 
 Two rules shape this code. The device token is only ever sent to a tailnet host, or to a LAN host
 over a pinned TLS handshake: an interceptor re-checks that on every request and on the socket
-upgrade, so a misconfigured endpoint cannot quietly downgrade to cleartext. And the app never
+upgrade, so a misconfigured endpoint cannot quietly downgrade to cleartext. This is the bridge rule.
+A gateway host accepts `https` anywhere and plain `http` only for tailnet or LAN addresses
+(`GatewayUrl.validate`). And the app never
 invents state Hermes already has: a chat is shown by `session.resume` (transcript, turn in flight,
 open questions) and then kept current by Hermes' own events, the way the desktop does it.
 
@@ -114,7 +136,9 @@ burst of tokens does not make the list re-layout per token.
 
 ## Data on the phone
 
-The token is encrypted with an Android Keystore key and excluded from backups. Drafts are stored
+The bridge token is encrypted with an Android Keystore key and excluded from backups. Gateway tokens
+(access and refresh) are stored the same way, in a separate preferences file per gateway host, and are
+also excluded from backups. Drafts are stored
 per session. Session history is not cached in full: the app asks for the tail of a session and
 keeps what it has rendered.
 
