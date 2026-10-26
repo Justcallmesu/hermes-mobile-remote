@@ -1,14 +1,7 @@
 package io.github.nideta231.hermesremote.data
 
 import android.content.Context
-import android.security.keystore.KeyGenParameterSpec
-import android.security.keystore.KeyProperties
 import android.util.Base64
-import java.security.KeyStore
-import javax.crypto.Cipher
-import javax.crypto.KeyGenerator
-import javax.crypto.SecretKey
-import javax.crypto.spec.GCMParameterSpec
 
 /**
  * Stores the pairing. The device token is encrypted with a non-exportable AES key held in the
@@ -18,27 +11,14 @@ import javax.crypto.spec.GCMParameterSpec
  */
 class CredentialStore(context: Context, file: String = "pairing") {
     private val prefs = context.getSharedPreferences(file, Context.MODE_PRIVATE)
-    private val keyStore = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
-
-    private fun key(): SecretKey {
-        (keyStore.getEntry(ALIAS, null) as? KeyStore.SecretKeyEntry)?.let { return it.secretKey }
-        val gen = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, "AndroidKeyStore")
-        gen.init(KeyGenParameterSpec.Builder(ALIAS, KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT)
-            .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
-            .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
-            .setKeySize(256)
-            .build())
-        return gen.generateKey()
-    }
+    private val cipher: TokenCipher by lazy { KeystoreTokenCipher(ALIAS) }
 
     fun load(): Pairing? {
         val url = prefs.getString("url", null) ?: return null
         val blob = prefs.getString("token", null) ?: return null
         return try {
             val raw = Base64.decode(blob, Base64.NO_WRAP)
-            val cipher = Cipher.getInstance(TRANSFORM)
-            cipher.init(Cipher.DECRYPT_MODE, key(), GCMParameterSpec(128, raw, 0, 12))
-            val token = String(cipher.doFinal(raw, 12, raw.size - 12), Charsets.UTF_8)
+            val token = String(cipher.decrypt(raw), Charsets.UTF_8)
             Pairing(url, prefs.getString("device", "") ?: "", token, pin = prefs.getString("pin", null))
         } catch (e: Exception) {
             clear() // key invalidated (e.g. restored to a new phone): force re-pairing
@@ -47,9 +27,7 @@ class CredentialStore(context: Context, file: String = "pairing") {
     }
 
     fun save(p: Pairing) {
-        val cipher = Cipher.getInstance(TRANSFORM)
-        cipher.init(Cipher.ENCRYPT_MODE, key())
-        val blob = cipher.iv + cipher.doFinal(p.token.toByteArray(Charsets.UTF_8))
+        val blob = cipher.encrypt(p.token.toByteArray(Charsets.UTF_8))
         prefs.edit()
             .putString("url", p.url)
             .putString("device", p.device)
@@ -109,6 +87,5 @@ class CredentialStore(context: Context, file: String = "pairing") {
 
     private companion object {
         const val ALIAS = "hermes_remote_token_key"
-        const val TRANSFORM = "AES/GCM/NoPadding"
     }
 }

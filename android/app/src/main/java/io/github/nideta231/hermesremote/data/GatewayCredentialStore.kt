@@ -17,14 +17,14 @@ interface TokenCipher {
     fun decrypt(blob: ByteArray): ByteArray
 }
 
-/** Same Keystore AES-GCM scheme as [CredentialStore] (own key alias). */
-class KeystoreTokenCipher : TokenCipher {
+/** The Keystore AES-GCM scheme (iv-prefixed blob), shared by [CredentialStore] and the gateway store; one key per [alias]. */
+class KeystoreTokenCipher(private val alias: String) : TokenCipher {
     private val keyStore = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
 
     private fun key(): SecretKey {
-        (keyStore.getEntry(ALIAS, null) as? KeyStore.SecretKeyEntry)?.let { return it.secretKey }
+        (keyStore.getEntry(alias, null) as? KeyStore.SecretKeyEntry)?.let { return it.secretKey }
         val gen = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, "AndroidKeyStore")
-        gen.init(KeyGenParameterSpec.Builder(ALIAS, KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT)
+        gen.init(KeyGenParameterSpec.Builder(alias, KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT)
             .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
             .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
             .setKeySize(256)
@@ -45,7 +45,6 @@ class KeystoreTokenCipher : TokenCipher {
     }
 
     private companion object {
-        const val ALIAS = "hermes_remote_gateway_key"
         const val TRANSFORM = "AES/GCM/NoPadding"
     }
 }
@@ -60,7 +59,7 @@ data class GatewayCredentials(val baseUrl: String, val accessToken: String, val 
 class GatewayCredentialStore(private val prefs: SharedPreferences, private val cipher: TokenCipher) {
 
     constructor(context: Context, hostId: String) : this(
-        context.getSharedPreferences(ProfileStore.gatewayFile(hostId), Context.MODE_PRIVATE), KeystoreTokenCipher())
+        context.getSharedPreferences(ProfileStore.gatewayFile(hostId), Context.MODE_PRIVATE), KeystoreTokenCipher("hermes_remote_gateway_key"))
 
     /** Null when signed out, including when the stored blob cannot be decrypted (store is then cleared). */
     fun load(): GatewayCredentials? {
