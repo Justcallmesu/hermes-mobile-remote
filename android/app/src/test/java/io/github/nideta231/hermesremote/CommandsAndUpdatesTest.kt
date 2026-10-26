@@ -28,6 +28,12 @@ class CommandsAndUpdatesTest {
         assertEquals("Set a title", s.first().meta)
     }
 
+    @Test fun `a suggestion Hermes returns without its slash keeps the slash`() {
+        // complete.slash answers "/hum" with "humanizer" (replace_from = 1).
+        val s = parseSuggestions(JSONObject("""{"items":[{"text":"humanizer","display":"humanizer","kind":"skill"}],"replace_from":1}"""))
+        assertEquals(listOf("/humanizer"), s.map { it.text })
+    }
+
     @Test fun `command dispatch replies parse like the desktop reads them`() {
         assertEquals(Dispatch.Output("done"), parseDispatch(JSONObject("""{"type":"exec","output":"done"}""")))
         assertEquals(Dispatch.Alias("/compress"), parseDispatch(JSONObject("""{"type":"alias","target":"/compress"}""")))

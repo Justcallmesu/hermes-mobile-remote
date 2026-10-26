@@ -323,14 +323,9 @@ private fun ChatTopBar(state: ChatState, health: LinkHealth, showMenu: Boolean, 
                     profile?.let { ProfileTag(it) }
                 }
             }
+            // New chat lives in the drawer and Pin in the chat's ⋮ menu; the top bar only shows the link.
             LinkBadge(health, actions.openSettings)
-            if (state.sessionId != null) {
-                val pinTint by animateColorAsState(if (state.pinned) Gold else MaterialTheme.colorScheme.onSurfaceVariant, label = "pin")
-                IconButton(onClick = actions.togglePin) {
-                    Icon(Glyphs.Pin, if (state.pinned) "Unpin" else "Pin", tint = pinTint)
-                }
-            }
-            IconButton(onClick = actions.newChat) { Icon(Glyphs.Compose, "New chat") }
+            Spacer(Modifier.width(4.dp))
         }
     }
 }
