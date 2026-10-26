@@ -88,3 +88,45 @@ if not, pictures from a gateway host are a known gap.
 5. Android glue: Custom Tab, loopback listener activity/service, manifest entries, Add-host screen.
 6. REST client + feature gating in the UI.
 7. Docs, changelog, `docs/gateway-manual-checks.md` (real-phone checklist: sign in, chat, approval, airplane-mode reconnect, token expiry, logout).
+
+## Verified wire facts
+
+Sources: **live** = `curl` against WorkLab (`http://100.65.118.116:9119`, Hermes 0.22.2, 2026-10-26, no
+credentials used); **src** = local Hermes checkout v0.22.5 (WorkLab is 0.22.2, so a `src` claim is
+one minor version ahead of the live host). Paths below are under `hermes_cli/`. **unknown** = not
+confirmed; the app must not rely on it.
+
+| # | Claim | Status | Source |
+|---|---|---|---|
+| W1 | `GET /api/status` is public (no login). Reports `auth_required: true`, `auth_providers: ["basic"]`, `auth_flows: ["cookie", "native_pkce"]`, plus `version`, `gateway_running`, `profiles: ["default"]`. The app can use `auth_flows` to tell a gated gateway from an open one. | verified | live; `dashboard_auth/public_paths.py` |
+| W2 | `GET /api/auth/providers` -> `{"providers":[{"name":"basic","display_name":"Username & Password","supports_password":true}]}`. | verified | live; `dashboard_auth/routes.py:203` |
+| W3 | `GET /auth/native/authorize` needs `code_challenge`, `code_challenge_method=S256`, `redirect_uri`, `state`; `provider` optional (auto-picked when only one). Missing params -> 400. `redirect_uri` must be `http://127.0.0.1:<port>[/path]` or `::1`, canonical; `localhost` -> 400. A password provider answers `302 -> <base>/login` and rides a PKCE cookie that holds the broker state (so the Custom Tab must keep its cookies through the login). | verified | live (400 without params, 400 for `localhost`, 302 to `/login` for a valid request); `routes.py:242-336` |
+| W4 | After login the gateway redirects the browser to `<redirect_uri>?code=<gw_code>&state=<client state>`. Code TTL 120 s, single use; the whole pending login lasts 600 s. Tokens never go through the browser. | verified (src); the `/login` form itself was not submitted | `dashboard_auth/native_flow.py:25-30`, `routes.py:119-133` |
+| W5 | `POST /auth/native/token` JSON `{code, code_verifier}` -> `{access_token, refresh_token, token_type:"Bearer", expires_at (unix s), provider, user_id}`. Any failure is `400 {"detail":"Invalid or expired authorization code."}`; the code is spent even on a wrong verifier. | verified (failure path live, success shape src) | live; `routes.py:111-117,574-591` |
+| W6 | `POST /auth/native/refresh` JSON `{refresh_token, provider?}` -> same shape as W5 (rotated). Rejected token -> `401 {"error":"session_expired","detail":...}`. Provider unreachable -> `503`. Empty token -> 400. Concurrent calls are coalesced server-side too. | verified (401 live, 200 and 503 src) | live; `routes.py:594-617` |
+| W7 | REST calls carry `Authorization: Bearer <access_token>`. A missing credential gives `401 {"error":"unauthenticated","reason":"no_cookie","login_url":"/login"}`; a presented but bad/expired bearer gives `401 {"error":"session_expired","reason":"invalid_or_expired_session"}`. Provider down -> 503. Note that two different 401 bodies exist and only `session_expired` means "refresh now". | verified (no-credential live, rest src) | live; `dashboard_auth/middleware.py:72-86,175-184` |
+| W8 | `POST /api/auth/ws-ticket` (Bearer) -> `{"ticket": "...", "ttl_seconds": 30}`; single use; unauthenticated -> 401. | verified (401 live, shape src) | live; `routes.py:556-571`, `ws_tickets.py` |
+| W9 | `/api/ws` upgrade in gated mode accepts, in order: `?internal=` (server only), a ticket in the WS subprotocol, `?ticket=`, or `?token=<access token>` (a provider-verified session access token, used by Hermes' own token-mode remote desktop). `?ticket=` is what the design uses. Nothing else is required. | verified (src), not exercised live | `web_server_chat.py:200-300` |
+| W10 | `GET /api/sessions` (Bearer) -> `{sessions:[...], total, limit, offset, storage}`; query `limit<=100, offset, min_messages, archived=exclude|only|include, order=created|recent, exclude_sources, source, sources, cwd_prefix, full, profile`. Rows carry `id, title, source, model, started_at, last_active, message_count`, plus `pinned`, `archived` (JSON booleans), `is_active`, `profile`, `is_default_profile`. Same shape the bridge's `/v1/sessions` passes through. | verified (src) | `web_routers/sessions.py:182-245` |
+| W11 | `PATCH /api/sessions/{id}` body takes any of `title, archived, hidden, pinned, unread`, plus `profile`, `request_id`, `expected_revision`, `expected_generation`; goes through a revisioned mutation. The bridge sends the owning profile in the body. | verified (src) | `web_routers/sessions.py:926-935` |
+| W12 | `GET /api/profiles` -> `{"profiles":[{name, display_name, description, model, provider, is_default, ...}]}` (same fields the bridge reads). | verified (src) | `web_routers/profiles.py:807,801`; bridge `app.py:373` |
+| W13 | The gateway serves chat images itself: `GET /api/media?path=<abs path>` (Bearer) -> `{"data_url":"data:image/...;base64,..."}`; image extensions only, size cap, restricted to the agent's media roots (403/404/413/415 otherwise). Remote image URLs on an allowlist of hosts go via `/api/media/proxy`. | verified (src) | `web_routers/files.py:336-380` |
+| W14 | Files: `GET /api/files`, `/api/files/read`, `/api/files/download`, `/api/files/stream` exist and are Bearer-gated. Their parameters and root restrictions were not read. | unknown (exist, shape not read) | `web_routers/files.py:515-626` |
+| W15 | `POST /auth/logout` redirects to `/login` and is cookie oriented; whether it accepts a Bearer or a refresh token to revoke a native session is not established. | unknown | `routes.py:496-510` |
+| W16 | The `/login` form's password POST (`/auth/password-login`) and its rate limit were not exercised; no credentials were used. | unknown | `routes.py:393-488` |
+
+### Unknowns from the design, resolved
+
+1. **Reachable?** Yes, over Tailscale (W1, W2). The `basic` provider is gated and native PKCE is advertised. The sign-in step itself has not been run from a phone: ticket 05/07 does that.
+2. **Routes and shapes:** W10-W12, taken from the dashboard routes, not the bridge's `/v1`.
+3. **Method allowlist:** unchanged; a direct socket has no allowlist (the gateway's login is the only boundary). SECURITY.md must say so (ticket 07).
+4. **Loopback redirect blocked by the browser:** still open. Only a phone test can show it (ticket 07 checklist). Fallback if it fails: paste the `code` by hand, which the server already supports (the code is just a query value).
+
+### Design corrections
+
+- **Images:** the design says gateway hosts hide `/v1/media` pictures. The gateway has `/api/media` returning a data URL (W13), so pictures can work. Ticket 06 says "placeholder instead"; change that to "load via `/api/media`" unless the chat image path proves too costly (decide with the maintainer before ticket 06).
+- **Chat files:** `/api/files/download` exists (W14). It stays hidden in the first cut because its shape is unread.
+- **401 handling (ticket 04/06):** only `error: "session_expired"` should trigger a refresh. `error: "unauthenticated"` with no bearer sent is a bug, not a refresh case. A refresh that returns 401 `session_expired` is the sign-out case.
+- **Socket credential:** `?token=<access token>` also works on `/api/ws` (W9), which would skip the ticket call. Keep the ticket (shorter-lived secret in a URL), but it is a fallback if the ticket call misbehaves.
+- **Version skew:** source claims are from v0.22.5, WorkLab runs 0.22.2. Re-check W10-W13 against WorkLab once signed in.
+
