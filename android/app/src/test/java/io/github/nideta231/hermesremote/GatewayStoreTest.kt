@@ -79,6 +79,25 @@ class GatewayStoreTest {
         assertEquals(c, GatewayCredentialStore(prefs, ReverseCipher).load())
     }
 
+    @Test fun removingAHostClearsItsPairingDraftsAndGatewayStore() {
+        val files = mutableMapOf<String, MemPrefs>()
+        fun prefsOf(name: String) = files.getOrPut(name) { MemPrefs() }
+        GatewayCredentialStore(prefsOf(ProfileStore.gatewayFile("g1")), ReverseCipher)
+            .save(GatewayCredentials("https://gw.example", "ACCESS-123", "REFRESH-456", 1L))
+        prefsOf(ProfileStore.pairingFile("g1")).map["token"] = "t"
+        prefsOf(ProfileStore.draftsFile("g1")).map["d"] = "x"
+        prefsOf(ProfileStore.gatewayFile("other")).map["url"] = "keep"
+
+        ProfileStore.clearHostFiles("g1", ::prefsOf)
+
+        assertEquals(0, prefsOf(ProfileStore.gatewayFile("g1")).map.size)
+        assertEquals(0, prefsOf(ProfileStore.pairingFile("g1")).map.size)
+        assertEquals(0, prefsOf(ProfileStore.draftsFile("g1")).map.size)
+        assertEquals(1, prefsOf(ProfileStore.gatewayFile("other")).map.size)
+        // a bridge host has nothing stored under gateway_<id>: clearing is harmless
+        ProfileStore.clearHostFiles("bridge1", ::prefsOf)
+    }
+
     @Test fun corruptedBlobClearsAndReportsSignedOut() {
         val prefs = MemPrefs()
         val store = GatewayCredentialStore(prefs, ReverseCipher)

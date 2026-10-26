@@ -1,6 +1,7 @@
 package io.github.nideta231.hermesremote
 
 import android.app.Application
+import android.content.Context
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import androidx.lifecycle.AndroidViewModel
@@ -628,9 +629,8 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
     /** Forget the PC this app is on now, and move to the next paired one (if any). */
     fun unpair() {
         teardown()
-        store.clear()
-        drafts.clearAll()
         val gone = profiles.activeId
+        clearHostData(gone)
         // The legacy slot keeps its file names, so it stays in the list as the empty fallback.
         val next = profiles.remove(gone)
         activate(next)
@@ -653,12 +653,15 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
     /** Forget any paired PC; forgetting the one in use is [unpair]. */
     fun forgetPc(id: String) {
         if (id == profiles.activeId) return unpair()
-        CredentialStore(app, ProfileStore.pairingFile(id)).clear()
-        DraftStore(app, ProfileStore.draftsFile(id)).clearAll()
+        clearHostData(id)
         DrawerCache(app, id).clear()
         profiles.remove(id)
         refreshPcs()
     }
+
+    /** The one step both [unpair] and [forgetPc] use: pairing, drafts and gateway credentials of host [id]. */
+    private fun clearHostData(id: String) =
+        ProfileStore.clearHostFiles(id) { app.getSharedPreferences(it, Context.MODE_PRIVATE) }
 
     fun renamePc(id: String, name: String) {
         if (name.isBlank()) return

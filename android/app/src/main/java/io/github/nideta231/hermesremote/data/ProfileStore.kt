@@ -75,6 +75,11 @@ class ProfileStore(private val prefs: SharedPreferences) {
         /** Per-host gateway credentials; covered by the blanket sharedpref backup exclusion. */
         fun gatewayFile(id: String) = "gateway_$id"
 
+        /** Empties everything this host keeps in prefs files: pairing, drafts and gateway credentials. */
+        fun clearHostFiles(id: String, prefsOf: (String) -> SharedPreferences) {
+            listOf(pairingFile(id), draftsFile(id), gatewayFile(id)).forEach { prefsOf(it).edit().clear().apply() }
+        }
+
         private fun kindOf(s: String) = if (s == "gateway") HostKind.GATEWAY else HostKind.BRIDGE
     }
 }
