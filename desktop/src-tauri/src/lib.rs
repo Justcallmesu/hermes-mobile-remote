@@ -2,6 +2,7 @@
 //! `cargo test` runs without a window; `run()` only wires Tauri.
 
 pub mod bridge;
+pub mod control;
 pub mod version;
 
 #[tauri::command]
@@ -27,7 +28,15 @@ pub fn run() {
             bridge::bridge_trusted,
             bridge::bridge_trust,
             bridge::bridge_untrust,
-            bridge::bridge_doctor
+            bridge::bridge_doctor,
+            control::bridge_start,
+            control::bridge_stop,
+            control::get_settings,
+            control::set_start_at_logon,
+            control::firewall_fix,
+            control::open_logs,
+            control::set_terminal_shell,
+            control::get_installed_list
         ])
         .run(tauri::generate_context!())
         .expect("error while running Hermes Remote");

@@ -5,3 +5,23 @@ import { invoke } from "@tauri-apps/api/core";
 export function appVersion() {
   return invoke("app_version");
 }
+
+// Bridge data: each answers {via: "http"|"cli", data}.
+export const bridgeStatus = () => invoke("bridge_status");
+export const bridgeDevices = () => invoke("bridge_devices");
+export const bridgePair = (name, replace = false) => invoke("bridge_pair", { name, replace });
+export const bridgeRevoke = (name) => invoke("bridge_revoke", { name });
+export const bridgeTrusted = () => invoke("bridge_trusted");
+export const bridgeTrust = () => invoke("bridge_trust");
+export const bridgeUntrust = (id) => invoke("bridge_untrust", { id });
+export const bridgeDoctor = () => invoke("bridge_doctor");
+
+// Controls (an OS backend may answer "not available yet on this platform").
+export const bridgeStart = () => invoke("bridge_start");
+export const bridgeStop = () => invoke("bridge_stop");
+export const getSettings = () => invoke("get_settings");
+export const setStartAtLogon = (on) => invoke("set_start_at_logon", { on });
+export const firewallFix = () => invoke("firewall_fix");
+export const openLogs = () => invoke("open_logs");
+export const setTerminalShell = (value) => invoke("set_terminal_shell", { value });
+export const getInstalledList = () => invoke("get_installed_list");
