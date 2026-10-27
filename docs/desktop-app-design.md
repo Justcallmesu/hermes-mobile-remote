@@ -155,7 +155,7 @@ Repo layout: top-level `desktop/` (`src-tauri/` Rust, Vue UI), next to `android/
 | D22 | Updates: Tauri updater from GitHub Releases, updater key held by nideta; re-sync the venv after an update. |
 | D23 | `bridge/linux/tray.py` stays until the Tauri app has proven itself on Linux; removed in a follow-up PR. |
 | D24 | Unsigned builds for now; code signing deferred. |
-| D25 | Ask nideta before the branch adds Rust/Node to the repo (step 0). |
+| D25 | nideta agreed (2026-10-27) to Rust + Node in the repo, per-OS release builds and holding the updater key as a repo secret. |
 | D26 | Rust toolchain (rustup + MSVC Build Tools, ~6 GB) is installed on this PC when the build starts, on the maintainer's yes at that time. |
 | D27 | Branch renamed `feature/desktop-app`. |
 | D28 | `serve` exits with a distinct code on a port conflict, so the supervisor stops retrying on a fact, not a log grep. (Proposed, not objected to.) |
@@ -187,7 +187,7 @@ Repo layout: top-level `desktop/` (`src-tauri/` Rust, Vue UI), next to `android/
 
 ## Order of work on the branch
 
-0. **Ask nideta** (D25): Rust + Node in the repo, per-OS release builds, the updater key as a repo secret.
+0. ~~Ask nideta~~ (D25): agreed.
 1. **Bridge, Python only** (no Rust needed, can start on this PC today): `supervise` + D28; native host calls with
    the side-by-side CI check; `/v1/local/*` + secret; terminal shell.
 2. **Toolchain** on the maintainer's yes (D26), then a **Tauri spike**: tray + flyout positioned at the taskbar
@@ -212,6 +212,5 @@ Repo layout: top-level `desktop/` (`src-tauri/` Rust, Vue UI), next to `android/
 
 ## Open questions
 
-1. **nideta's answer** (D25). A "no" to Rust/Node in the repo reopens D3 (separate repo, or pywebview).
-2. **Tauri spike results** (step 2): flyout positioning at the Windows taskbar, Job Object from Rust, Linux
+1. **Tauri spike results** (step 2): flyout positioning at the Windows taskbar, Job Object from Rust, Linux
    window on KDE and GNOME.
