@@ -36,6 +36,7 @@ from .config import Config
 from .devices import Device, DeviceStore
 from .network import TrustStore, network_info, serving_lan_ips
 from .chat_files import referenced_file
+from .folders import FolderError, list_dirs, make_dir
 from .project_notes import IDEA_MAX_BYTES, NoFolder, read_idea, write_idea
 from .profiles import ProfileRefused, is_visible, media_roots, profile_home, resolve_profile
 from .monitor import RANGES, ClaudeUsage, Monitor
@@ -91,6 +92,10 @@ class PatchSession(BaseModel):
     # Desktop-sidebar flags Hermes persists per session.
     pinned: bool | None = None
     archived: bool | None = None
+
+
+class MakeFolder(BaseModel):
+    path: str = Field(min_length=1, max_length=4096)
 
 
 class ProjectIdea(BaseModel):
@@ -343,7 +348,9 @@ def create_app(cfg: Config, *, locator: BackendLocator | None = None, tailnet: T
                 # restricted bridge would refuse.
                 "features": [f for f, on in (("monitor", monitor is not None),
                                               ("claude_usage", monitor is not None and cfg.claude_usage),
-                                              ("terminal", cfg.terminal)) if on],
+                                              ("terminal", cfg.terminal),
+                                              ("speedtest", monitor is not None),
+                                              ("folders", True)) if on],
                 "bridge_version": __version__, "protocol": PROTOCOL}
 
     @app.get("/v1/status")
@@ -580,6 +587,24 @@ def create_app(cfg: Config, *, locator: BackendLocator | None = None, tailnet: T
         except OSError as exc:
             raise ApiError(500, "write_failed", f"Could not write IDEA.md: {exc.strerror or exc}")
 
+    @app.get("/v1/folders")
+    async def get_folders(path: str = "", hidden: bool = False, _: Device = Depends(device_auth)):
+        """Sub-folders of a PC path (home when empty), for the project folder picker. Names only, no files."""
+        try:
+            return await asyncio.to_thread(list_dirs, path[:4096], hidden)
+        except FolderError as exc:
+            raise ApiError(exc.status, exc.code, exc.message)
+
+    @app.post("/v1/folders")
+    async def post_folder(body: MakeFolder, device: Device = Depends(device_auth)):
+        """Create one new folder (the picker's "New folder"); its parent must exist."""
+        try:
+            out = await asyncio.to_thread(make_dir, body.path)
+        except FolderError as exc:
+            raise ApiError(exc.status, exc.code, exc.message)
+        audit_event({"event": "folder_create", "device": device.name, "path": out["path"]})
+        return out
+
     # ------------------------------------------------------------ the live connection
 
     # ------------------------------------------------------------ PC monitor + Claude usage
@@ -622,6 +647,24 @@ def create_app(cfg: Config, *, locator: BackendLocator | None = None, tailnet: T
             raise
         audit_event({"event": "process_stop", "device": device.name, "pid": pid, "name": result["name"], "force": force})
         return result
+
+    @app.post("/v1/monitor/speedtest")
+    async def run_speed_test(device: Device = Depends(device_auth)):
+        m = need_monitor()
+        if not limiter.allow(f"speed:{device.id}", 6):
+            raise ApiError(429, "rate_limited", "Too many speed tests; wait a minute")
+        try:
+            result = await off_loop(m.speed_test)
+        except RuntimeError as exc:
+            raise ApiError(409, "speedtest_busy", str(exc))
+        except OSError as exc:
+            raise ApiError(502, "speedtest_failed", f"Speed test failed: {getattr(exc, 'reason', None) or exc}")
+        audit_event({"event": "speed_test", "device": device.name, "down": result["down_mbps"], "up": result["up_mbps"]})
+        return result
+
+    @app.get("/v1/monitor/speedtest")
+    async def speed_tests(limit: int = 30, _: Device = Depends(device_auth)):
+        return await off_loop(need_monitor().speed_history, limit)
 
     @app.get("/v1/claude/usage")
     async def claude_usage(refresh: bool = False, _: Device = Depends(device_auth)):

@@ -82,14 +82,43 @@ class ClaudeUsage:
                 "Authorization": "Bearer " + oauth["accessToken"],
                 "anthropic-beta": "oauth-2025-04-20", "User-Agent": "hermes-remote-bridge"})
             data = json.loads(self._open(req))
-            self.latest = parse_usage(data, oauth.get("subscriptionType"))
+            self.latest = parse_usage(data, oauth.get("subscriptionType"), oauth.get("rateLimitTier"))
         except Exception as exc:  # noqa: BLE001 - shown to the user, keep the last good numbers
             prev = self.latest if self.latest.get("ok") or "session" in self.latest else {}
             self.latest = dict(prev, ok=False, error=str(exc)[:200], error_ts=int(time.time()))
         return self.latest
 
 
-def parse_usage(data: dict, plan: str | None) -> dict:
+# Per-model weekly windows of the older answer shape (shown as extra limits when present).
+_LEGACY_WEEKLY = {"seven_day_opus": "Weekly · Opus", "seven_day_sonnet": "Weekly · Sonnet",
+                  "seven_day_oauth_apps": "Weekly · apps", "seven_day_cowork": "Weekly · Cowork"}
+
+
+def _money(amount_minor, exponent) -> float | None:
+    if amount_minor is None:
+        return None
+    return round(amount_minor / (10 ** (exponent or 0)), 2)
+
+
+def _extra(data: dict) -> dict | None:
+    """Pay-as-you-go credits beyond the plan ("extra usage"), when the account has them."""
+    ex = data.get("extra_usage") or {}
+    spend = data.get("spend") or {}
+    used = spend.get("used") or {}
+    limit = spend.get("limit") or {}
+    if not ex and not spend:
+        return None
+    return {"enabled": bool(ex.get("is_enabled") or spend.get("enabled")),
+            "currency": used.get("currency") or ex.get("currency") or "USD",
+            "used": _money(used.get("amount_minor"), used.get("exponent")) if used else ex.get("used_credits"),
+            "limit": _money(limit.get("amount_minor"), limit.get("exponent")) if isinstance(limit, dict) and limit
+            else ex.get("monthly_limit"),
+            "percent": spend.get("percent") if spend.get("percent") is not None else ex.get("utilization"),
+            "limit_reached": bool(ex.get("spend_limit_reached")),
+            "disabled_reason": ex.get("disabled_reason") or spend.get("disabled_reason")}
+
+
+def parse_usage(data: dict, plan: str | None, tier: str | None = None) -> dict:
     limits = []
     for lim in data.get("limits") or []:
         scope = lim.get("scope") or {}
@@ -98,7 +127,8 @@ def parse_usage(data: dict, plan: str | None) -> dict:
         if label is None:
             label = ("Weekly" + (f" · {model}" if model else "")) if lim.get("group") == "weekly" else lim.get("kind", "?")
         limits.append({"label": label, "percent": lim.get("percent") or 0, "resets_at": lim.get("resets_at"),
-                       "active": bool(lim.get("is_active")), "severity": lim.get("severity", "normal")})
+                       "active": bool(lim.get("is_active")), "severity": lim.get("severity", "normal"),
+                       "kind": lim.get("kind"), "group": lim.get("group")})
     five = data.get("five_hour") or {}
     seven = data.get("seven_day") or {}
     if not limits:
@@ -109,11 +139,18 @@ def parse_usage(data: dict, plan: str | None) -> dict:
         if seven.get("utilization") is not None:
             limits.append({"label": "Weekly", "percent": seven["utilization"], "resets_at": seven.get("resets_at"),
                            "active": True, "severity": "normal"})
+    known = {l["label"] for l in limits}
+    for key, label in _LEGACY_WEEKLY.items():
+        win = data.get(key) or {}
+        if win.get("utilization") is not None and label not in known:
+            limits.append({"label": label, "percent": win["utilization"], "resets_at": win.get("resets_at"),
+                           "active": True, "severity": "normal", "kind": key, "group": "weekly"})
     weekly_vals = [l["percent"] for l in limits if l["label"].startswith("Weekly")]
     weekly = seven.get("utilization") if seven.get("utilization") is not None else (max(weekly_vals) if weekly_vals else None)
     weekly_reset = seven.get("resets_at") or next((l["resets_at"] for l in limits if l["label"].startswith("Weekly")), None)
     return {"ok": True, "ts": int(time.time()), "plan": plan, "session": five.get("utilization"), "weekly": weekly,
-            "session_resets_at": five.get("resets_at"), "weekly_resets_at": weekly_reset, "limits": limits}
+            "session_resets_at": five.get("resets_at"), "weekly_resets_at": weekly_reset, "limits": limits,
+            "tier": tier, "locked_reason": five.get("locked_reason"), "extra": _extra(data)}
 
 
 class Monitor:
@@ -129,6 +166,7 @@ class Monitor:
         self._conn: sqlite3.Connection | None = None
         self._prev_net = self._prev_disk = None
         self._prev_t = 0.0
+        self._speed_lock = threading.Lock()  # one speed test at a time
 
     # ------------------------------------------------------------ storage
     def _db(self) -> sqlite3.Connection:
@@ -140,6 +178,8 @@ class Monitor:
             for table in ("raw", "m1", "m15"):
                 conn.execute(f"CREATE TABLE IF NOT EXISTS {table} (ts INTEGER PRIMARY KEY, {cols})")
             conn.execute("CREATE TABLE IF NOT EXISTS claude (ts INTEGER PRIMARY KEY, session REAL, weekly REAL)")
+            conn.execute("CREATE TABLE IF NOT EXISTS speed (ts INTEGER PRIMARY KEY, ping_ms REAL, jitter_ms REAL, "
+                         "down_mbps REAL, up_mbps REAL)")
             conn.commit()
             self._conn = conn
         return self._conn
@@ -296,6 +336,32 @@ class Monitor:
             rows = self._db().execute("SELECT ts, session, weekly FROM claude WHERE ts >= ? ORDER BY ts", (start,)).fetchall()
         return {"range": range_key, "start": start, "end": int(time.time()), "ts": [r[0] for r in rows],
                 "session": [r[1] for r in rows], "weekly": [r[2] for r in rows]}
+
+    # ------------------------------------------------------------ speed test
+    def speed_test(self, runner=None) -> dict:
+        """Run one internet speed test now and store it; refuses while another is running."""
+        from . import speedtest
+
+        if not self._speed_lock.acquire(blocking=False):
+            raise RuntimeError("A speed test is already running")
+        try:
+            result = (runner or speedtest.run)()
+        finally:
+            self._speed_lock.release()
+        with self._lock:
+            conn = self._db()
+            conn.execute("INSERT OR REPLACE INTO speed VALUES (?, ?, ?, ?, ?)",
+                         (result["ts"], result["ping_ms"], result["jitter_ms"], result["down_mbps"], result["up_mbps"]))
+            conn.execute("DELETE FROM speed WHERE ts < ?", (int(time.time()) - M15_KEEP,))
+            conn.commit()
+        return result
+
+    def speed_history(self, limit: int = 30) -> dict:
+        with self._lock:
+            rows = self._db().execute("SELECT ts, ping_ms, jitter_ms, down_mbps, up_mbps FROM speed "
+                                      "ORDER BY ts DESC LIMIT ?", (max(1, min(limit, 500)),)).fetchall()
+        tests = [{"ts": r[0], "ping_ms": r[1], "jitter_ms": r[2], "down_mbps": r[3], "up_mbps": r[4]} for r in rows]
+        return {"running": self._speed_lock.locked(), "tests": tests}
 
     def alerts(self) -> list[str]:
         window = int(time.time()) - ALERT_MINUTES * 60

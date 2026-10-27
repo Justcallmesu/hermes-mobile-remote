@@ -104,7 +104,7 @@ def test_monitor_routes(mon_env):
         assert c.post(f"/v1/monitor/processes/{os.getpid()}/stop").json()["error"]["code"] == "forbidden_process"
         assert c.post("/v1/monitor/processes/999999999/stop").status_code in (403, 404)
         assert c.get("/v1/claude/usage?refresh=true").json()["ok"] is False
-        assert c.get("/v1/me").json()["features"] == ["monitor", "claude_usage", "terminal"]
+        assert c.get("/v1/me").json()["features"] == ["monitor", "claude_usage", "terminal", "speedtest", "folders"]
 
 
 def test_monitor_requires_token(mon_env):
@@ -122,7 +122,7 @@ def test_monitor_off(tmp_path):
     c = TestClient(app, client=(PHONE, 5555))
     c.headers["Authorization"] = f"Bearer {token}"
     assert c.get("/v1/monitor/now").json()["error"]["code"] == "monitor_off"
-    assert c.get("/v1/me").json()["features"] == []
+    assert c.get("/v1/me").json()["features"] == ["folders"]
 
 
 @pytest.mark.skipif(os.name == "nt", reason="PTY shell is POSIX only")
@@ -188,3 +188,57 @@ def test_repair_replaces_the_old_token(tmp_path):
     assert new.id != old.id
     assert store.authenticate(old_token) is None
     assert store.authenticate(new_token).id == new.id
+
+
+def test_parse_usage_details():
+    data = {"five_hour": {"utilization": 29, "resets_at": "a", "locked_reason": None},
+            "seven_day_opus": {"utilization": 12, "resets_at": "b"},
+            "limits": [{"kind": "session", "group": "session", "percent": 29, "is_active": True}],
+            "extra_usage": {"is_enabled": True, "spend_limit_reached": False},
+            "spend": {"used": {"amount_minor": 1250, "currency": "USD", "exponent": 2},
+                      "limit": {"amount_minor": 5000, "currency": "USD", "exponent": 2}, "percent": 25, "enabled": True}}
+    r = parse_usage(data, "max", "default_claude_max_5x")
+    assert r["tier"] == "default_claude_max_5x"
+    assert [l["label"] for l in r["limits"]] == ["Session (5h)", "Weekly · Opus"]
+    assert r["extra"] == {"enabled": True, "currency": "USD", "used": 12.5, "limit": 50.0, "percent": 25,
+                          "limit_reached": False, "disabled_reason": None}
+
+
+def test_speed_test_stores_and_refuses_overlap(tmp_path):
+    m = Monitor(tmp_path / "m.db")
+    fake = {"ts": int(time.time()), "ping_ms": 12.0, "jitter_ms": 1.0, "down_mbps": 80.0, "up_mbps": 40.0}
+    assert m.speed_test(lambda: fake)["down_mbps"] == 80.0
+    h = m.speed_history()
+    assert h["running"] is False and h["tests"][0]["up_mbps"] == 40.0
+    m._speed_lock.acquire()
+    with pytest.raises(RuntimeError):
+        m.speed_test(lambda: fake)
+
+
+def test_speedtest_math():
+    import io
+    from hermes_remote_bridge import speedtest
+
+    class Body(io.BytesIO):
+        def __enter__(self):
+            return self
+
+    r = speedtest.run(opener=lambda url, t: Body(b"x" * (1000 if "bytes=0" not in url else 0)), poster=lambda d: None)
+    assert r["down_bytes"] == 1000 and r["ping_ms"] >= 0 and r["up_bytes"] > 0
+
+
+def test_folder_routes(mon_env, tmp_path):
+    c, _ = mon_env
+    (tmp_path / "proj" / ".git").mkdir(parents=True)
+    (tmp_path / ".hidden").mkdir()
+    (tmp_path / "file.txt").write_text("x")
+    out = c.get("/v1/folders", params={"path": str(tmp_path)}).json()
+    names = [d["name"] for d in out["dirs"]]
+    assert "proj" in names and ".hidden" not in names and "file.txt" not in names
+    assert next(d for d in out["dirs"] if d["name"] == "proj")["git"] is True
+    assert out["parent"] == str(tmp_path.parent)
+    assert c.get("/v1/folders", params={"path": str(tmp_path / "nope")}).status_code == 404
+    made = c.post("/v1/folders", json={"path": str(tmp_path / "new")}).json()
+    assert made["path"] == str(tmp_path / "new") and (tmp_path / "new").is_dir()
+    assert c.post("/v1/folders", json={"path": str(tmp_path / "new")}).status_code == 409
+    assert c.get("/v1/folders").json()["path"] == os.path.expanduser("~")
