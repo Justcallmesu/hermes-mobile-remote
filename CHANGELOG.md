@@ -3,6 +3,13 @@
 Releases are git tags; the version in the app comes from the tag. `git log v0.9.0..vX.Y.Z` is the
 authoritative history — this file only summarises what is worth knowing before upgrading.
 
+## v1.24.0
+
+- Background processes: a chat's background jobs (dev servers, builds, watchers the agent started
+  in the background) now show under the transcript, like the subagent panel: the command, how long
+  it has run, exit code once it ends. Tap one to read its latest output; *Stop* kills it on the PC.
+  Updates every few seconds. Needs the updated bridge.
+
 ## v1.23.1
 
 - *Show more* adds the number set in Settings > Chats per group (3, 5 or 10) instead of a fixed
