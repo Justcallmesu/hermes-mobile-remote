@@ -300,8 +300,9 @@ fun SessionsPane(
                                 modifier = Modifier.animateItem(), nested = view.grouping == SessionGrouping.PROJECT,
                                 onClick = { actions.open(s.id) }, onLongClick = { menuFor = s })
                         }
-                        if (page.remaining > 0) item(key = "more-${group.key}") {
-                            ShowMoreRow(page.remaining, Modifier.animateItem()) {
+                        if (page.remaining > 0 || page.canShowLess) item(key = "more-${group.key}") {
+                            ShowMoreRow(page.remaining, page.canShowLess, Modifier.animateItem(),
+                                onLess = { shown = shown - group.key }) {
                                 shown = shown + (group.key to page.items.size + SESSION_PAGE)
                             }
                         }
@@ -527,16 +528,26 @@ private fun RadioMark(selected: Boolean) {
     }
 }
 
-/** "Show N more" under a long group; each tap adds [SESSION_PAGE] rows. */
+/** "Show N more" under a long group (each tap adds [SESSION_PAGE] rows) and "Show less" back to the first page. */
 @Composable
-private fun ShowMoreRow(remaining: Int, modifier: Modifier, onClick: () -> Unit) {
-    Row(modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).clickable(onClick = onClick)
-        .padding(horizontal = 12.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
-        Icon(Glyphs.Chevron, null, tint = Gold, modifier = Modifier.size(16.dp))
-        Spacer(Modifier.width(8.dp))
-        Text("Show ${minOf(remaining, SESSION_PAGE)} more", style = MaterialTheme.typography.labelLarge, color = Gold,
-            fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
-        Text("$remaining left", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+private fun ShowMoreRow(remaining: Int, canShowLess: Boolean, modifier: Modifier, onLess: () -> Unit, onMore: () -> Unit) {
+    Row(modifier.fillMaxWidth().padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+        if (remaining > 0) {
+            Row(Modifier.weight(1f).clip(RoundedCornerShape(10.dp)).clickable(onClick = onMore)
+                .padding(horizontal = 8.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+                Icon(Glyphs.Chevron, null, tint = Gold, modifier = Modifier.size(16.dp))
+                Spacer(Modifier.width(8.dp))
+                Text("Show ${minOf(remaining, SESSION_PAGE)} more", style = MaterialTheme.typography.labelLarge, color = Gold,
+                    fontWeight = FontWeight.SemiBold)
+                Spacer(Modifier.width(8.dp))
+                Text("$remaining left", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        } else Spacer(Modifier.weight(1f))
+        if (canShowLess) {
+            Text("Show less", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                fontWeight = FontWeight.SemiBold, modifier = Modifier.clip(RoundedCornerShape(10.dp)).clickable(onClick = onLess)
+                    .padding(horizontal = 10.dp, vertical = 10.dp))
+        }
     }
 }
 

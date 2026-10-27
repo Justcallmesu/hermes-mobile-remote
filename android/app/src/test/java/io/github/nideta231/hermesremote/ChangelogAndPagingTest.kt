@@ -84,13 +84,13 @@ class ChangelogAndPagingTest {
         assertEquals(10, more.remaining)
     }
 
-    @Test fun defaultPagingShowsThreeThenTenMore() {
+    @Test fun defaultPagingShowsThreeThenFiveMore() {
         val g = SessionGroup("Today", (0 until 40).map { s("s$it") })
         val first = pageGroups(listOf(g), emptyMap()).single()
         assertEquals(3, first.items.size)
         assertEquals(37, first.remaining)
         val more = pageGroups(listOf(g), mapOf(g.key to first.items.size + SESSION_PAGE)).single()
-        assertEquals(13, more.items.size)
+        assertEquals(8, more.items.size)
     }
 
     @Test fun zeroPerGroupShowsEveryChat() {
@@ -123,5 +123,14 @@ class ChangelogAndPagingTest {
     @Test fun wrappedParagraphsAndBulletsJoinButListsStaySeparate() {
         val e = parseChangelog("## v1.0.0\n\nA long\nparagraph.\n\n- one\n  two\n- three\n")
         assertEquals("A long paragraph.\n\n- one two\n- three", e.single().body)
+    }
+
+    @Test fun `show less appears only once a group is expanded`() {
+        val g = io.github.nideta231.hermesremote.data.SessionGroup("Today", (1..20).map { s("s$it") })
+        val first = pageGroups(listOf(g), emptyMap()).single()
+        org.junit.Assert.assertFalse(first.canShowLess)
+        val more = pageGroups(listOf(g), mapOf(g.key to first.items.size + SESSION_PAGE)).single()
+        org.junit.Assert.assertTrue(more.canShowLess)
+        org.junit.Assert.assertEquals(first.items.size + 5, more.items.size)
     }
 }

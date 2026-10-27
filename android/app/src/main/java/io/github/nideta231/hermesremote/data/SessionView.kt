@@ -172,10 +172,14 @@ const val SESSION_FIRST_PAGE = 3
 val SESSION_FIRST_PAGE_CHOICES = listOf(3, 5, 10, 0)
 
 /** How many more chats each "Show more" tap adds. */
-const val SESSION_PAGE = 10
+const val SESSION_PAGE = 5
 
 /** A group as the drawer draws it: the first part of [group], and how many still wait behind "Show more". */
-data class GroupPage(val group: SessionGroup, val items: List<SessionSummary>, val remaining: Int)
+data class GroupPage(val group: SessionGroup, val items: List<SessionSummary>, val remaining: Int,
+                     /** Rows the group shows before any "Show more"; more than this offers "Show less". */
+                     val firstPage: Int = items.size) {
+    val canShowLess: Boolean get() = items.size > firstPage
+}
 
 /**
  * Pages each group on its own, after [arrangeSessions] has searched, filtered and sorted the whole
@@ -188,7 +192,7 @@ fun pageGroups(groups: List<SessionGroup>, shown: Map<String, Int>, currentId: S
         val current = currentId?.let { id -> g.items.indexOfFirst { it.id == id } } ?: -1
         val first = if (page <= 0) g.items.size else page
         val n = maxOf(shown[g.key] ?: first, current + 1).coerceAtMost(g.items.size)
-        GroupPage(g, g.items.take(n), g.items.size - n)
+        GroupPage(g, g.items.take(n), g.items.size - n, maxOf(first, current + 1).coerceAtMost(g.items.size))
     }
 
 /** Persists the drawer's [SessionView] (shared across paired PCs, like desktop's per-app prefs). */
