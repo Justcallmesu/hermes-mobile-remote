@@ -56,6 +56,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.FilledIconButton
@@ -149,9 +150,9 @@ class SessionActions(
     val newChatIn: (String?) -> Unit = {},
     /** Rename / re-folder / describe / delete projects, from a project group's long-press. */
     val projects: ProjectActions = ProjectActions(),
-)
     /** Move a stored chat into a project (session id, project id). */
     val moveToProject: (String, String) -> Unit = { _, _ -> },
+)
 
 /** The session list. On phones it lives in the navigation drawer; on tablets beside the chat. */
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
@@ -176,8 +177,8 @@ fun SessionsPane(
     var menuFor by remember { mutableStateOf<SessionSummary?>(null) }
     var renaming by remember { mutableStateOf<SessionSummary?>(null) }
     var deleting by remember { mutableStateOf<SessionSummary?>(null) }
-    // Collapsed groups as "GROUPING/key", so collapsing "Today" never hides a project group of the same name.
     var moving by remember { mutableStateOf<SessionSummary?>(null) }
+    // Collapsed groups as "GROUPING/key", so collapsing "Today" never hides a project group of the same name.
     // Persisted (ThemePrefs "ui" prefs) so reopening the app keeps folders the way they were left.
     val collapsedKeys = ThemePrefs.collapsedGroups
     fun collapseKey(groupKey: String) = "${view.grouping.name}/$groupKey"
@@ -331,14 +332,14 @@ fun SessionsPane(
         SessionActionsSheet(s, onDismiss = { menuFor = null },
             onPin = { actions.setPinned(s.id, !s.pinned); menuFor = null },
             onRename = { renaming = s; menuFor = null },
-            onDelete = { deleting = s; menuFor = null })
             onMove = if (state.projects.any { it.path != null }) ({ moving = s; menuFor = null }) else null,
+            onDelete = { deleting = s; menuFor = null })
     }
-    renaming?.let { s ->
     moving?.let { s ->
         MoveToProjectSheet(s, state.projects, onDismiss = { moving = null },
             onPick = { pid -> actions.moveToProject(s.id, pid); moving = null })
     }
+    renaming?.let { s ->
         var title by remember { mutableStateOf(s.title ?: "") }
         AlertDialog(onDismissRequest = { renaming = null }, title = { Text("Rename chat") },
             text = { OutlinedTextField(title, { title = it }, singleLine = true, shape = RoundedCornerShape(14.dp)) },
@@ -632,13 +633,12 @@ private fun SessionActionsSheet(s: SessionSummary, onDismiss: () -> Unit, onPin:
             Spacer(Modifier.size(8.dp))
             PanelRow(if (s.pinned) "Unpin" else "Pin", icon = Glyphs.Pin, iconTint = Gold, onClick = onPin)
             PanelRow("Rename", icon = Glyphs.Edit, onClick = onRename)
-            PanelRow("Delete", icon = Glyphs.Trash, iconTint = Bad, titleColor = Bad, onClick = onDelete)
             if (onMove != null) PanelRow("Move to project", icon = Glyphs.Folder, iconTint = Gold, onClick = onMove)
+            PanelRow("Delete", icon = Glyphs.Trash, iconTint = Bad, titleColor = Bad, onClick = onDelete)
         }
     }
 }
 
-/** Group by / sort by / status / project, mirroring the desktop sidebar's filter menu. Changes apply live. */
 /** Pick the project a chat moves into; only projects with a folder can take it (the move re-homes its cwd). */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -658,6 +658,12 @@ private fun MoveToProjectSheet(s: SessionSummary, projects: List<ProjectRef>, on
     }
 }
 
+/** Group by / sort by / status / project, mirroring the desktop sidebar's filter menu. Changes apply live. */
+/** Selected chips in the app's accent (Gold follows the chosen theme), not Material's default secondary container. */
+@Composable
+private fun themedChip() = FilterChipDefaults.filterChipColors(
+    selectedContainerColor = Gold.copy(alpha = 0.18f), selectedLabelColor = Gold, selectedLeadingIconColor = Gold)
+
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 private fun SessionViewSheet(view: SessionView, projects: List<ProjectRef>, onChange: (SessionView) -> Unit,
@@ -672,19 +678,19 @@ private fun SessionViewSheet(view: SessionView, projects: List<ProjectRef>, onCh
             SectionLabel("Group by")
             FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 SessionGrouping.entries.forEach { g ->
-                    FilterChip(selected = view.grouping == g, onClick = { onChange(view.copy(grouping = g)) }, label = { Text(g.label) })
+                    FilterChip(colors = themedChip(), selected = view.grouping == g, onClick = { onChange(view.copy(grouping = g)) }, label = { Text(g.label) })
                 }
             }
             SectionLabel("Sort by")
             FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 SessionOrdering.entries.forEach { o ->
-                    FilterChip(selected = view.ordering == o, onClick = { onChange(view.copy(ordering = o)) }, label = { Text(o.label) })
+                    FilterChip(colors = themedChip(), selected = view.ordering == o, onClick = { onChange(view.copy(ordering = o)) }, label = { Text(o.label) })
                 }
             }
             SectionLabel("Group order")
             FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 GroupOrder.entries.forEach { o ->
-                    FilterChip(selected = view.groupOrder == o, label = { Text(o.label) }, onClick = { onChange(view.copy(groupOrder = o)) })
+                    FilterChip(colors = themedChip(), selected = view.groupOrder == o, label = { Text(o.label) }, onClick = { onChange(view.copy(groupOrder = o)) })
                 }
                 if (view.groupOrder == GroupOrder.CUSTOM) TextButton(onClick = onResetGroupOrder) { Text("Clear custom order") }
             }
@@ -694,7 +700,7 @@ private fun SessionViewSheet(view: SessionView, projects: List<ProjectRef>, onCh
             FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 SessionStatus.entries.forEach { st ->
                     val on = st in view.statuses
-                    FilterChip(selected = on, label = { Text(st.label) },
+                    FilterChip(colors = themedChip(), selected = on, label = { Text(st.label) },
                         onClick = { onChange(view.copy(statuses = if (on) view.statuses - st else view.statuses + st)) })
                 }
             }
@@ -706,7 +712,7 @@ private fun SessionViewSheet(view: SessionView, projects: List<ProjectRef>, onCh
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     projects.forEach { p ->
                         val on = p.id in view.projects
-                        FilterChip(selected = on, label = { Text(if (p.id == SessionView.NO_PROJECT) SessionView.NO_PROJECT_LABEL else p.label, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                        FilterChip(colors = themedChip(), selected = on, label = { Text(if (p.id == SessionView.NO_PROJECT) SessionView.NO_PROJECT_LABEL else p.label, maxLines = 1, overflow = TextOverflow.Ellipsis) },
                             onClick = { onChange(view.copy(projects = if (on) view.projects - p.id else view.projects + p.id)) })
                     }
                 }
