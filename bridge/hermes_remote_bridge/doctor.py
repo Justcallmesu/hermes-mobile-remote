@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import sys
 import urllib.request
+from pathlib import Path
 
 from . import firewall
 from .backend import ledger_candidates
@@ -90,8 +91,23 @@ def _check_network(cfg: Config) -> tuple[str, str]:
     return OK, f"Trusted network '{net.name}', serving https://{ips[0] if ips else '?'}:{cfg.port}"
 
 
+def _container() -> str | None:
+    """The container this OS runs in (systemd-nspawn, docker, lxc...), or None on a real host."""
+    try:
+        return Path("/run/systemd/container").read_text().strip() or None
+    except OSError:
+        return None
+
+
 def _check_firewall(cfg: Config) -> tuple[str, str]:
     s = firewall.state(cfg.port)
+    box = _container()
+    if box and (s.kind == "none" or not s.active):
+        # The host's firewall filters this container's traffic but is invisible from in here,
+        # and the container's root can't change it. Don't claim the port is open.
+        return WARN, (f"This PC runs in a {box} container: a firewall on the host may block port {cfg.port} "
+                      f"and can't be checked from here. If the phone only connects over Tailscale, allow TCP "
+                      f"{cfg.port} from 192.168.0.0/16 on the host.")
     if s.kind == "none" or not s.active:
         return OK, "No active firewall blocks the bridge port"
     if s.port_open:

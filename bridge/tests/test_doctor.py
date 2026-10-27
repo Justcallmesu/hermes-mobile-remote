@@ -28,3 +28,15 @@ def test_the_windows_service_check_probes_the_port_from_the_config(monkeypatch):
 
     assert probed == [9123]
     assert "9123" in message
+
+
+def test_firewall_check_warns_inside_a_container(monkeypatch):
+    from hermes_remote_bridge import doctor, firewall
+    from hermes_remote_bridge.config import Config
+
+    monkeypatch.setattr(firewall, "state", lambda port: firewall.FirewallState("none", False, True))
+    monkeypatch.setattr(doctor, "_container", lambda: "systemd-nspawn")
+    level, msg = doctor._check_firewall(Config())
+    assert level == doctor.WARN and "systemd-nspawn" in msg and "host" in msg
+    monkeypatch.setattr(doctor, "_container", lambda: None)
+    assert doctor._check_firewall(Config())[0] == doctor.OK
