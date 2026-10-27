@@ -10,12 +10,18 @@ import androidx.lifecycle.ProcessLifecycleOwner
 import androidx.lifecycle.viewModelScope
 import io.github.nideta231.hermesremote.data.mergeSessionHead
 import io.github.nideta231.hermesremote.data.BridgeClient
+import io.github.nideta231.hermesremote.data.PcMonitor
+import io.github.nideta231.hermesremote.data.TerminalSession
 import io.github.nideta231.hermesremote.data.BridgeException
 import io.github.nideta231.hermesremote.data.ProjectRef
+import io.github.nideta231.hermesremote.data.ProjectDetails
 import io.github.nideta231.hermesremote.data.SessionView
 import io.github.nideta231.hermesremote.data.Subagent
 import io.github.nideta231.hermesremote.data.SubagentReducer
 import io.github.nideta231.hermesremote.data.SessionViewStore
+import io.github.nideta231.hermesremote.data.DrawerCache
+import io.github.nideta231.hermesremote.data.GroupOrder
+import io.github.nideta231.hermesremote.data.moveGroup
 import io.github.nideta231.hermesremote.data.ChatItem
 import io.github.nideta231.hermesremote.data.ComponentStatus
 import io.github.nideta231.hermesremote.data.AppUpdates
@@ -61,6 +67,7 @@ import io.github.nideta231.hermesremote.data.ImageAttachments
 import io.github.nideta231.hermesremote.data.parseDispatch
 import io.github.nideta231.hermesremote.data.parseSuggestions
 import io.github.nideta231.hermesremote.data.profileParam
+import io.github.nideta231.hermesremote.data.fileName
 import io.github.nideta231.hermesremote.data.reuseKeys
 import io.github.nideta231.hermesremote.data.str
 import io.github.nideta231.hermesremote.data.strings
@@ -199,8 +206,49 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
     val sessionView: StateFlow<SessionView> = _sessionView.asStateFlow()
 
     fun setSessionView(v: SessionView) {
+        val regroup = v.grouping != _sessionView.value.grouping
         _sessionView.value = v
         viewStore.save(v)
+        if (regroup) loadGroupOrder()
+    }
+
+    /** The drawer as last synced (chats, projects, custom group order) for this PC; see [DrawerCache]. */
+    private var drawerCache = DrawerCache(app, profiles.activeId)
+
+    /** Custom group order (group keys, top first) for the current grouping and profile. */
+    private val _groupOrder = MutableStateFlow<List<String>>(emptyList())
+    val groupOrder: StateFlow<List<String>> = _groupOrder.asStateFlow()
+
+    private fun loadGroupOrder() { _groupOrder.value = drawerCache.groupOrder(profile, _sessionView.value.grouping) }
+
+    /**
+     * Move a drawer group by [delta] places (Int.MIN_VALUE/MAX_VALUE = top/bottom) among [shown], the
+     * group keys in the order the drawer draws them. Switches the drawer to the custom group order.
+     */
+    fun moveSessionGroup(shown: List<String>, key: String, delta: Int) {
+        val next = moveGroup(shown, _groupOrder.value, key, delta)
+        _groupOrder.value = next
+        drawerCache.putGroupOrder(profile, _sessionView.value.grouping, next)
+        if (_sessionView.value.groupOrder != GroupOrder.CUSTOM) setSessionView(_sessionView.value.copy(groupOrder = GroupOrder.CUSTOM))
+    }
+
+    /** Forget the custom order of the current grouping (back to following the sort). */
+    fun resetGroupOrder() {
+        _groupOrder.value = emptyList()
+        drawerCache.putGroupOrder(profile, _sessionView.value.grouping, emptyList())
+        setSessionView(_sessionView.value.copy(groupOrder = GroupOrder.AUTO))
+    }
+
+    /** Show the saved drawer at once (no blank list, no chats lumped into Home) until the sync lands. */
+    private fun loadCachedDrawer() {
+        val asked = profile
+        val items = drawerCache.sessions(asked)
+        val projects = drawerCache.projects(asked)
+        loadGroupOrder()
+        if (items.isEmpty() && projects.isEmpty()) return
+        _sessions.update { st ->
+            st.copy(items = st.items.ifEmpty { items }, projects = st.projects.ifEmpty { projects })
+        }
     }
 
     private val _models = MutableStateFlow<ModelCatalog?>(null)
@@ -243,6 +291,21 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
         describe = ::describe, say = { _toast.value = it },
         onDefaultModel = { option -> _models.update { cat -> cat?.copy(options = cat.options.map { o ->
             o.copy(current = o.id == option.id && o.provider == option.provider) }) } })
+
+    /** The PC page: live stats, history, processes and Claude usage (bridge 1.18+). */
+    val monitor = PcMonitor(viewModelScope, client = { client }, describe = ::describe, say = { _toast.value = it })
+
+    /** A shell on the PC for the Terminal page; null when not connected. Closed by the caller. */
+    fun openTerminal(cols: Int, rows: Int): TerminalSession? = client?.let { TerminalSession(it, cols, rows) }
+
+    /** What the PC's bridge serves beyond chat ("monitor", "claude_usage", "terminal"), from /v1/me. */
+    private val _features = MutableStateFlow<Set<String>>(emptySet())
+    val features: StateFlow<Set<String>> = _features.asStateFlow()
+
+    /** The PC refused this phone's token (revoked or re-paired from the PC): offer to re-pair. */
+    private val _unauthorized = MutableStateFlow(false)
+    val unauthorized: StateFlow<Boolean> = _unauthorized.asStateFlow()
+    fun dismissUnauthorized() { _unauthorized.value = false }
 
     /** Self-update from GitHub releases, and "What's new" after one. */
     val updates = AppUpdates(app, viewModelScope, describe = ::describe, say = { _toast.value = it })
@@ -292,8 +355,11 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
     private fun startActivePolling() {
         activeJob?.cancel()
         activeJob = viewModelScope.launch {
+            var tick = 0
             while (true) {
                 refreshActive()
+                // Every ~30 s also re-sync the drawer (newest page + projects), in case a change event was missed.
+                if (++tick % 8 == 0) refreshSessionsHead()
                 delay(4_000)
             }
         }
@@ -370,6 +436,7 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
         _conn.update { it.copy(activeUrl = p.url, mode = savedMode, needsRepairForLan = p.pin == null,
             transport = EndpointResolver.transportOf(EndpointResolver.hostOf(p.url).orEmpty())) }
         useClient(BridgeClient(p))
+        loadCachedDrawer()
         store.lastSessionId?.let { openSession(it) }
         refreshProfiles()
         refreshSessions()
@@ -394,7 +461,8 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
                         GatewayState.CONNECTING, GatewayState.RECONNECTING -> Link.RECONNECTING
                         else -> Link.IDLE
                     }) }
-                    if (s == GatewayState.UNAUTHORIZED) _toast.value = g.lastError
+                    if (s == GatewayState.UNAUTHORIZED) _unauthorized.value = true
+                    if (s == GatewayState.OPEN) _unauthorized.value = false
                 }
             },
         )
@@ -413,6 +481,7 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
                 if (me == null && !_conn.value.searching) reconnect()
                 return@launch
             }
+            _features.value = me.optJSONArray("features").strings().toSet()
             if (me.optInt("protocol", 0) < MIN_BRIDGE_PROTOCOL) {
                 _toast.value = "Your PC runs an older bridge. Update it: run install.sh on the PC."
             }
@@ -473,7 +542,16 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
                     if (ep.transport == Transport.LAN && p.pin == null) continue
                     val candidate = p.copy(url = ep.url)
                     try {
-                        if (!BridgeClient(candidate).reachable()) { last = IOException("${ep.label} is not reachable"); continue }
+                        when (BridgeClient(candidate).probe()) {
+                            BridgeClient.Probe.OK -> {}
+                            BridgeClient.Probe.UNAUTHORIZED -> {
+                                // The PC is right there and refused the token: no other address will do better.
+                                _unauthorized.value = true
+                                _conn.update { it.copy(searching = false) }
+                                return true
+                            }
+                            BridgeClient.Probe.UNREACHABLE -> { last = IOException("${ep.label} is not reachable"); continue }
+                        }
                         _conn.update { it.copy(activeUrl = ep.url, transport = ep.transport, searching = false) }
                         if (_pairing.value?.url != ep.url) _pairing.update { it?.copy(url = ep.url) }
                         store.save(clientPairing())
@@ -562,6 +640,8 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
                     activate((same ?: profiles.add()).id)
                 }
                 _addingPc.value = false
+                _repairDevice.value = null
+                _unauthorized.value = false
                 store.save(candidate)
                 val known = (listOf(p.url) + p.alternates).groupBy { u ->
                     if (Tailnet.isLanHost(EndpointResolver.hostOf(u).orEmpty())) "lan" else "tailnet"
@@ -609,6 +689,7 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
         if (id == profiles.activeId) return unpair()
         CredentialStore(app, ProfileStore.pairingFile(id)).clear()
         DraftStore(app, ProfileStore.draftsFile(id)).clearAll()
+        DrawerCache(app, id).clear()
         profiles.remove(id)
         refreshPcs()
     }
@@ -619,13 +700,26 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
         refreshPcs()
     }
 
-    fun startAddingPc() { _addingPc.value = true }
-    fun cancelAddingPc() { _addingPc.value = false }
+    fun startAddingPc() { _repairDevice.value = null; _addingPc.value = true }
+    fun cancelAddingPc() { _addingPc.value = false; _repairDevice.value = null }
+
+    /** Re-pair the PC in use: the pairing screen asks for a fresh code for this device name, and
+     *  scanning it replaces the broken pairing in place (same certificate = same PC), keeping
+     *  its chats, drafts and name. Null when not re-pairing. */
+    private val _repairDevice = MutableStateFlow<String?>(null)
+    val repairDevice: StateFlow<String?> = _repairDevice.asStateFlow()
+
+    fun startRepair() {
+        val p = _pairing.value ?: return
+        _repairDevice.value = p.device.ifBlank { "phone" }
+        _addingPc.value = true
+    }
 
     private fun activate(id: String) {
         profiles.activeId = id
         store = CredentialStore(app, ProfileStore.pairingFile(id))
         drafts = DraftStore(app, ProfileStore.draftsFile(id))
+        drawerCache = DrawerCache(app, id)
         _reasoning.value = store.reasoningEffort
         _chat.value = ChatState(draft = drafts.get(null), reasoning = store.reasoningEffort)
         _hermesProfiles.value = ProfilesState(active = store.hermesProfile)
@@ -646,6 +740,9 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
         settings.clear()
         cron.clear()
         vault.clear()
+        monitor.clear()
+        _features.value = emptySet()
+        _unauthorized.value = false
         _models.value = null
         _modelChoice.value = null
         _confirm.value = null
@@ -713,6 +810,9 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
                 // Fresh socket: re-attach the open chat (its runtime may be new) and catch up.
                 _chat.value.sessionId?.let { sid -> viewModelScope.launch { resume(sid) } }
                 viewModelScope.launch { refreshActive() }
+                // The first sessions sync usually lands before the socket is up, when projects.tree
+                // can't be asked yet: without this every chat sat in Home until a manual refresh.
+                viewModelScope.launch { refreshProjects() }
             }
             is Incoming.Event -> {
                 if (inc.type == "sessions.changed") return scheduleSessionsRefresh()
@@ -863,6 +963,7 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
                 if (!stillOn(asked)) return@launch
                 val merged = mergeSessionHead(_sessions.value.items, page)
                 if (merged != _sessions.value.items) _sessions.update { it.copy(items = merged, error = null) }
+                drawerCache.putSessions(asked, merged)
                 val open = page.firstOrNull { it.id == _chat.value.sessionId }
                 if (open != null) _chat.update { it.copy(pinned = open.pinned, title = if (it.title == "New chat") open.displayTitle else it.title) }
                 refreshProjects()
@@ -1009,6 +1110,7 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
         _hermesProfiles.update { it.copy(active = name) }
         newChat()
         _sessions.value = SessionsState(loading = true, live = _sessions.value.live)
+        loadCachedDrawer()
         _models.value = null
         _modelChoice.value = null
         settings.forgetProfileValues()
@@ -1039,13 +1141,17 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
                     more = next && page.isNotEmpty()
                 }
                 if (!stillOn(asked)) return@launch
-                _sessions.update { it.copy(items = list.distinctBy { s -> s.id }, loading = false, hasMore = more, error = null) }
+                val items = list.distinctBy { s -> s.id }
+                _sessions.update { it.copy(items = items, loading = false, hasMore = more, error = null) }
+                drawerCache.putSessions(asked, items)
                 val open = list.firstOrNull { it.id == _chat.value.sessionId }
                 if (open != null) _chat.update { it.copy(pinned = open.pinned, title = if (it.title == "New chat") open.displayTitle else it.title) }
                 refreshProjects()
             } catch (t: Throwable) {
                 if (t is CancellationException) throw t
-                if (stillOn(asked)) _sessions.update { it.copy(loading = false, error = describe(t)) }
+                // Sync failed: the saved list stays on screen (it was shown at start), with a note.
+                if (stillOn(asked)) _sessions.update { it.copy(loading = false,
+                    error = if (it.items.isEmpty()) describe(t) else "Showing the saved list: ${describe(t)}") }
             }
         }
     }
@@ -1067,6 +1173,7 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
             ProjectRef(id, p.str("label") ?: id, members, path, auto = p.optBoolean("isAuto"))
         }
         if (projects != _sessions.value.projects) _sessions.update { it.copy(projects = projects) }
+        drawerCache.putProjects(asked, projects)
     }
 
     fun loadMoreSessions() {
@@ -1107,21 +1214,98 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
      * Creates a Hermes project on the PC (`projects.create`, same as the desktop's "New project") with
      * [path] as its primary folder, then selects it for the new chat. [done] gets null on success, else the error.
      */
-    fun createProject(name: String, path: String, done: (String?) -> Unit) {
+    fun createProject(name: String, path: String, description: String, done: (String?) -> Unit) {
         viewModelScope.launch {
             val g = gateway
             if (g == null || g.state.value != GatewayState.OPEN) { done("Not connected to the PC."); return@launch }
             val params = scoped(JSONObject().put("name", name.trim()))
             if (path.isNotBlank()) params.put("primary_path", path.trim())
+            if (description.isNotBlank()) params.put("description", description.trim())
             val result = runCatching { g.call("projects.create", params, 15_000) }
             result.exceptionOrNull()?.let { t ->
                 if (t is CancellationException) throw t
                 done(describe(t)); return@launch
             }
-            val id = result.getOrNull()?.optJSONObject("project")?.str("id")
+            val project = result.getOrNull()?.optJSONObject("project")
+            val id = project?.str("id")
+            // Like desktop's "New project": the description also lands as IDEA.md in the project folder.
+            val ideaError = if (id != null && description.isNotBlank() && !project.str("primary_path").isNullOrBlank())
+                writeIdea(id, description) else null
             refreshProjects()
             if (id != null) chooseProject(id)
-            done(null)
+            done(ideaError?.let { "Project created, but IDEA.md wasn't written: $it" })
+        }
+    }
+
+    /** Name, folder and description of a saved project, for the edit dialog. */
+    suspend fun projectDetails(id: String): ProjectDetails {
+        val g = gateway?.takeIf { it.state.value == GatewayState.OPEN } ?: throw IOException("Not connected to the PC.")
+        val p = g.call("projects.get", scoped(JSONObject().put("id", id)), 15_000).optJSONObject("project")
+            ?: throw IOException("Project not found")
+        val path = p.str("primary_path")?.takeIf(String::isNotBlank)
+        // IDEA.md wins over the stored text: it is what the desktop and the agent read.
+        val idea = if (path == null) null else runCatching { client?.projectIdea(id, profileParam(profile)) }
+            .onFailure { if (it is CancellationException) throw it }.getOrNull()?.trimEnd()
+        return ProjectDetails(id, p.str("name") ?: id, path, idea?.takeIf(String::isNotBlank) ?: p.str("description").orEmpty())
+    }
+
+    /**
+     * Saves the edit dialog: rename (`projects.update`), change the folder (the new path becomes the
+     * primary folder and the old one is detached; blank = no folder) and the description (stored on
+     * the project and written to IDEA.md in its folder). [done] gets null or an error.
+     */
+    fun saveProject(before: ProjectDetails, name: String, path: String, description: String, done: (String?) -> Unit) {
+        viewModelScope.launch {
+            val g = gateway
+            if (g == null || g.state.value != GatewayState.OPEN) { done("Not connected to the PC."); return@launch }
+            val id = before.id
+            val newPath = path.trim()
+            val error = try {
+                val fields = JSONObject()
+                if (name.trim() != before.name) fields.put("name", name.trim())
+                if (description.trim() != before.description.trim()) fields.put("description", description.trim())
+                if (fields.length() > 0) g.call("projects.update", scoped(fields.put("id", id)), 15_000)
+                if (newPath != (before.path ?: "")) {
+                    if (newPath.isNotEmpty())
+                        g.call("projects.add_folder", scoped(JSONObject().put("id", id).put("path", newPath).put("is_primary", true)), 15_000)
+                    val stored = g.call("projects.get", scoped(JSONObject().put("id", id)), 15_000).optJSONObject("project")
+                    val primary = stored?.str("primary_path")
+                    // Detach the old folder (only when it is no longer the primary one, e.g. same path typed differently).
+                    before.path?.takeIf { it != primary }?.let { old ->
+                        g.call("projects.remove_folder", scoped(JSONObject().put("id", id).put("path", old)), 15_000)
+                    }
+                }
+                // IDEA.md follows the description into the (new) folder; an emptied description removes it.
+                val descChanged = description.trim() != before.description.trim()
+                if (newPath.isNotEmpty() && (descChanged || newPath != (before.path ?: ""))) writeIdea(id, description) else null
+            } catch (t: Throwable) {
+                if (t is CancellationException) throw t
+                describe(t)
+            }
+            refreshProjects()
+            done(error)
+        }
+    }
+
+    /** Deletes the saved project in Hermes (desktop's "Delete…"). Its folder and files on the PC stay. */
+    fun deleteProject(id: String, done: (String?) -> Unit) {
+        viewModelScope.launch {
+            val g = gateway
+            if (g == null || g.state.value != GatewayState.OPEN) { done("Not connected to the PC."); return@launch }
+            val error = runCatching { g.call("projects.delete", scoped(JSONObject().put("id", id)), 15_000) }
+                .exceptionOrNull()?.let { if (it is CancellationException) throw it; describe(it) }
+            if (error == null && _chat.value.project?.id == id) _chat.update { it.copy(project = null) }
+            refreshProjects()
+            done(error)
+        }
+    }
+
+    /** Writes IDEA.md through the bridge; null on success, else why not. */
+    private suspend fun writeIdea(id: String, text: String): String? {
+        val c = client ?: return "Not connected to the PC."
+        return runCatching { c.setProjectIdea(id, text, profileParam(profile)) }.exceptionOrNull()?.let {
+            if (it is CancellationException) throw it
+            if (it is BridgeException && it.httpCode == 404 && it.code != "no_folder") "update the bridge on the PC" else describe(it)
         }
     }
 
@@ -1245,7 +1429,12 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
                     val r = rpc("file.attach", { rid -> JSONObject().put("session_id", rid)
                         .put("data_url", FileAttachments.dataUrl(bytes, app.contentResolver.getType(android.net.Uri.parse(uri))))
                         .put("name", name) }, 120_000)
-                    r.str("ref_text") ?: throw IOException("Hermes didn't take $name")
+                    (r.str("ref_text") ?: throw IOException("Hermes didn't take $name")) to (r.str("path") ?: r.str("ref_path"))
+                }.let { staged ->
+                    val paths = staged.mapNotNull { it.second }
+                    if (paths.isNotEmpty()) _chat.update { st -> st.copy(items = st.items.map {
+                        if (it is ChatItem.User && it.key == key) it.copy(files = paths) else it }) }
+                    staged.map { it.first }
                 }
                 if (sent.isNotEmpty()) _chat.update { st -> st.copy(items = st.items.map {
                     if (it is ChatItem.User && it.key == key) it.copy(images = sent) else it }) }
@@ -1395,7 +1584,27 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
         (listOf(display.trim()).filter { it.isNotEmpty() } + files.map { "📎 ${it.second}" }).joinToString("\n")
 
     /** Bytes of a chat image: a phone uri (still sending) or a PC path, fetched over the bridge and cached. */
-    suspend fun loadImage(ref: String): ByteArray? = ImageAttachments.load(app, ref) { path -> client?.media(path) }
+    suspend fun loadImage(ref: String): ByteArray? = ImageAttachments.load(app, ref) { path ->
+        val c = client ?: return@load null
+        try { c.media(path) } catch (e: BridgeException) {
+            // A picture outside Hermes' image folders (e.g. a chart saved in a project): the chat names it.
+            val sid = _chat.value.sessionId
+            if (sid == null || e.httpCode != 403) throw e
+            val f = java.io.File(app.cacheDir, "chat-images/${path.hashCode().toUInt()}")
+            c.chatFile(sid, path, profileParam(profile), f)
+            f.readBytes().also { f.delete() }
+        }
+    }
+
+    /** A file the open chat names, downloaded from the PC into the app's cache (reused when already there). */
+    suspend fun fetchChatFile(path: String): java.io.File {
+        val c = client ?: throw IOException("Not connected to the PC")
+        val sid = _chat.value.sessionId ?: throw IOException("This chat isn't saved yet")
+        val name = fileName(path).replace(Regex("[\\\\/:*?\"<>|\\u0000-\\u001f]"), "_").ifBlank { "file" }
+        val f = java.io.File(app.cacheDir, "chat-files/${(sid + path).hashCode().toUInt()}/$name")
+        if (!f.isFile) c.chatFile(sid, path, profileParam(profile), f)
+        return f
+    }
 
     // ------------------------------------------------------------ models + reasoning
 

@@ -65,12 +65,22 @@ backend in `demo/mock_hermes.py` has to keep up. A demo that lies is worse than 
 
 ## Pull requests
 
+Changes reach `main` through pull requests; `main` does not accept direct pushes from
+contributors.
+
 1. Open an issue first for anything larger than a bug fix, so the approach can be agreed before you
    write it.
-2. Branch from `main`, one topic per branch.
+2. Branch from `main`, one topic per branch (`git switch -c gateway-connection`).
 3. Fill in the description: what changed, why, and how you verified it. Screenshots for UI changes.
-4. CI must be green. It runs the bridge tests and the app unit tests.
-5. One logical change per pull request. Unrelated cleanups belong in their own PR.
+4. **Add a line to `CHANGELOG.md` under `## Unreleased`** (create the heading at the top if it is
+   not there) saying what users will notice, in plain words. CI fails a pull request that changes
+   the app, the bridge or the installers without touching `CHANGELOG.md`. A change users cannot
+   notice (a refactor, a test) gets the `no changelog` label instead.
+5. CI must be green. It runs the changelog check, the bridge tests and the app unit tests.
+6. One logical change per pull request. Unrelated cleanups belong in their own PR.
+
+Releases are cut by the maintainer, never by a pull request; see
+[docs/DEVELOPMENT.md](docs/DEVELOPMENT.md#releasing).
 
 ## Reporting bugs
 

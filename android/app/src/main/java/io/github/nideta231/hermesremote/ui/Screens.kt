@@ -58,7 +58,9 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
@@ -107,6 +109,7 @@ import io.github.nideta231.hermesremote.data.SessionView
 import io.github.nideta231.hermesremote.data.SESSION_PAGE
 import io.github.nideta231.hermesremote.data.SESSION_FIRST_PAGE_CHOICES
 import io.github.nideta231.hermesremote.data.arrangeSessions
+import io.github.nideta231.hermesremote.data.GroupOrder
 import io.github.nideta231.hermesremote.data.pageGroups
 import io.github.nideta231.hermesremote.data.Transport
 import io.github.nideta231.hermesremote.data.TransportMode
@@ -133,6 +136,18 @@ class SessionActions(
     val switchProfile: (String) -> Unit = {},
     val openScheduled: () -> Unit = {},
     val openVault: () -> Unit = {},
+    /** The PC page (stats, processes, Claude usage) and the terminal; null hides the button
+     *  (the bridge doesn't serve it). */
+    val openPc: (() -> Unit)? = null,
+    val openTerminal: (() -> Unit)? = null,
+    val repairPc: () -> Unit = {},
+    /** Move a group: (group keys as drawn, key, delta; Int.MIN_VALUE/MAX_VALUE = top/bottom). */
+    val moveGroup: (List<String>, String, Int) -> Unit = { _, _, _ -> },
+    val resetGroupOrder: () -> Unit = {},
+    /** New chat preselected to a project id (null = no project, Home). */
+    val newChatIn: (String?) -> Unit = {},
+    /** Rename / re-folder / describe / delete projects, from a project group's long-press. */
+    val projects: ProjectActions = ProjectActions(),
 )
 
 /** The session list. On phones it lives in the navigation drawer; on tablets beside the chat. */
@@ -148,6 +163,7 @@ fun SessionsPane(
     view: SessionView = SessionView(),
     update: UpdateState? = null,
     onOpenUpdate: () -> Unit = {},
+    groupOrder: List<String> = emptyList(),
 ) {
     var query by remember { mutableStateOf("") }
     var filterSheet by remember { mutableStateOf(false) }
@@ -162,9 +178,12 @@ fun SessionsPane(
     val collapsedKeys = ThemePrefs.collapsedGroups
     fun collapseKey(groupKey: String) = "${view.grouping.name}/$groupKey"
 
-    val grouped = remember(state.items, state.live, state.projects, view, query) {
-        arrangeSessions(state.items, view, state.live, state.projects, query)
+    val grouped = remember(state.items, state.live, state.projects, view, query, groupOrder) {
+        arrangeSessions(state.items, view, state.live, state.projects, query, customOrder = groupOrder)
     }
+    // Long-pressed group header: its move menu.
+    var movingGroup by remember { mutableStateOf<String?>(null) }
+    var editingProject by remember { mutableStateOf<ProjectRef?>(null) }
     // "Show more" per group: group key -> rows shown. Search, filters and paging are applied in that
     // order (see pageGroups), and a new query, view, PC or profile starts every group back at one page.
     var shown by remember(query, view, pcs.firstOrNull { it.active }?.id, profiles.active) { mutableStateOf(mapOf<String, Int>()) }
@@ -175,7 +194,8 @@ fun SessionsPane(
     Column(modifier.fillMaxHeight().statusBarsPadding().navigationBarsPadding()) {
         // Account switcher in the Instagram style: the header is the active PC (avatar + name + chevron).
         // Tap opens the switcher; long-press jumps straight to the next PC.
-        Row(Modifier.fillMaxWidth().padding(start = 12.dp, end = 8.dp, top = 12.dp, bottom = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+        // Compact header: PC switcher plus Scheduled and Settings as icons, so the chat list gets the height.
+        Row(Modifier.fillMaxWidth().padding(start = 8.dp, end = 4.dp, top = 4.dp), verticalAlignment = Alignment.CenterVertically) {
             Row(Modifier.weight(1f).clip(RoundedCornerShape(14.dp))
                 .combinedClickable(
                     onClick = { pcSheet = true },
@@ -184,10 +204,10 @@ fun SessionsPane(
                         if (next != null) { haptics.performHapticFeedback(HapticFeedbackType.LongPress); actions.switchPc(next.id) }
                         else pcSheet = true
                     },
-                ).padding(vertical = 6.dp, horizontal = 8.dp),
+                ).padding(vertical = 4.dp, horizontal = 8.dp),
                 verticalAlignment = Alignment.CenterVertically) {
-                if (activePc != null) PcAvatar(activePc.name, 34.dp, ring = pcs.size > 1)
-                else Box(Modifier.size(34.dp).background(Gold.copy(alpha = 0.16f), CircleShape), contentAlignment = Alignment.Center) {
+                if (activePc != null) PcAvatar(activePc.name, 28.dp, ring = pcs.size > 1)
+                else Box(Modifier.size(28.dp).background(Gold.copy(alpha = 0.16f), CircleShape), contentAlignment = Alignment.Center) {
                     Icon(Glyphs.Spark, null, tint = Gold, modifier = Modifier.size(16.dp))
                 }
                 Spacer(Modifier.width(10.dp))
@@ -199,7 +219,10 @@ fun SessionsPane(
                 }
                 Icon(Glyphs.Chevron, "Switch PC", modifier = Modifier.padding(start = 4.dp).size(18.dp))
             }
-            IconButton(onClick = actions.refresh) { Icon(Glyphs.Refresh, "Refresh", modifier = Modifier.size(20.dp)) }
+            actions.openPc?.let { IconButton(modifier = Modifier.size(40.dp), onClick = it) { Icon(Glyphs.Chip, "PC", modifier = Modifier.size(20.dp)) } }
+            actions.openTerminal?.let { IconButton(modifier = Modifier.size(40.dp), onClick = it) { Icon(Glyphs.Terminal, "Terminal", modifier = Modifier.size(20.dp)) } }
+            IconButton(modifier = Modifier.size(40.dp), onClick = actions.openScheduled) { Icon(Glyphs.Clock, "Scheduled", modifier = Modifier.size(20.dp)) }
+            IconButton(modifier = Modifier.size(40.dp), onClick = actions.openSettings) { Icon(Glyphs.Settings, "Settings", modifier = Modifier.size(20.dp)) }
         }
         if (pcSheet) PcSheet(pcs, actions, onDismiss = { pcSheet = false })
         // Only when the PC has more than one profile: with just the default there is nothing to pick.
@@ -207,13 +230,7 @@ fun SessionsPane(
         if (profileSheet) ProfileSheet(profiles, onPick = { profileSheet = false; actions.switchProfile(it) },
             onDismiss = { profileSheet = false })
         update?.let { DrawerUpdateRow(it, onOpenUpdate) }
-        Button(onClick = actions.newChat, modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
-            shape = RoundedCornerShape(16.dp), contentPadding = PaddingValues(vertical = 12.dp)) {
-            Icon(Glyphs.Compose, null, modifier = Modifier.size(18.dp))
-            Spacer(Modifier.width(8.dp))
-            Text("New chat", fontWeight = FontWeight.SemiBold)
-        }
-        Row(Modifier.padding(start = 16.dp, end = 8.dp, top = 4.dp, bottom = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+        Row(Modifier.padding(start = 12.dp, end = 4.dp, top = 2.dp, bottom = 2.dp), verticalAlignment = Alignment.CenterVertically) {
             SearchField(query, { query = it }, "Search chats", Modifier.weight(1f))
             // Group / sort / filter, like the desktop sidebar's filter menu. A gold dot marks a non-default view.
             Box {
@@ -223,8 +240,31 @@ fun SessionsPane(
                 }
                 if (view.filtersActive) Box(Modifier.align(Alignment.TopEnd).padding(top = 10.dp, end = 10.dp).size(7.dp).background(Gold, CircleShape))
             }
+            // New chat, as a compact gold round button instead of a full-width bar.
+            FilledIconButton(onClick = actions.newChat, modifier = Modifier.size(40.dp),
+                colors = IconButtonDefaults.filledIconButtonColors(containerColor = Gold, contentColor = MaterialTheme.colorScheme.onPrimary)) {
+                Icon(Glyphs.Compose, "New chat", modifier = Modifier.size(18.dp))
+            }
         }
-        if (filterSheet) SessionViewSheet(view, state.projects, actions.setView, onDismiss = { filterSheet = false })
+        if (filterSheet) SessionViewSheet(view, state.projects, actions.setView, actions.resetGroupOrder, onDismiss = { filterSheet = false })
+        editingProject?.let { p -> EditProjectDialog(p.id, p.label, actions.projects, onDismiss = { editingProject = null }) }
+        movingGroup?.let { key ->
+            val keys = grouped.map { it.key }.filter { it != PINNED_KEY }
+            val label = grouped.firstOrNull { it.key == key }?.label ?: key
+            // A saved project (not Home, not an auto repo) can be edited or deleted, like desktop's project menu.
+            val saved = if (view.grouping == SessionGrouping.PROJECT && key.startsWith("p-"))
+                state.projects.firstOrNull { it.id == key.removePrefix("p-") && !it.auto && it.id != SessionView.NO_PROJECT } else null
+            GroupMoveSheet(label, keys.indexOf(key), keys.size, view.groupOrder == GroupOrder.CUSTOM,
+                onMove = { d -> actions.moveGroup(keys, key, d) },
+                onReset = { actions.resetGroupOrder(); movingGroup = null },
+                onDismiss = { movingGroup = null },
+                // Project folders get "New chat here": the new chat starts with that project selected.
+                onNewChat = if (view.grouping == SessionGrouping.PROJECT && key.startsWith("p-")) ({
+                    movingGroup = null
+                    actions.newChatIn(key.removePrefix("p-").takeIf { it != SessionView.NO_PROJECT })
+                }) else null,
+                onEditProject = saved?.let { p -> { movingGroup = null; editingProject = p } })
+        }
 
         PullToRefreshBox(isRefreshing = state.loading && state.items.isNotEmpty(), onRefresh = actions.refresh,
             modifier = Modifier.weight(1f).fillMaxWidth()) {
@@ -241,8 +281,11 @@ fun SessionsPane(
                     val closed = query.isBlank() && ck in collapsedKeys
                     item(key = "g-${group.key}") {
                         GroupHeader(group.label, group.items.size, closed, Modifier.animateItem(),
-                            project = view.grouping == SessionGrouping.PROJECT && group.label != "Pinned",
-                            live = page.group.items.count { state.live[it.id] != null }) {
+                            project = view.grouping == SessionGrouping.PROJECT && group.key != PINNED_KEY,
+                            live = page.group.items.count { state.live[it.id] != null },
+                            onLongClick = if (group.key == PINNED_KEY) null else ({
+                                haptics.performHapticFeedback(HapticFeedbackType.LongPress); movingGroup = group.key
+                            })) {
                             ThemePrefs.toggleCollapsed(ck)
                         }
                     }
@@ -278,10 +321,6 @@ fun SessionsPane(
                 }
             }
         }
-        HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f))
-        PanelRow("Scheduled", icon = Glyphs.Clock, onClick = actions.openScheduled)
-        PanelRow("Vault", icon = Glyphs.Shield, onClick = actions.openVault)
-        PanelRow("Settings", icon = Glyphs.Settings, onClick = actions.openSettings)
     }
 
     menuFor?.let { s ->
@@ -371,6 +410,8 @@ private fun PcSheet(pcs: List<PairedPc>, actions: SessionActions, onDismiss: () 
                 Spacer(Modifier.size(8.dp))
                 if (!pc.active) PanelRow("Switch to ${pc.name}", icon = Glyphs.Check, iconTint = Gold,
                     onClick = { menuFor = null; onDismiss(); actions.switchPc(pc.id) })
+                if (pc.active) PanelRow("Re-pair", "Scan a fresh code; chats and drafts stay", icon = Glyphs.Refresh,
+                    onClick = { menuFor = null; onDismiss(); actions.repairPc() })
                 PanelRow("Rename", icon = Glyphs.Edit, onClick = { menuFor = null; renaming = pc })
                 PanelRow("Forget this PC", icon = Glyphs.Trash, iconTint = Bad, titleColor = Bad, onClick = { menuFor = null; forgetting = pc })
             }
@@ -404,8 +445,8 @@ private fun ProfileRow(profiles: ProfilesState, onClick: () -> Unit) {
     val current = profiles.current
     Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 2.dp).clip(RoundedCornerShape(12.dp))
         .background(MaterialTheme.colorScheme.surfaceContainerHigh).clickable(onClick = onClick)
-        .padding(horizontal = 12.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-        Icon(Glyphs.Person, null, tint = Gold, modifier = Modifier.size(18.dp))
+        .padding(horizontal = 12.dp, vertical = 5.dp), verticalAlignment = Alignment.CenterVertically) {
+        Icon(Glyphs.Person, null, tint = Gold, modifier = Modifier.size(16.dp))
         Spacer(Modifier.width(10.dp))
         Column(Modifier.weight(1f)) {
             Text("Profile: ${current?.label ?: profiles.active}", style = MaterialTheme.typography.labelLarge,
@@ -494,13 +535,14 @@ private fun ShowMoreRow(remaining: Int, modifier: Modifier, onClick: () -> Unit)
  * Project groups get a folder card in sentence case so each project stands out from its chats;
  * date/status groups stay as quiet uppercase labels.
  */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun GroupHeader(label: String, count: Int, collapsed: Boolean, modifier: Modifier,
-                        project: Boolean = false, live: Int = 0, onToggle: () -> Unit) {
+                        project: Boolean = false, live: Int = 0, onLongClick: (() -> Unit)? = null, onToggle: () -> Unit) {
     val angle by animateFloatAsState(if (collapsed) -90f else 0f, label = "chevron")
     if (project) {
         Row(modifier.fillMaxWidth().padding(top = 10.dp, bottom = 2.dp).clip(RoundedCornerShape(12.dp))
-            .background(MaterialTheme.colorScheme.surfaceContainerHigh).clickable(onClick = onToggle)
+            .background(MaterialTheme.colorScheme.surfaceContainerHigh).combinedClickable(onClick = onToggle, onLongClick = onLongClick)
             .padding(start = 12.dp, end = 10.dp, top = 10.dp, bottom = 10.dp), verticalAlignment = Alignment.CenterVertically) {
             Icon(Glyphs.Folder, null, tint = Gold, modifier = Modifier.size(18.dp))
             Spacer(Modifier.width(10.dp))
@@ -518,7 +560,7 @@ private fun GroupHeader(label: String, count: Int, collapsed: Boolean, modifier:
         }
         return
     }
-    Row(modifier.fillMaxWidth().padding(top = 8.dp).clip(RoundedCornerShape(10.dp)).clickable(onClick = onToggle)
+    Row(modifier.fillMaxWidth().padding(top = 8.dp).clip(RoundedCornerShape(10.dp)).combinedClickable(onClick = onToggle, onLongClick = onLongClick)
         .padding(start = 12.dp, end = 8.dp, top = 6.dp, bottom = 6.dp), verticalAlignment = Alignment.CenterVertically) {
         // Label and count share the weighted slot, so every chevron lines up on the right edge.
         Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
@@ -588,7 +630,8 @@ private fun SessionActionsSheet(s: SessionSummary, onDismiss: () -> Unit, onPin:
 /** Group by / sort by / status / project, mirroring the desktop sidebar's filter menu. Changes apply live. */
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
-private fun SessionViewSheet(view: SessionView, projects: List<ProjectRef>, onChange: (SessionView) -> Unit, onDismiss: () -> Unit) {
+private fun SessionViewSheet(view: SessionView, projects: List<ProjectRef>, onChange: (SessionView) -> Unit,
+                             onResetGroupOrder: () -> Unit, onDismiss: () -> Unit) {
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
         containerColor = MaterialTheme.colorScheme.surfaceContainer) {
         Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = 20.dp).padding(bottom = 24.dp)) {
@@ -608,6 +651,15 @@ private fun SessionViewSheet(view: SessionView, projects: List<ProjectRef>, onCh
                     FilterChip(selected = view.ordering == o, onClick = { onChange(view.copy(ordering = o)) }, label = { Text(o.label) })
                 }
             }
+            SectionLabel("Group order")
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                GroupOrder.entries.forEach { o ->
+                    FilterChip(selected = view.groupOrder == o, label = { Text(o.label) }, onClick = { onChange(view.copy(groupOrder = o)) })
+                }
+                if (view.groupOrder == GroupOrder.CUSTOM) TextButton(onClick = onResetGroupOrder) { Text("Clear custom order") }
+            }
+            Text("Long-press a group header to move it. The custom order is saved on this phone, per grouping.",
+                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             SectionLabel("Status")
             FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 SessionStatus.entries.forEach { st ->
@@ -631,6 +683,48 @@ private fun SessionViewSheet(view: SessionView, projects: List<ProjectRef>, onCh
             }
             Text("Empty filters show everything. Pinned chats stay on top.", style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 12.dp))
+        }
+    }
+}
+
+private const val PINNED_KEY = "Pinned"
+
+/** Move one drawer group up/down/top/bottom. Stays open so a group can be moved several places in a row. */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun GroupMoveSheet(label: String, index: Int, count: Int, custom: Boolean,
+                           onMove: (Int) -> Unit, onReset: () -> Unit, onDismiss: () -> Unit,
+                           onNewChat: (() -> Unit)? = null, onEditProject: (() -> Unit)? = null) {
+    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+        containerColor = MaterialTheme.colorScheme.surfaceContainer) {
+        Column(Modifier.fillMaxWidth().padding(horizontal = 20.dp).padding(bottom = 24.dp)) {
+            Text(label, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text("Position ${index + 1} of $count", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Spacer(Modifier.size(8.dp))
+            if (onNewChat != null) {
+                Button(onClick = onNewChat, modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(14.dp)) {
+                    Icon(Glyphs.Compose, null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text("New chat in $label", maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
+                Spacer(Modifier.size(4.dp))
+            }
+            if (onEditProject != null) {
+                OutlinedButton(onClick = onEditProject, modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(14.dp)) {
+                    Icon(Glyphs.Edit, null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text("Edit project", maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
+                Text("Rename, change folder or description, delete", style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(start = 4.dp, top = 2.dp, bottom = 4.dp))
+            }
+            val top = index <= 0
+            val bottom = index >= count - 1
+            TextButton(enabled = !top, onClick = { onMove(Int.MIN_VALUE) }) { Text("Move to top") }
+            TextButton(enabled = !top, onClick = { onMove(-1) }) { Text("Move up") }
+            TextButton(enabled = !bottom, onClick = { onMove(1) }) { Text("Move down") }
+            TextButton(enabled = !bottom, onClick = { onMove(Int.MAX_VALUE) }) { Text("Move to bottom") }
+            if (custom) TextButton(onClick = onReset) { Text("Clear custom order (follow sort)") }
         }
     }
 }
@@ -675,6 +769,8 @@ class SettingsActions(
     val loadModels: () -> Unit = {},
     val setDefaultModel: (ModelOption, Boolean) -> Unit = { _, _ -> },
     val dismissDefaultConfirm: () -> Unit = {},
+    val openVault: () -> Unit = {},
+    val repair: () -> Unit = {},
 )
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -705,6 +801,10 @@ fun SettingsScreen(
                     DefaultModelPanel(state, models) { actions.loadModels(); modelSheet = true }
                     Spacer(Modifier.size(10.dp))
                     ApprovalPanel(state, actions.setApprovalMode)
+                    Spacer(Modifier.size(10.dp))
+                    Panel {
+                        PanelRow("Vault", "Saved logins, cards and addresses Hermes can fill", Glyphs.Shield, onClick = actions.openVault)
+                    }
                 }
                 SettingsSection("Appearance", "Only changes this phone.") {
                     ThemePanel()
@@ -733,6 +833,9 @@ fun SettingsScreen(
                     Panel {
                         pairing?.let {
                             PanelRow("Paired as “${it.device}”", it.url, Glyphs.Qr)
+                            PanelDivider()
+                            PanelRow("Re-pair this PC", "Pairing broken or revoked? Scan a fresh code; chats and drafts stay",
+                                Glyphs.Refresh, iconTint = Gold, onClick = actions.repair)
                             PanelDivider()
                         }
                         PanelRow("Unpair this device", "Signs this phone out of your PC", icon = Glyphs.Close, iconTint = Bad, titleColor = Bad, onClick = { confirmUnpair = true })
@@ -1038,6 +1141,8 @@ fun PairScreen(
     onPair: suspend (Pairing) -> String?,
     imageError: String? = null,
     onCancel: (() -> Unit)? = null,
+    /** Re-pairing the PC in use as this device name (its pairing broke). */
+    repairDevice: String? = null,
 ) {
     val scope = rememberCoroutineScope()
     var url by remember { mutableStateOf("https://") }
@@ -1072,11 +1177,19 @@ fun PairScreen(
             Icon(Glyphs.Spark, null, tint = Gold, modifier = Modifier.size(34.dp))
         }
         Spacer(Modifier.size(20.dp))
-        Text(if (onCancel != null) "Add another PC" else "Hermes Remote", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.SemiBold)
-        Text(if (onCancel != null) "Each PC keeps its own chats. Switch between them from the side menu."
-            else "Your Hermes agent, from your phone.", style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text(when { repairDevice != null -> "Re-pair this PC"; onCancel != null -> "Add another PC"; else -> "Hermes Remote" },
+            style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.SemiBold)
+        Text(when {
+            repairDevice != null -> "Get a fresh code from the PC. Chats, drafts and the PC's name stay as they are."
+            onCancel != null -> "Each PC keeps its own chats. Switch between them from the side menu."
+            else -> "Your Hermes agent, from your phone."
+        }, style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
         Spacer(Modifier.size(28.dp))
-        Step(1, "On your PC, run", code = "hermes-remote-bridge pair phone")
+        if (repairDevice != null) {
+            Step(1, "On your PC, open the tray: Devices > $repairDevice > Re-pair. Or run", code = "hermes-remote-bridge pair $repairDevice --replace")
+        } else {
+            Step(1, "On your PC, run", code = "hermes-remote-bridge pair phone")
+        }
         Step(2, "Scan the QR code it shows, or pick a picture of it (add --qr-png qr.png to get a file you can send)")
         Spacer(Modifier.size(20.dp))
         Button(onClick = onScan, enabled = !busy, modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp),

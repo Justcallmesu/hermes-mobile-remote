@@ -311,7 +311,7 @@ def _show_qr(uri: str, cfg: Config) -> bool:
 
 def cmd_pair(cfg: Config, args: argparse.Namespace) -> None:
     store = DeviceStore(cfg.devices_file)
-    device, token = store.pair(args.name)
+    device, token = store.pair(args.name, replace=getattr(args, "replace", False))
     urls = [args.url] if args.url else _bridge_urls(cfg)
     # v2: LAN entries are HTTPS and `pin` is the certificate the app must see before it sends
     # the token there. Tailscale entries stay HTTP inside WireGuard.
@@ -503,6 +503,8 @@ def main(argv: list[str] | None = None) -> None:
     p.add_argument("--url", help="Override the bridge URL put in the QR code")
     p.add_argument("--token-file", type=Path, help=argparse.SUPPRESS)
     p.add_argument("--qr-png", type=Path, help="Write the pairing QR to a PNG (mode 600) instead of the terminal")
+    p.add_argument("--replace", action="store_true",
+                   help="Re-pair: revoke the active device with this name and issue it a new code")
     r = sub.add_parser("revoke", help="Revoke a paired device")
     r.add_argument("device", help="Device name or id")
     d = sub.add_parser("devices", help="List paired devices")

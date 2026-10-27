@@ -1,6 +1,9 @@
 package io.github.nideta231.hermesremote
 
 import io.github.nideta231.hermesremote.data.ProjectRef
+import io.github.nideta231.hermesremote.data.DrawerCache
+import io.github.nideta231.hermesremote.data.GroupOrder
+import io.github.nideta231.hermesremote.data.moveGroup
 import io.github.nideta231.hermesremote.data.SessionGrouping
 import io.github.nideta231.hermesremote.data.SessionOrdering
 import io.github.nideta231.hermesremote.data.SessionStatus
@@ -44,30 +47,55 @@ class SessionViewTest {
         assertEquals(listOf("Pinned" to listOf("p"), "Today" to listOf("a"), "This week" to listOf("b"), "Older" to listOf("c")), ids(g))
     }
 
-    @Test fun groupsByProjectWithHomeLast() {
+    @Test fun projectGroupsFollowLastUpdated() {
         val g = arrangeSessions(items, SessionView(grouping = SessionGrouping.PROJECT), projects = projects, now = now)
-        assertEquals(listOf("Pinned" to listOf("p"), "Website" to listOf("b", "c"), "Home" to listOf("a")), ids(g))
-        assertEquals("p-proj1", g[1].key)
+        // Home's newest chat (a, 1 min ago) beats Website's (b, 3 days ago): not alphabetical.
+        assertEquals(listOf("Pinned" to listOf("p"), "Home" to listOf("a"), "Website" to listOf("b", "c")), ids(g))
+        assertEquals("p-proj1", g[2].key)
     }
 
-    @Test fun projectGroupsKeepTheirPlaceWhenAChatGetsAReply() {
-        val tree = listOf(
-            ProjectRef("p1", "Website", setOf("w")), ProjectRef("p2", "Api", setOf("x")),
-            ProjectRef("/r/zeta", "zeta", setOf("z"), auto = true), ProjectRef("/r/alpha", "alpha", setOf("y"), auto = true),
-        )
+    @Test fun projectGroupsMoveWhenAChatGetsAReply() {
+        val tree = listOf(ProjectRef("p1", "Website", setOf("w")), ProjectRef("p2", "Api", setOf("x")),
+            ProjectRef("/r/alpha", "alpha", setOf("y"), auto = true))
         val view = SessionView(grouping = SessionGrouping.PROJECT)
-        val before = arrangeSessions(listOf(s("w", 10.0), s("x", 20.0), s("y", 30.0), s("z", 40.0)), view, projects = tree, now = now)
-        // Every chat but the oldest just got a reply, and the backend now lists the auto projects the other way round.
-        val after = arrangeSessions(listOf(s("w", 90.0), s("x", 1.0), s("y", 80.0), s("z", 2.0)), view,
-            projects = listOf(tree[0], tree[1], tree[3], tree[2]), now = now)
-        val order = listOf("Website", "Api", "alpha", "zeta")
-        assertEquals(order, before.map { it.label })
-        assertEquals(order, after.map { it.label })
+        val before = arrangeSessions(listOf(s("w", 10.0), s("x", 20.0), s("y", 30.0)), view, projects = tree, now = now)
+        assertEquals(listOf("Website", "Api", "alpha"), before.map { it.label })
+        val after = arrangeSessions(listOf(s("w", 90.0), s("x", 50.0), s("y", 1.0)), view, projects = tree, now = now)
+        assertEquals(listOf("alpha", "Api", "Website"), after.map { it.label })
+    }
+
+    @Test fun customGroupOrderWinsAndSurvivesReplies() {
+        val tree = listOf(ProjectRef("p1", "Website", setOf("w")), ProjectRef("p2", "Api", setOf("x")),
+            ProjectRef("p3", "Shop", setOf("y")))
+        val view = SessionView(grouping = SessionGrouping.PROJECT, groupOrder = GroupOrder.CUSTOM)
+        val custom = listOf("p-p3", "p-p1")
+        val g = arrangeSessions(listOf(s("w", 10.0), s("x", 1.0), s("y", 30.0), s("h", 2.0)), view, projects = tree, now = now, customOrder = custom)
+        // Known keys first in the saved order; new groups (Api, Home) after, in sort order.
+        assertEquals(listOf("Shop", "Website", "Api", "Home"), g.map { it.label })
+        // AUTO ignores the saved order.
+        val auto = arrangeSessions(listOf(s("w", 10.0), s("x", 1.0), s("y", 30.0)), view.copy(groupOrder = GroupOrder.AUTO), projects = tree, now = now, customOrder = custom)
+        assertEquals(listOf("Api", "Website", "Shop"), auto.map { it.label })
+    }
+
+    @Test fun movingGroupsKeepsHiddenKeys() {
+        val shown = listOf("a", "b", "c")
+        assertEquals(listOf("b", "a", "c", "zz"), moveGroup(shown, listOf("zz"), "a", 1))
+        assertEquals(listOf("c", "a", "b"), moveGroup(shown, emptyList(), "c", Int.MIN_VALUE))
+        assertEquals(listOf("b", "c", "a"), moveGroup(shown, emptyList(), "a", Int.MAX_VALUE))
+        assertEquals(listOf("a", "b", "c"), moveGroup(shown, emptyList(), "a", -1))
+        assertEquals(listOf("x"), moveGroup(shown, listOf("x"), "missing", 1))
     }
 
     @Test fun sessionsMissingFromTreeLandInHome() {
         val g = arrangeSessions(items + s("z", 10.0), SessionView(grouping = SessionGrouping.PROJECT), projects = projects, now = now)
-        assertEquals(listOf("z", "a"), g.last().items.map { it.id })
+        assertEquals(listOf("z", "a"), g.first { it.key == "p-" + SessionView.NO_PROJECT }.items.map { it.id })
+    }
+
+    @Test fun drawerCacheRoundTrips() {
+        val sum = s("a", 60.0, tokens = 5, cost = 1.5, started = nowSec - 100, unread = true)
+        assertEquals(sum, DrawerCache.sessionFrom(org.json.JSONObject(DrawerCache.sessionTo(sum).toString())))
+        val pr = ProjectRef("p1", "Website", setOf("a", "b"), "/x", auto = true)
+        assertEquals(pr, DrawerCache.projectFrom(org.json.JSONObject(DrawerCache.projectTo(pr).toString())))
     }
 
     @Test fun ordersByTokensAndCost() {

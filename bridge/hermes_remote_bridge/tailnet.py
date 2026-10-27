@@ -113,7 +113,10 @@ def _cli_json(*args: str) -> dict:
 
 
 def _self_ips_and_owner(status: dict) -> tuple[list[str], str | None]:
-    ips = list(status["Self"]["TailscaleIPs"])
+    # A stopped tailscaled (`tailscale down`) still reports its IPs, but they are no longer on any
+    # interface: binding one fails with EADDRNOTAVAIL. Only a running backend's IPs are bindable.
+    running = status.get("BackendState", "Running") == "Running"
+    ips = list(status["Self"]["TailscaleIPs"] or []) if running else []
     owner = (status.get("User") or {}).get(str(status["Self"]["UserID"]), {}).get("LoginName")
     return ips, owner
 

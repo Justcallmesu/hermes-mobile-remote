@@ -10,6 +10,84 @@ authoritative history — this file only summarises what is worth knowing before
   without stopping the chat. Opening a chat mid-run catches up on the ones already running.
 - Bridge: the phone may call `subagent.list` and `subagent.interrupt` (needs the updated bridge).
 
+## v1.18.0
+
+- PC Glance is now part of the app. The drawer header has a PC page (live CPU/RAM/temperature,
+  disk, network, per-core bars, history from 1 hour to 1 year, alerts), a process list where you
+  can stop or force-stop a process, and Claude plan usage (session and weekly limits with reset
+  times and history). Two home-screen widgets: *PC stats* and *Claude usage*. Update the bridge
+  on the PC for these; the separate PC Glance app and agent can be uninstalled.
+- Terminal: a shell on your PC from the phone (the `>_` icon), with colours and a key bar (Esc,
+  Tab, Ctrl, ^C, arrows). Turn it off with `terminal = false` in the bridge's config.toml.
+- Re-pair: when a pairing breaks, Settings > Re-pair this PC (or the PC's ⋮ in the PC switcher)
+  takes a fresh code and keeps the PC's chats, drafts and name; no more delete and pair again.
+  When the PC refuses the phone's token, the app now says so and offers Re-pair instead of
+  "can't reach your PC". On the PC: tray > Devices > (phone) > Re-pair, or
+  `hermes-remote-bridge pair <name> --replace`, which issues a new code and revokes the old one.
+- Tray (Linux and Windows): *Run doctor...* shows every check with its verdict.
+- Typing `/` and picking a skill or command from the suggestions no longer drops the slash (the
+  skill ran as plain text before).
+- Chat top bar: removed the New chat and Pin buttons; they are in the drawer and the chat's ⋮ menu.
+- Bridge: no longer crash-loops on start when Tailscale is installed but stopped; it listens on
+  the remaining addresses instead of failing with "Cannot assign requested address".
+- Bridge on Windows: a project description saved from the phone keeps its line endings as written.
+
+## v1.17.0
+
+- Projects can be managed from the phone, like the desktop's project menu: rename, change the
+  folder, edit the description, or delete. Tap the pencil next to a project in the project picker,
+  or long-press a project group in the drawer (grouped by project) and choose Edit project.
+  Deleting removes the saved project from Hermes only; its chats, files and folder stay on the PC.
+- New project: the folder is now optional, and you can write a description. Like the desktop's
+  New project, the description is saved as `IDEA.md` in the project folder (Markdown is fine).
+- Bridge: allows the phone `projects.get/update/delete/add_folder/remove_folder/set_primary`, and
+  adds `GET/PUT /v1/projects/{id}/idea`, which only ever reads or writes `IDEA.md` in that
+  project's own folder. Update the bridge on the PC for these.
+
+## v1.16.0
+
+- Chat files: files Hermes hands over in a reply (`MEDIA:` reports, spreadsheets, PDFs) and files
+  sent with a message now show as cards. Tap a card to open it in a phone app (Sheets, a PDF
+  viewer, ...); the arrow saves it to Downloads/Hermes Remote. Before, they were plain text, or
+  "📎 name" with nothing to tap.
+- Messages with a file no longer show Hermes' "--- Context Warnings ---" block, and files sent
+  from the desktop (``@file:`path` ``) show up correctly.
+- Pictures saved outside Hermes' image folders (e.g. a chart in a project) now load in the chat.
+- Bridge: new `GET /v1/sessions/{id}/file`. It serves only files that chat's own messages name.
+  Update the PC bridge (`git pull`, then restart it) to use this.
+
+## v1.15.1
+
+- Drawer: long-press a project folder (grouped by Project) → "New chat in <project>" starts a chat
+  with that project already selected ("Home" starts one with no project).
+- Project picker: a search field filters projects by name or folder.
+
+## v1.15.0
+
+- Drawer is compact so more chats fit: Scheduled and Settings are icons in the header, New chat is a
+  round button next to search, and the header and profile row are slimmer.
+- Vault moved into Settings (Hermes on your PC → Vault); Back from the Vault returns to Settings.
+
+## v1.14.1
+
+- Chat: a message with a picture no longer draws the picture on top of its text; the picture sits
+  above the message.
+- Picture viewer: a Download button next to Close saves the original picture to
+  Pictures/Hermes Remote (Android 10+), or to a file you pick on Android 8/9.
+
+## v1.14.0
+
+- Drawer: "Sort by Last updated" now also orders project groups, so the project with the newest reply
+  is on top (it used to stay A-Z). Other sorts (created, tokens, cost) order groups the same way.
+- Custom group order: long-press any group header (project, date or status) to move it to the
+  top, up, down or to the bottom. The order is saved on the phone, per PC, profile and grouping,
+  and kept after restarts. View sheet → "Group order" switches between "Follow sort" and "Custom".
+- Drawer cache: chats, projects and the custom order are stored on the phone and shown at once on
+  start. They sync on start, when the app comes back to the screen, while chatting, after each
+  reply and every ~30 s. If a sync fails, the saved list stays on screen.
+- Reconnect: projects are fetched as soon as the live link is up, so chats no longer all land in
+  Home until a manual refresh.
+
 ## v1.13.1
 
 - Composer: Shift+Enter on a hardware keyboard inserts a newline at the cursor (replacing any

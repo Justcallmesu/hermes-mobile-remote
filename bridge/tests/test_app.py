@@ -247,12 +247,13 @@ def test_frame_filter():
     for method in ("cli.exec", "process.stop", "mcp.servers.add", "profiles.configure", "display.start"):
         ok, err = check_frame(json.dumps({"jsonrpc": "2.0", "id": 2, "method": method}), 1000)
         assert ok is None and json.loads(err)["error"]["code"] == -32601
-    # The phone may list and create projects ("New project"), nothing more of projects.*.
-    for method in ("projects.tree", "projects.create"):
+    # The phone may list, create, rename, re-folder and delete projects; nothing else of projects.*.
+    for method in ("projects.tree", "projects.create", "projects.update", "projects.delete",
+                   "projects.add_folder", "projects.remove_folder", "projects.set_primary"):
         ok, err = check_frame(json.dumps({"jsonrpc": "2.0", "id": 5, "method": method,
                                           "params": {"name": "x", "primary_path": "~/x"}}), 1000)
         assert ok and err is None
-    ok, err = check_frame(json.dumps({"jsonrpc": "2.0", "id": 6, "method": "projects.delete"}), 1000)
+    ok, err = check_frame(json.dumps({"jsonrpc": "2.0", "id": 6, "method": "projects.archive"}), 1000)
     assert ok is None and json.loads(err)["error"]["code"] == -32601
     # The vault page: list/add/remove; unlocking a password manager or turning sources on/off stays on the PC.
     for method in ("vault.list", "vault.sources", "vault.add", "vault.remove"):
@@ -667,3 +668,67 @@ def test_media_serves_only_images_in_hermes_image_folders(tmp_path):
     assert get(home / "images" / ".." / ".env.png", headers=auth(token)).status_code == 403
     assert get(home / "profiles" / "bkm" / "images" / "b.png", headers=auth(token)).status_code == 403  # not allowed
     assert get(home / "images" / "missing.png", headers=auth(token)).status_code == 404
+
+
+def test_chat_file_serves_only_files_the_chat_names(tmp_path):
+    import sqlite3
+    home = tmp_path / "hermes"
+    work = tmp_path / "work"
+    (home / "attachments").mkdir(parents=True)
+    work.mkdir()
+    (home / "attachments" / "sheet one.xlsx").write_bytes(b"PK-sheet")
+    (work / "report.pdf").write_bytes(b"%PDF-1")
+    (work / "secret.txt").write_text("not named")
+    (home / "old.csv").write_text("a,b")
+    db = sqlite3.connect(home / "state.db")
+    db.execute("CREATE TABLE sessions (id TEXT, parent_session_id TEXT, cwd TEXT)")
+    db.execute("CREATE TABLE messages (session_id TEXT, content TEXT)")
+    db.executemany("INSERT INTO sessions VALUES (?,?,?)", [("s2", "s1", str(work)), ("s1", None, str(work))])
+    db.executemany("INSERT INTO messages VALUES (?,?)", [
+        ("s2", f"fix this\n@file:`{home}/attachments/sheet one.xlsx`"),
+        ("s2", "Done:\nMEDIA:report.pdf\n"),
+        ("s1", f"earlier\nMEDIA:{home}/old.csv"),  # before compression: still this chat
+        ("other", f"MEDIA:{work}/secret.txt")])
+    db.commit(); db.close()
+    c, token = _profile_app(tmp_path, [], hermes_home=home)
+
+    def get(sid, path, **kw):
+        return c.get(f"/v1/sessions/{sid}/file", params={"path": str(path)}, **kw)
+
+    r = get("s2", home / "attachments" / "sheet one.xlsx", headers=auth(token))
+    assert r.status_code == 200 and r.content == b"PK-sheet"
+    assert "sheet%20one.xlsx" in r.headers["content-disposition"] or "sheet one.xlsx" in r.headers["content-disposition"]
+    assert get("s2", work / "report.pdf", headers=auth(token)).headers["content-type"] == "application/pdf"
+    assert get("s2", "report.pdf", headers=auth(token)).status_code == 200  # as written, relative to the chat folder
+    assert get("s2", home / "old.csv", headers=auth(token)).status_code == 200
+    assert get("s2", work / "secret.txt", headers=auth(token)).status_code == 403  # another chat's file
+    assert get("s2", work / ".." / "work" / "secret.txt", headers=auth(token)).status_code == 403
+    assert get("nope", work / "report.pdf", headers=auth(token)).status_code == 403
+    assert get("s2", work / "report.pdf").status_code == 401
+    (work / "report.pdf").unlink()
+    assert get("s2", work / "report.pdf", headers=auth(token)).status_code == 404
+
+
+def test_project_idea_reads_and_writes_only_the_projects_own_idea_md(tmp_path):
+    import sqlite3
+    home = tmp_path / "hermes"
+    folder = tmp_path / "my app"
+    home.mkdir(); folder.mkdir()
+    db = sqlite3.connect(home / "projects.db")
+    db.execute("CREATE TABLE projects (id TEXT PRIMARY KEY, primary_path TEXT)")
+    db.executemany("INSERT INTO projects VALUES (?,?)", [("p_1", str(folder)), ("p_nofolder", None)])
+    db.commit(); db.close()
+    c, token = _profile_app(tmp_path, [], hermes_home=home)
+    url = "/v1/projects/p_1/idea"
+
+    r = c.get(url, headers=auth(token)).json()
+    assert r == {"path": str(folder / "IDEA.md"), "exists": False, "text": ""}
+    assert c.put(url, json={"text": "# My app\nA shop app."}, headers=auth(token)).status_code == 200
+    assert (folder / "IDEA.md").read_text() == "# My app\nA shop app.\n"
+    assert c.get(url, headers=auth(token)).json()["text"] == "# My app\nA shop app.\n"
+    c.put(url, json={"text": "  "}, headers=auth(token))
+    assert not (folder / "IDEA.md").exists()  # emptied = removed
+    assert c.get("/v1/projects/p_nofolder/idea", headers=auth(token)).status_code == 404
+    assert c.get("/v1/projects/nope/idea", headers=auth(token)).status_code == 404
+    assert c.get("/v1/projects/..%2F..%2Fetc/idea", headers=auth(token)).status_code in (400, 404)
+    assert c.get(url).status_code == 401

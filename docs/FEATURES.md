@@ -44,6 +44,32 @@ open chat, exactly like the desktop's picker; it does not change your global def
 
 **Reasoning effort.** Off, Minimal, Low, Medium, High, Extra high or Max, set on the open chat.
 
+## PC monitor, terminal and widgets
+
+This replaces the separate PC Glance app and agent; uninstall them once this is set up.
+
+**PC page.** The chip icon in the drawer header. Live CPU, RAM and temperature gauges, disk,
+swap, network and disk I/O, per-core bars, and a CPU/RAM/temperature history (1 h to 1 year)
+recorded by the bridge every 10 s. Alerts show when the CPU stayed above 90 °C or RAM above 95%
+for 5 minutes. Refreshes every 3 s while open; nothing polls when it is closed.
+
+**Processes.** Every process with CPU% and memory, sortable and filterable by name, command or
+PID. Tap one to Stop (ask it to quit) or Force stop (kill).
+
+**Claude usage.** Session (5 h) and weekly limits of the Claude plan Claude Code is signed into on
+the PC, with when each resets and the history. Checked every 5 minutes; the refresh icon asks now.
+
+**Terminal.** The `>_` icon in the drawer header (or the PC page). Your login shell on the PC, with
+colours and a key bar for Esc, Tab, Ctrl, ^C, arrows, Home/End and font size. Type in the field
+and press Send; with *Ctrl* latched, the next letter goes as Ctrl+letter.
+
+**Widgets.** Long-press the home screen > Widgets > Hermes Remote: *PC stats* (CPU, RAM,
+temperature and the last hour) and *Claude usage*. They show the PC the app is using. Tap the
+time to refresh; tap anywhere else to open the PC page. Android refreshes them every 15 minutes.
+
+- Limits: temperature is Linux only. On Windows the terminal has no PTY: line commands work,
+  full-screen programs (vim, top) don't.
+
 ## Scheduled jobs
 
 **Scheduled jobs.** *Scheduled* in the drawer lists the cron jobs of the Hermes profile in use:
