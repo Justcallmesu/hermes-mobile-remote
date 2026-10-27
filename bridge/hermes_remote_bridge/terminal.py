@@ -16,16 +16,26 @@ import asyncio
 import contextlib
 import json
 import os
+import logging
+import shlex
 import shutil
 import signal
 import subprocess
 import time
 
+log = logging.getLogger(__name__)
 READ_CHUNK = 65536
 MAX_INPUT = 65536
 
 
-def default_shell() -> list[str]:
+def default_shell(cfg=None) -> list[str]:
+    """The `terminal_shell` config line if it resolves on PATH, else the platform default."""
+    override = getattr(cfg, "terminal_shell", "")
+    if override:
+        argv = shlex.split(override, posix=os.name != "nt")
+        if argv and shutil.which(argv[0]):
+            return argv
+        log.warning("config.toml: terminal_shell %r was not found on PATH; using the default shell", override)
     if os.name == "nt":
         ps = shutil.which("pwsh") or shutil.which("powershell")
         return [ps, "-NoLogo"] if ps else [os.environ.get("COMSPEC", "cmd.exe")]
@@ -36,8 +46,9 @@ def default_shell() -> list[str]:
 class Shell:
     """The process and its output stream, PTY or pipes."""
 
-    def __init__(self, argv: list[str] | None = None, cwd: str | None = None, cols: int = 80, rows: int = 24) -> None:
-        self.argv = argv or default_shell()
+    def __init__(self, argv: list[str] | None = None, cwd: str | None = None, cols: int = 80, rows: int = 24,
+                 cfg=None) -> None:
+        self.argv = argv or default_shell(cfg)
         self.cwd = cwd or os.path.expanduser("~")
         self.cols, self.rows = cols, rows
         self.proc: subprocess.Popen | None = None

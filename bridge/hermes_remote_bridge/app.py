@@ -190,7 +190,7 @@ def create_app(cfg: Config, *, locator: BackendLocator | None = None, tailnet: T
                shell_factory=None) -> FastAPI:
     if monitor is None and cfg.monitor:
         monitor = Monitor(cfg.monitor_db, ClaudeUsage(cfg.claude_credentials) if cfg.claude_usage else None)
-    shell_factory = shell_factory or Shell
+    shell_factory = shell_factory or (lambda **kw: Shell(cfg=cfg, **kw))
     locator = locator or BackendLocator(cfg.hermes_home, cfg.hermes_root, cfg.hermes_python, cfg.backend_log,
                                         spawn=cfg.start_hermes)
     cli = hermes_cli or (lambda *a: _hermes_cli(cfg, *a))

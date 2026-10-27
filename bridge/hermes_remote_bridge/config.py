@@ -65,6 +65,8 @@ class Config:
     claude_usage: bool = True
     claude_credentials: Path = Path.home() / ".claude" / ".credentials.json"
     terminal: bool = True
+    # Command line the phone's Terminal opens, e.g. "cmd.exe" or "/usr/bin/fish -l". Empty = the default.
+    terminal_shell: str = ""
     requests_per_minute: int = 240
     # Frames per minute on one live connection (the phone's RPCs, not Hermes' events).
     frames_per_minute: int = 600
