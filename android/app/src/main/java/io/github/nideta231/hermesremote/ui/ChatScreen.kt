@@ -111,6 +111,7 @@ import io.github.nideta231.hermesremote.data.LiveReducer
 import io.github.nideta231.hermesremote.data.ReplyMedia
 import io.github.nideta231.hermesremote.data.fileName
 import io.github.nideta231.hermesremote.data.splitReplyMedia
+import io.github.nideta231.hermesremote.data.messageTime
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.aspectRatio
@@ -566,6 +567,7 @@ private fun UserBubble(item: ChatItem.User) {
                 leadingIcon = { Icon(Glyphs.Edit, null, Modifier.size(18.dp)) }, onClick = { menu = false; editing = true })
         }
     }
+    MessageTime(item.at, Modifier.padding(top = 3.dp, end = 4.dp))
     }
     if (editing && edit != null) EditMessageDialog(item, onSave = { edit(item, it); editing = false }, onClose = { editing = false })
 }
@@ -603,8 +605,20 @@ private fun AssistantBlock(item: ChatItem.Assistant) {
         if (images.isNotEmpty()) ImageStrip(images, Modifier.padding(top = 8.dp))
         if (media.files.isNotEmpty()) FileCards(media.files, Modifier.padding(top = 8.dp))
         // Copy the whole reply as markdown, like the desktop's copy action under each answer.
-        if (!item.streaming && item.text.isNotBlank()) CopyButton(item.text, Modifier.offset(x = (-6).dp))
+        if (!item.streaming && item.text.isNotBlank()) Row(verticalAlignment = Alignment.CenterVertically) {
+            CopyButton(item.text, Modifier.offset(x = (-6).dp))
+            MessageTime(item.at)
+        }
     }
+}
+
+/** When a message was sent, under it: the time today, else the date too ("Oct 26, 14:05"). */
+@Composable
+private fun MessageTime(at: Long?, modifier: Modifier = Modifier) {
+    at ?: return
+    val label = remember(at) { messageTime(at, System.currentTimeMillis()) }
+    Text(label, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+        modifier = modifier)
 }
 
 /** The model's reasoning: one shimmering line while it thinks, expandable afterwards. */

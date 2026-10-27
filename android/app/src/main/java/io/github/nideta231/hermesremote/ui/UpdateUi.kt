@@ -40,7 +40,7 @@ import io.github.nideta231.hermesremote.data.UpdateState
 
 /** One line under the chat's top bar when an update is out: tap for what's new, ✕ to hide it. */
 @Composable
-fun UpdateStrip(u: UpdateState, onOpen: () -> Unit, onDismiss: () -> Unit) {
+fun UpdateStrip(u: UpdateState, onOpen: () -> Unit, onDismiss: (() -> Unit)?) {
     AnimatedVisibility(u.banner, enter = expandVertically() + fadeIn(), exit = shrinkVertically() + fadeOut()) {
         Surface(color = Gold.copy(alpha = 0.14f), modifier = Modifier.fillMaxWidth().clickable(onClick = onOpen)) {
             Row(Modifier.padding(start = 16.dp, end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -48,7 +48,7 @@ fun UpdateStrip(u: UpdateState, onOpen: () -> Unit, onDismiss: () -> Unit) {
                 Spacer(Modifier.width(10.dp))
                 Text(updateLine(u), style = MaterialTheme.typography.labelLarge, color = Gold,
                     maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f).padding(vertical = 12.dp))
-                if (u.progress == null) IconButton(onClick = onDismiss) { Icon(Glyphs.Close, "Hide", tint = Gold, modifier = Modifier.size(16.dp)) }
+                if (u.progress == null && onDismiss != null) IconButton(onClick = onDismiss) { Icon(Glyphs.Close, "Hide", tint = Gold, modifier = Modifier.size(16.dp)) }
             }
         }
     }

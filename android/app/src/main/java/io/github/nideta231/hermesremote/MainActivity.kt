@@ -24,6 +24,8 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxHeight
@@ -83,6 +85,7 @@ import io.github.nideta231.hermesremote.ui.SignInAgainScreen
 import io.github.nideta231.hermesremote.ui.SessionActions
 import io.github.nideta231.hermesremote.ui.SessionsPane
 import io.github.nideta231.hermesremote.ui.UpdateSheet
+import io.github.nideta231.hermesremote.ui.UpdateStrip
 import io.github.nideta231.hermesremote.ui.NotesSheet
 import io.github.nideta231.hermesremote.data.fullChangelog
 import androidx.compose.material3.Button
@@ -212,13 +215,20 @@ class MainActivity : ComponentActivity() {
         val gw by vm.gatewayHost.collectAsState()
         val hasHost = pairing != null || gw != null
         val repairDevice by vm.repairDevice.collectAsState()
+        val update by vm.updates.update.collectAsState()
+        var pairUpdateSheet by rememberSaveable { mutableStateOf(false) }
         AnimatedContent(rootScreen(pairing != null, gw?.signedOut, adding), transitionSpec = { fadeIn(tween(300)) togetherWith fadeOut(tween(200)) }, label = "root") { root ->
             if (root == Root.SIGN_IN) {
                 gw?.let { h ->
                     SignInAgainScreen(h.name, h.baseUrl, onSignIn = { raw -> vm.signInGateway(raw, ::openCustomTab, h.id) },
                         onCancelSignIn = vm::cancelGatewaySignIn, onAddHost = vm::startAddingPc)
                 }
-            } else if (root == Root.PAIR) {
+            } else if (root == Root.PAIR) Column(Modifier.fillMaxSize()) {
+                // Not paired yet, so no drawer or Settings: the update is offered here (statusbar-padded).
+                if (update.available != null || update.progress != null) Box(Modifier.statusBarsPadding()) {
+                    UpdateStrip(update.copy(dismissed = null), onOpen = { pairUpdateSheet = true }, onDismiss = null)
+                }
+                Box(Modifier.weight(1f)) {
                 PairScreen(pairUri.value, onScan = ::scan, onPickImage = { pickImage() }, onPair = {
                     vm.pair(it).also { err ->
                         if (err == null) {
@@ -236,7 +246,10 @@ class MainActivity : ComponentActivity() {
                     }
                 }, onCancelSignIn = vm::cancelGatewaySignIn, imageError = imageError.value,
                     onCancel = if (hasHost) ({ pairUri.value = null; imageError.value = null; vm.cancelAddingPc() }) else null,
-                    repairDevice = repairDevice)
+                    repairDevice = repairDevice, insetTop = update.available == null && update.progress == null)
+                }
+                if (pairUpdateSheet && update.available != null)
+                    UpdateSheet(update, onInstall = vm.updates::installUpdate, onDismiss = { pairUpdateSheet = false })
             } else {
                 val hidden = hiddenFeatures(if (gw != null) HostKind.GATEWAY else HostKind.BRIDGE)
                 androidx.compose.runtime.CompositionLocalProvider(LocalHiddenFeatures provides hidden) { PairedApp() }

@@ -21,6 +21,11 @@ authoritative history — this file only summarises what is worth knowing before
 - Gateway hosts hide the features that need the bridge: the project
   description (IDEA.md), chat file download, the bridge status card, and the default-model and
   approval settings. Notifications while the app is closed do not work for a gateway host yet.
+- Updates can be installed before pairing: the pairing screen shows "Version X is available" when a
+  newer app is out; tap it for what's new and Update now. Before, the update was only offered in the
+  drawer and Settings, which an unpaired phone never reaches.
+- Chat: each message shows when it was sent, under it (the time today, the date for older ones).
+- PC switcher: a gateway host no longer offers Re-pair, which only applies to a paired bridge.
 
 ## v1.18.0
 

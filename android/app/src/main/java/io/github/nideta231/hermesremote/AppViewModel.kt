@@ -1539,7 +1539,7 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
         _suggestions.value = emptyList()
         _chat.update { it.copy(sending = true, draft = if (it.draft.trim() == display.trim()) "" else it.draft,
             attachments = emptyList(), files = emptyList(),
-            items = it.items + ChatItem.User(key, fileLabel(display, files), pending = true, images = pictures),
+            items = it.items + ChatItem.User(key, fileLabel(display, files), pending = true, images = pictures, at = System.currentTimeMillis()),
             subagents = SubagentReducer.newTurn(it.subagents)) }
         drafts.put(_chat.value.sessionId, _chat.value.draft)
         viewModelScope.launch {
@@ -1610,7 +1610,7 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
         val at = before.indexOfFirst { it.key == item.key }.takeIf { it >= 0 } ?: return
         val first = before.take(at).none { it is ChatItem.User }
         val key = "u-${System.nanoTime()}"
-        _chat.update { it.copy(sending = true, items = before.take(at) + ChatItem.User(key, text, pending = true)) }
+        _chat.update { it.copy(sending = true, items = before.take(at) + ChatItem.User(key, text, pending = true, at = System.currentTimeMillis())) }
         viewModelScope.launch {
             try {
                 rpc("prompt.submit", { rid -> JSONObject().put("session_id", rid).put("text", text)

@@ -13,8 +13,9 @@ sealed interface ChatItem {
     /** [files]: PC paths of the files sent with it (`@file:` references), shown as cards. */
     data class User(override val key: String, val text: String, val pending: Boolean = false,
                     val images: List<String> = emptyList(), val rowId: Long? = null,
-                    val files: List<String> = emptyList()) : ChatItem
-    data class Assistant(override val key: String, val text: String, val streaming: Boolean = false) : ChatItem
+                    val files: List<String> = emptyList(), val at: Long? = null) : ChatItem
+    /** [at] (both): when it was sent, epoch ms; null when the PC didn't say. Shown under the message. */
+    data class Assistant(override val key: String, val text: String, val streaming: Boolean = false, val at: Long? = null) : ChatItem
     /** The model's reasoning for the reply that follows; shown collapsed. */
     data class Thinking(override val key: String, val text: String, val streaming: Boolean = false) : ChatItem
     data class Tool(
@@ -223,6 +224,7 @@ object HistoryMapper {
             if (m.str("display_kind") == "hidden") return@forEachIndexed
             val id = if (m.has("row_id") && !m.isNull("row_id")) "r${m.optLong("row_id")}" else "i$i"
             val text = m.str("text").orEmpty()
+            val at = m.optDouble("timestamp", Double.NaN).takeIf { !it.isNaN() && it > 0 }?.let { (it * 1000).toLong() }
             when (m.optString("role")) {
                 "user" -> if (text.isNotBlank()) when (val s = syntheticUserRow(text, m.str("display_kind"), m.opt("display_metadata"))) {
                     SyntheticRow.Drop -> {}
@@ -230,12 +232,12 @@ object HistoryMapper {
                     null -> {
                         val (body, images) = splitUserImages(text)
                         items += ChatItem.User("h-$id", displayUserText(body), images = images,
-                            rowId = if (m.has("row_id") && !m.isNull("row_id")) m.optLong("row_id") else null, files = fileRefs(body))
+                            rowId = if (m.has("row_id") && !m.isNull("row_id")) m.optLong("row_id") else null, files = fileRefs(body), at = at)
                     }
                 }
                 "assistant" -> {
                     m.str("reasoning")?.takeIf { it.isNotBlank() }?.let { items += ChatItem.Thinking("h-$id-r", it.trim()) }
-                    if (text.isNotBlank()) items += ChatItem.Assistant("h-$id", text.trim())
+                    if (text.isNotBlank()) items += ChatItem.Assistant("h-$id", text.trim(), at = at)
                 }
                 "tool" -> {
                     val name = m.str("name") ?: "tool"
@@ -278,7 +280,7 @@ object LiveReducer {
                 if (last is ChatItem.Assistant && last.streaming) out[out.lastIndex] = last.copy(text = last.text + text)
                 else {
                     if (last is ChatItem.Thinking && last.streaming) out[out.lastIndex] = last.copy(streaming = false)
-                    out += ChatItem.Assistant("live-$key", text.trimStart(), streaming = true)
+                    out += ChatItem.Assistant("live-$key", text.trimStart(), streaming = true, at = System.currentTimeMillis())
                 }
             }
             // thinking.delta is the spinner's status text ("( ˘⌣˘)♡ reasoning..."), not reasoning:
@@ -533,4 +535,17 @@ private fun samePrefix(a: String, b: String): Boolean {
     val y = b.trim()
     val k = minOf(40, x.length, y.length)
     return k > 0 && x.regionMatches(0, y, 0, k)
+}
+
+/** "14:05" when [at] is today (device time zone), "Oct 26, 14:05" this year, else "Oct 26 2025, 14:05". */
+fun messageTime(at: Long, now: Long, zone: java.util.TimeZone = java.util.TimeZone.getDefault()): String {
+    val a = java.util.Calendar.getInstance(zone).apply { timeInMillis = at }
+    val n = java.util.Calendar.getInstance(zone).apply { timeInMillis = now }
+    val sameYear = a.get(java.util.Calendar.YEAR) == n.get(java.util.Calendar.YEAR)
+    val pattern = when {
+        sameYear && a.get(java.util.Calendar.DAY_OF_YEAR) == n.get(java.util.Calendar.DAY_OF_YEAR) -> "HH:mm"
+        sameYear -> "MMM d, HH:mm"
+        else -> "MMM d yyyy, HH:mm"
+    }
+    return java.text.SimpleDateFormat(pattern, java.util.Locale.US).apply { timeZone = zone }.format(java.util.Date(at))
 }

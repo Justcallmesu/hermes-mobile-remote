@@ -1199,6 +1199,8 @@ fun PairScreen(
     onCancelSignIn: (() -> Unit)? = null,
     /** Re-pairing the PC in use as this device name (its pairing broke). */
     repairDevice: String? = null,
+    /** False when an update strip already sits above this screen and took the status bar inset. */
+    insetTop: Boolean = true,
 ) {
     val scope = rememberCoroutineScope()
     var gatewayMode by remember { mutableStateOf(false) }
@@ -1224,8 +1226,8 @@ fun PairScreen(
     LaunchedEffect(imageError) { if (imageError != null) error = imageError }
     onCancel?.let { BackHandler(onBack = it) }
 
-    Column(Modifier.fillMaxSize().imePadding().verticalScroll(rememberScrollState()).statusBarsPadding().navigationBarsPadding()
-        .padding(horizontal = 24.dp, vertical = 16.dp)) {
+    Column(Modifier.fillMaxSize().imePadding().verticalScroll(rememberScrollState()).then(if (insetTop) Modifier.statusBarsPadding() else Modifier)
+        .navigationBarsPadding().padding(horizontal = 24.dp, vertical = 16.dp)) {
         if (onCancel != null) {
             TextButton(onClick = onCancel, modifier = Modifier.offset(x = (-12).dp)) { Text("Cancel") }
         } else {
