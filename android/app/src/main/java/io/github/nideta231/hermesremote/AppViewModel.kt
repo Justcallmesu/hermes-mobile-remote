@@ -932,7 +932,7 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
                 if (!stillOn(asked)) return@launch
                 val merged = mergeSessionHead(_sessions.value.items, page)
                 if (merged != _sessions.value.items) _sessions.update { it.copy(items = merged, error = null) }
-                drawerCache.putSessions(asked, merged)
+                drawerCache.putSessions(asked.profile, merged)
                 val open = page.firstOrNull { it.id == _chat.value.sessionId }
                 if (open != null) _chat.update { it.copy(pinned = open.pinned, title = if (it.title == "New chat") open.displayTitle else it.title) }
                 refreshProjects()
@@ -1120,7 +1120,7 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
                 if (!stillOn(asked)) return@launch
                 val items = list.distinctBy { s -> s.id }
                 _sessions.update { it.copy(items = items, loading = false, hasMore = more, error = null) }
-                drawerCache.putSessions(asked, items)
+                drawerCache.putSessions(asked.profile, items)
                 val open = list.firstOrNull { it.id == _chat.value.sessionId }
                 if (open != null) _chat.update { it.copy(pinned = open.pinned, title = if (it.title == "New chat") open.displayTitle else it.title) }
                 refreshProjects()
@@ -1150,7 +1150,7 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
             ProjectRef(id, p.str("label") ?: id, members, path, auto = p.optBoolean("isAuto"))
         }
         if (projects != _sessions.value.projects) _sessions.update { it.copy(projects = projects) }
-        drawerCache.putProjects(asked, projects)
+        drawerCache.putProjects(asked.profile, projects)
     }
 
     fun loadMoreSessions() {
