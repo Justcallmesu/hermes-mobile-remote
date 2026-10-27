@@ -995,14 +995,30 @@ private fun Composer(
                     // Keeps the cursor so Shift+Enter can insert at it; follows the draft when it changes elsewhere.
                     var field by remember { mutableStateOf(TextFieldValue(text, TextRange(text.length))) }
                     val value = if (field.text == text) field else TextFieldValue(text, TextRange(text.length)).also { field = it }
+                    // Tablet (smallest width >= 600dp) or landscape: Enter sends, Shift+Enter is a new line.
+                    // Phone portrait keeps Enter = new line (Ctrl+Enter still sends on a hardware keyboard).
+                    val cfg = LocalConfiguration.current
+                    val enterSends = cfg.smallestScreenWidthDp >= 600 || cfg.orientation == Configuration.ORIENTATION_LANDSCAPE
+                    val canSend = !state.sending && (text.isNotBlank() || state.attachments.isNotEmpty() || state.files.isNotEmpty())
                     TextField(
-                        value = value, onValueChange = { field = it; if (it.text != text) actions.draft(it.text) },
-                        // Hardware keyboard: Ctrl+Enter sends; Enter and Shift+Enter insert a newline.
+                        value = value,
+                        onValueChange = { next ->
+                            // Soft keyboards type Enter as a "\n" instead of a key event: catch that one inserted
+                            // newline at the cursor and send instead of keeping it.
+                            val typedEnter = enterSends && next.text.length == value.text.length + 1 &&
+                                next.selection.collapsed && next.selection.start > 0 &&
+                                next.text[next.selection.start - 1] == '\n' &&
+                                next.text.removeRange(next.selection.start - 1, next.selection.start) == value.text
+                            if (typedEnter) { if (canSend) submit(); return@TextField }
+                            field = next; if (next.text != text) actions.draft(next.text)
+                        },
+                        keyboardOptions = if (enterSends) KeyboardOptions(imeAction = ImeAction.Send) else KeyboardOptions.Default,
+                        keyboardActions = KeyboardActions(onSend = { if (canSend) submit() }),
                         modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp).onPreviewKeyEvent { e ->
                             val enter = e.key == Key.Enter || e.key == Key.NumPadEnter
                             if (!enter) return@onPreviewKeyEvent false
-                            if (e.isCtrlPressed) {
-                                if (e.type == KeyEventType.KeyDown && !state.sending && (text.isNotBlank() || state.attachments.isNotEmpty() || state.files.isNotEmpty())) submit()
+                            if (e.isCtrlPressed || (enterSends && !e.isShiftPressed)) {
+                                if (e.type == KeyEventType.KeyDown && canSend) submit()
                                 return@onPreviewKeyEvent true
                             }
                             if (!e.isShiftPressed) return@onPreviewKeyEvent false
