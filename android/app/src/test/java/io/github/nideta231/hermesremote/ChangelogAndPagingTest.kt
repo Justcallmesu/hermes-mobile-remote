@@ -6,7 +6,6 @@ import io.github.nideta231.hermesremote.data.SessionView
 import io.github.nideta231.hermesremote.data.arrangeSessions
 import io.github.nideta231.hermesremote.data.changesBetween
 import io.github.nideta231.hermesremote.data.fullChangelog
-import io.github.nideta231.hermesremote.data.SESSION_PAGE
 import io.github.nideta231.hermesremote.data.pageGroups
 import io.github.nideta231.hermesremote.data.parseChangelog
 import io.github.nideta231.hermesremote.ui.MdBlock
@@ -84,13 +83,13 @@ class ChangelogAndPagingTest {
         assertEquals(10, more.remaining)
     }
 
-    @Test fun defaultPagingShowsThreeThenFiveMore() {
+    @Test fun defaultPagingShowsThreeThenThreeMore() {
         val g = SessionGroup("Today", (0 until 40).map { s("s$it") })
         val first = pageGroups(listOf(g), emptyMap()).single()
         assertEquals(3, first.items.size)
         assertEquals(37, first.remaining)
-        val more = pageGroups(listOf(g), mapOf(g.key to first.items.size + SESSION_PAGE)).single()
-        assertEquals(8, more.items.size)
+        val more = pageGroups(listOf(g), mapOf(g.key to first.items.size + 3)).single()
+        assertEquals(6, more.items.size)
     }
 
     @Test fun zeroPerGroupShowsEveryChat() {
@@ -129,8 +128,8 @@ class ChangelogAndPagingTest {
         val g = io.github.nideta231.hermesremote.data.SessionGroup("Today", (1..20).map { s("s$it") })
         val first = pageGroups(listOf(g), emptyMap()).single()
         org.junit.Assert.assertFalse(first.canShowLess)
-        val more = pageGroups(listOf(g), mapOf(g.key to first.items.size + SESSION_PAGE)).single()
+        val more = pageGroups(listOf(g), mapOf(g.key to first.items.size + 3)).single()
         org.junit.Assert.assertTrue(more.canShowLess)
-        org.junit.Assert.assertEquals(first.items.size + 5, more.items.size)
+        org.junit.Assert.assertEquals(first.items.size + 3, more.items.size)
     }
 }

@@ -171,9 +171,6 @@ const val SESSION_FIRST_PAGE = 3
 /** Choices offered in Settings for [SESSION_FIRST_PAGE]; 0 means show every chat. */
 val SESSION_FIRST_PAGE_CHOICES = listOf(3, 5, 10, 0)
 
-/** How many more chats each "Show more" tap adds. */
-const val SESSION_PAGE = 5
-
 /** A group as the drawer draws it: the first part of [group], and how many still wait behind "Show more". */
 data class GroupPage(val group: SessionGroup, val items: List<SessionSummary>, val remaining: Int,
                      /** Rows the group shows before any "Show more"; more than this offers "Show less". */

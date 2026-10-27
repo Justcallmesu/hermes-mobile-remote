@@ -108,7 +108,6 @@ import io.github.nideta231.hermesremote.data.SessionOrdering
 import io.github.nideta231.hermesremote.data.SessionStatus
 import io.github.nideta231.hermesremote.data.SessionSummary
 import io.github.nideta231.hermesremote.data.SessionView
-import io.github.nideta231.hermesremote.data.SESSION_PAGE
 import io.github.nideta231.hermesremote.data.SESSION_FIRST_PAGE_CHOICES
 import io.github.nideta231.hermesremote.data.arrangeSessions
 import io.github.nideta231.hermesremote.data.GroupOrder
@@ -301,9 +300,10 @@ fun SessionsPane(
                                 onClick = { actions.open(s.id) }, onLongClick = { menuFor = s })
                         }
                         if (page.remaining > 0 || page.canShowLess) item(key = "more-${group.key}") {
-                            ShowMoreRow(page.remaining, page.canShowLess, Modifier.animateItem(),
+                            // Each tap adds the same number as "Chats per group" in Settings.
+                            ShowMoreRow(page.remaining, perGroup, page.canShowLess, Modifier.animateItem(),
                                 onLess = { shown = shown - group.key }) {
-                                shown = shown + (group.key to page.items.size + SESSION_PAGE)
+                                shown = shown + (group.key to page.items.size + perGroup)
                             }
                         }
                     }
@@ -528,16 +528,16 @@ private fun RadioMark(selected: Boolean) {
     }
 }
 
-/** "Show N more" under a long group (each tap adds [SESSION_PAGE] rows) and "Show less" back to the first page. */
+/** "Show N more" under a long group (each tap adds [step] rows, the Chats per group setting) and "Show less" back to the first page. */
 @Composable
-private fun ShowMoreRow(remaining: Int, canShowLess: Boolean, modifier: Modifier, onLess: () -> Unit, onMore: () -> Unit) {
+private fun ShowMoreRow(remaining: Int, step: Int, canShowLess: Boolean, modifier: Modifier, onLess: () -> Unit, onMore: () -> Unit) {
     Row(modifier.fillMaxWidth().padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {
         if (remaining > 0) {
             Row(Modifier.weight(1f).clip(RoundedCornerShape(10.dp)).clickable(onClick = onMore)
                 .padding(horizontal = 8.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
                 Icon(Glyphs.Chevron, null, tint = Gold, modifier = Modifier.size(16.dp))
                 Spacer(Modifier.width(8.dp))
-                Text("Show ${minOf(remaining, SESSION_PAGE)} more", style = MaterialTheme.typography.labelLarge, color = Gold,
+                Text("Show ${minOf(remaining, step)} more", style = MaterialTheme.typography.labelLarge, color = Gold,
                     fontWeight = FontWeight.SemiBold)
                 Spacer(Modifier.width(8.dp))
                 Text("$remaining left", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -1142,7 +1142,7 @@ private fun DrawerPanel() {
             modifier = Modifier.padding(16.dp),
         )
         Text(if (current == 0) "Every chat shows. No \"Show more\"."
-            else "Each date or project shows $current chats, then \"Show more\". The open chat always shows.",
+            else "Each date or project shows $current chats; \"Show more\" adds $current at a time. The open chat always shows.",
             style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.padding(start = 16.dp, end = 16.dp, bottom = 14.dp))
     }
