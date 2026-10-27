@@ -30,6 +30,20 @@ def test_windows_order_pwsh_powershell_cmd(monkeypatch):
     assert terminal.default_shell(cfg) == ["C:\\cmd.exe"]
 
 
+def test_windows_quoted_override_path_loses_quotes_keeps_backslashes(monkeypatch):
+    path = "C:\\Program Files\\Git\\bin\\bash.exe"
+    monkeypatch.setattr(terminal, "os", _os("nt"))
+    monkeypatch.setattr(terminal.shutil, "which", _fake_which({path}))
+    cfg = Config(terminal_shell=f'"{path}" -l')
+    assert terminal.default_shell(cfg) == [path, "-l"]
+
+
+def test_windows_unquoted_override_unchanged(monkeypatch):
+    monkeypatch.setattr(terminal, "os", _os("nt"))
+    monkeypatch.setattr(terminal.shutil, "which", _fake_which({"bash"}))
+    assert terminal.default_shell(Config(terminal_shell="bash -l")) == ["bash", "-l"]
+
+
 def test_missing_override_falls_back_with_one_warning(monkeypatch, caplog):
     monkeypatch.setattr(terminal, "os", _os("posix", SHELL="/bin/zsh"))
     monkeypatch.setattr(terminal.shutil, "which", _fake_which(set()))

@@ -33,6 +33,8 @@ def default_shell(cfg=None) -> list[str]:
     override = getattr(cfg, "terminal_shell", "")
     if override:
         argv = shlex.split(override, posix=os.name != "nt")
+        if os.name == "nt":  # non-POSIX split keeps the quotes around a token
+            argv = [a[1:-1] if len(a) > 1 and a[0] == a[-1] and a[0] in "\"'" else a for a in argv]
         if argv and shutil.which(argv[0]):
             return argv
         log.warning("config.toml: terminal_shell %r was not found on PATH; using the default shell", override)
