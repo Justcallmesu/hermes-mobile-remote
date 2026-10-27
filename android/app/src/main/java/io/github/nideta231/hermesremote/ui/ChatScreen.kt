@@ -125,6 +125,7 @@ import io.github.nideta231.hermesremote.data.messageTime
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.text.KeyboardOptions
@@ -156,6 +157,8 @@ class ChatActions(
     val send: (String) -> Unit,
     val stop: () -> Unit,
     val steer: (String) -> Unit,
+    /** Send as the next turn while one runs, instead of steering it. */
+    val queue: (String) -> Unit = {},
     val approve: (String) -> Unit,
     val answerClarify: (List<String>) -> Unit,
     val draft: (String) -> Unit,
@@ -975,7 +978,12 @@ private fun Composer(
         // The view model clears the draft only when the send is accepted, so a
         // refused send keeps its text here instead of losing it.
         // Pictures can't ride a steer: with any attached, the message is queued as its own turn.
-        if (state.busy && state.attachments.isEmpty() && state.files.isEmpty() && !text.trimStart().startsWith("/")) actions.steer(text) else actions.send(text)
+        val plain = !text.trimStart().startsWith("/")
+        when {
+            state.busy && plain && ThemePrefs.queueWhileBusy -> actions.queue(text)
+            state.busy && plain && state.attachments.isEmpty() && state.files.isEmpty() -> actions.steer(text)
+            else -> actions.send(text)
+        }
     }
     Surface(color = MaterialTheme.colorScheme.surface) {
         Column(Modifier.fillMaxWidth().navigationBarsPadding().padding(start = 10.dp, end = 10.dp, top = 6.dp, bottom = 8.dp)) {
@@ -1052,7 +1060,11 @@ private fun Composer(
                             }
                             true
                         },
-                        placeholder = { Text(if (state.busy) "Steer the running task…" else "Message Hermes") },
+                        placeholder = { Text(when {
+                            !state.busy -> "Message Hermes"
+                            ThemePrefs.queueWhileBusy -> "Queue the next message…"
+                            else -> "Steer the running task…"
+                        }) },
                         maxLines = 7,
                         textStyle = MaterialTheme.typography.bodyLarge,
                         colors = TextFieldDefaults.colors(
@@ -1085,7 +1097,11 @@ private fun Composer(
                                 tint = if (reasoning != null) Gold else MaterialTheme.colorScheme.onSurfaceVariant, onClick = onReasoning)
                         }
                         Spacer(Modifier.width(8.dp))
-                        SendButton(state, text, onSend = submit, onStop = actions.stop)
+                        // While the agent works: pick what a typed message does, steer it or queue the next turn.
+                        AnimatedVisibility(state.busy, enter = scaleIn() + fadeIn(), exit = scaleOut() + fadeOut()) {
+                            BusyModeToggle(ThemePrefs.queueWhileBusy) { ThemePrefs.pickQueueWhileBusy(it) }
+                        }
+                        SendButton(state, text, onSend = submit, onStop = actions.stop, queue = ThemePrefs.queueWhileBusy)
                     }
                 }
             }
@@ -1093,19 +1109,41 @@ private fun Composer(
     }
 }
 
-private enum class SendMode { SEND, STEER, STOP, SENDING }
+private enum class SendMode { SEND, STEER, QUEUE, STOP, SENDING }
+
+/** Steer / Queue switch beside Send while a turn runs; tap flips it, and the choice is remembered. */
+@Composable
+private fun BusyModeToggle(queue: Boolean, onPick: (Boolean) -> Unit) {
+    val haptics = LocalHapticFeedback.current
+    Surface(color = MaterialTheme.colorScheme.surfaceContainerHighest, shape = RoundedCornerShape(21.dp),
+        modifier = Modifier.padding(end = 6.dp).height(34.dp)) {
+        Row(Modifier.padding(3.dp), verticalAlignment = Alignment.CenterVertically) {
+            listOf(false to "Steer", true to "Queue").forEach { (value, label) ->
+                val on = value == queue
+                val bg by animateColorAsState(if (on) Gold else Color.Transparent, label = "busy-mode")
+                Box(Modifier.fillMaxHeight().clip(RoundedCornerShape(18.dp)).background(bg)
+                    .clickable { if (!on) { haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove); onPick(value) } }
+                    .padding(horizontal = 10.dp), contentAlignment = Alignment.Center) {
+                    Text(label, style = MaterialTheme.typography.labelMedium, fontWeight = if (on) FontWeight.SemiBold else FontWeight.Normal,
+                        color = if (on) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+        }
+    }
+}
 
 @Composable
-private fun SendButton(state: ChatState, text: String, onSend: () -> Unit, onStop: () -> Unit) {
+private fun SendButton(state: ChatState, text: String, onSend: () -> Unit, onStop: () -> Unit, queue: Boolean = false) {
     val mode = when {
         state.sending -> SendMode.SENDING
         state.busy && text.isBlank() && state.attachments.isEmpty() && state.files.isEmpty() -> SendMode.STOP
+        state.busy && queue && !text.trimStart().startsWith("/") -> SendMode.QUEUE
         state.busy && (state.attachments.isNotEmpty() || state.files.isNotEmpty()) -> SendMode.SEND
         state.busy && !text.trimStart().startsWith("/") -> SendMode.STEER
         else -> SendMode.SEND
     }
     val enabled = when (mode) {
-        SendMode.SEND -> text.isNotBlank() || state.attachments.isNotEmpty() || state.files.isNotEmpty()
+        SendMode.SEND, SendMode.QUEUE -> text.isNotBlank() || state.attachments.isNotEmpty() || state.files.isNotEmpty()
         SendMode.STEER -> text.isNotBlank()
         SendMode.STOP -> true
         SendMode.SENDING -> false
@@ -1125,6 +1163,7 @@ private fun SendButton(state: ChatState, text: String, onSend: () -> Unit, onSto
                 SendMode.SENDING -> androidx.compose.material3.CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp, color = Gold)
                 SendMode.STOP -> Icon(Glyphs.Stop, "Stop", tint = Color.White, modifier = Modifier.size(18.dp))
                 SendMode.STEER -> Icon(Glyphs.Steer, "Steer", tint = tint, modifier = Modifier.size(20.dp))
+                SendMode.QUEUE -> Icon(Glyphs.Clock, "Queue", tint = tint, modifier = Modifier.size(20.dp))
                 SendMode.SEND -> Icon(Glyphs.Send, "Send", tint = tint, modifier = Modifier.size(20.dp))
             }
         }

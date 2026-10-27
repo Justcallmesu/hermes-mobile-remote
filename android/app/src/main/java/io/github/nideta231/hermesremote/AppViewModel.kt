@@ -1633,7 +1633,15 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
     }
 
     /** Submits [text]; the chat shows [display] (what the user typed) for it. */
-    private fun sendMessage(text: String, display: String) {
+    /** Queue [text] as the next turn while one runs (Hermes runs it once the current reply ends). */
+    fun queue(text: String) {
+        val trimmed = text.trim()
+        if (trimmed.isEmpty() && _chat.value.attachments.isEmpty() && _chat.value.files.isEmpty()) return
+        if (!_chat.value.busy || trimmed.startsWith("/")) return send(text)
+        sendMessage(trimmed, trimmed, queued = true)
+    }
+
+    private fun sendMessage(text: String, display: String, queued: Boolean = false) {
         val trimmed = text.trim()
         val pictures = _chat.value.attachments
         val files = _chat.value.files
@@ -1676,7 +1684,8 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
                 if (sent.isNotEmpty()) _chat.update { st -> st.copy(items = st.items.map {
                     if (it is ChatItem.User && it.key == key) it.copy(images = sent) else it }) }
                 val res = rpc("prompt.submit", { rid -> JSONObject().put("session_id", rid)
-                    .put("text", withFileRefs(trimmed.ifEmpty { if (pictures.isNotEmpty()) "What do you see in this image?" else "" }, refs)) }, 30_000)
+                    .put("text", withFileRefs(trimmed.ifEmpty { if (pictures.isNotEmpty()) "What do you see in this image?" else "" }, refs))
+                    .apply { if (queued) put("queued", true) } }, 30_000)
                 val status = res.str("status")
                 _chat.update { st ->
                     st.copy(sending = false, status = if (st.status == "idle") "working" else st.status,
