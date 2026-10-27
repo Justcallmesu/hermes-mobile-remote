@@ -20,6 +20,7 @@ from .devices import DeviceStore
 from .host import host
 from .network import TrustStore, current_network, serving_lan_ips
 from .tailnet import sync_tailscale_ips
+from .supervise import EXIT_PORT_CONFLICT
 from .tls import cert_pin, ensure_identity
 
 
@@ -79,9 +80,12 @@ def _bind(host: str, port: int) -> socket.socket:
     a clear message for the common case (a bridge is already running) instead of a traceback.
     """
     if _port_in_use(host, port):
-        raise SystemExit(
-            f"Port {port} is already in use on {host}; another bridge is probably running. "
-            f"Stop it first (the tray: Quit Hermes Remote), or set a different port in config.toml.")
+        # Exit 76 (not the generic SystemExit(message) = 1) so the supervisor can tell a port
+        # conflict from a crash and stop instead of retrying.
+        print(f"Port {port} is already in use on {host}; another bridge is probably running. "
+              f"Stop it first (the tray: Quit Hermes Remote), or set a different port in config.toml.",
+              file=sys.stderr)
+        raise SystemExit(EXIT_PORT_CONFLICT)
     family = socket.AF_INET6 if ":" in host else socket.AF_INET
     sock = socket.socket(family, socket.SOCK_STREAM)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -158,6 +162,17 @@ def cmd_serve(cfg: Config, _: argparse.Namespace) -> None:
         # Non-zero so the service manager (systemd Restart=always, a Scheduled Task's restart
         # policy) brings us back up on the new addresses.
         raise SystemExit(75)
+
+
+def cmd_supervise(cfg: Config, args: argparse.Namespace) -> None:
+    import signal
+
+    from .supervise import Supervisor, popen_launcher
+
+    sup = Supervisor(popen_launcher(args.config), host().state_dir() / "bridge.log")
+    for name in ("SIGINT", "SIGTERM"):
+        signal.signal(getattr(signal, name), lambda *_: sup.stop())
+    sys.exit(sup.run())
 
 
 def _listener_closed(sockets) -> bool:
@@ -498,6 +513,7 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--config", type=Path, help="config.toml (default ~/.config/hermes-remote/config.toml)")
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("serve", help="Run the bridge")
+    sub.add_parser("supervise", help="Run the bridge and restart it if it stops")
     p = sub.add_parser("pair", help="Pair a new device and show its QR code")
     p.add_argument("name", help="Device name, e.g. 'phone' or 'tablet'")
     p.add_argument("--url", help="Override the bridge URL put in the QR code")
@@ -524,7 +540,8 @@ def main(argv: list[str] | None = None) -> None:
     args = parser.parse_args(argv)
     cfg = Config.load(args.config)
     handler = {"serve": cmd_serve, "pair": cmd_pair, "revoke": cmd_revoke, "devices": cmd_devices,
-               "trust": cmd_trust, "doctor": cmd_doctor, "firewall": cmd_firewall}[args.command]
+               "trust": cmd_trust, "doctor": cmd_doctor, "firewall": cmd_firewall,
+               "supervise": cmd_supervise}[args.command]
     try:
         handler(cfg, args)
     except ValueError as exc:
