@@ -8,6 +8,7 @@ Policy (formerly bridge/windows/supervise.ps1):
 from __future__ import annotations
 
 import os
+import stat
 import subprocess
 import sys
 import threading
@@ -43,6 +44,28 @@ class Supervisor:
         child = self._child
         if child is not None:
             child.terminate()
+
+    def watch_stdin(self, stream) -> bool:
+        """Call ``stop()`` when ``stream`` reaches EOF (the parent app closed it).
+        Not started, and False returned, for a terminal or a missing stream."""
+        if stream is None or stream.isatty():
+            return False
+        try:  # a service's stdin is /dev/null (a character device): already at EOF, not a parent
+            if stat.S_ISCHR(os.fstat(stream.fileno()).st_mode):
+                return False
+        except (OSError, ValueError, AttributeError):
+            pass  # no file descriptor (a fake stream): watch it
+
+        def watch() -> None:
+            try:
+                while stream.read(4096):
+                    pass
+            except (OSError, ValueError):
+                pass
+            self.stop()
+
+        threading.Thread(target=watch, daemon=True).start()
+        return True
 
     def _write(self, text: str) -> None:
         self._log.parent.mkdir(parents=True, exist_ok=True)

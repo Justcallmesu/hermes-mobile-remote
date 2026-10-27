@@ -1,3 +1,6 @@
+import io
+import threading
+
 import pytest
 
 from hermes_remote_bridge import cli
@@ -94,6 +97,59 @@ def test_stop_terminates_child(tmp_path):
     w.sup._launcher = launch
     assert w.sup.run() == 0
     assert child_holder["c"].terminated
+
+
+class BlockingChild:
+    """Its output ends only when terminated, like a running bridge."""
+
+    def __init__(self):
+        self.done = threading.Event()
+        self.terminated = False
+        self.stdout = iter(())
+
+    def wait(self):
+        assert self.done.wait(5)
+        return 0
+
+    def terminate(self):
+        self.terminated = True
+        self.done.set()
+
+
+def test_stdin_eof_stops_child_and_run_returns_0(tmp_path):
+    child = BlockingChild()
+    launched = threading.Event()
+
+    class StdinClosedAfterLaunch(io.StringIO):
+        def read(self, *_):
+            assert launched.wait(5)
+            return ""
+
+    def launch():
+        launched.set()
+        return child
+
+    sup = Supervisor(launch, tmp_path / "bridge.log")
+    assert sup.watch_stdin(StdinClosedAfterLaunch()) is True
+    assert sup.run() == 0
+    assert child.terminated
+
+
+class NoRead:
+    def __init__(self, tty):
+        self.tty = tty
+
+    def isatty(self):
+        return self.tty
+
+    def read(self, *_):
+        raise AssertionError("must not read")
+
+
+def test_tty_or_missing_stdin_is_not_watched(tmp_path):
+    sup = Supervisor(lambda: BlockingChild(), tmp_path / "bridge.log")
+    assert sup.watch_stdin(NoRead(tty=True)) is False
+    assert sup.watch_stdin(None) is False
 
 
 def test_supervise_subcommand_exists(capsys):

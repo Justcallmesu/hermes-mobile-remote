@@ -173,6 +173,7 @@ def cmd_supervise(cfg: Config, args: argparse.Namespace) -> None:
     sup = Supervisor(popen_launcher(args.config), host().state_dir() / "bridge.log")
     for name in ("SIGINT", "SIGTERM"):
         signal.signal(getattr(signal, name), lambda *_: sup.stop())
+    sup.watch_stdin(sys.stdin)
     sys.exit(sup.run())
 
 
