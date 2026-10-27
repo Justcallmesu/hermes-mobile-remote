@@ -90,15 +90,23 @@ class DeviceStore:
             self._last_seen_dirty.clear()
             self._save()
 
-    def pair(self, name: str) -> tuple[Device, str]:
+    def pair(self, name: str, *, replace: bool = False) -> tuple[Device, str]:
+        """A new device and its token. With [replace], an active device of the same name is
+        revoked in the same step (re-pairing a phone whose pairing broke), so its old token
+        stops working the moment the new one exists."""
         name = name.strip()
         if not name or len(name) > 64:
             raise ValueError("Device name must be 1-64 characters")
         with self._lock:
             self._mtime = None
             self._load_if_changed()
-            if any(d.name == name and d.active for d in self._devices.values()):
-                raise ValueError(f"An active device named {name!r} already exists; revoke it first")
+            same = [d for d in self._devices.values() if d.name == name and d.active]
+            if same and not replace:
+                raise ValueError(f"An active device named {name!r} already exists; "
+                                 f"re-pair it with `pair {name} --replace`, or revoke it first")
+            now = time.time()
+            for old in same:
+                old.revoked_at = now
             token = TOKEN_PREFIX + secrets.token_urlsafe(32)
             device = Device(id=uuid.uuid4().hex[:12], name=name, token_sha256=hash_token(token),
                             created_at=time.time())

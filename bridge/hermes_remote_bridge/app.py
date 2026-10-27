@@ -15,6 +15,7 @@ import contextlib
 import json
 import logging
 import logging.handlers
+import mimetypes
 import os
 import re
 import socket
@@ -34,8 +35,13 @@ from .backend import SESSION_HEADER, Backend, BackendLocator, BackendUnavailable
 from .config import Config
 from .devices import Device, DeviceStore
 from .network import TrustStore, network_info, serving_lan_ips
-from .profiles import ProfileRefused, is_visible, media_roots, resolve_profile
+from .chat_files import referenced_file
+from .project_notes import IDEA_MAX_BYTES, NoFolder, read_idea, write_idea
+from .profiles import ProfileRefused, is_visible, media_roots, profile_home, resolve_profile
+from .monitor import RANGES, ClaudeUsage, Monitor
 from .relay import Relay
+from .terminal import Shell
+from .terminal import serve as serve_terminal
 from .tailnet import TailnetClient, is_loopback, is_private_lan_ip, is_tailnet_ip
 
 log = logging.getLogger("hermes_remote_bridge")
@@ -46,6 +52,8 @@ APPROVAL_MODES = ("manual", "smart", "off")
 MEDIA_TYPES = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif",
                ".webp": "image/webp", ".bmp": "image/bmp"}
 MEDIA_MAX_BYTES = 25 * 1024 * 1024
+# Files a chat names (reports, spreadsheets, PDFs) the phone may download.
+CHAT_FILE_MAX_BYTES = 100 * 1024 * 1024
 # The wire contract between this bridge and the app. 2 = the WebSocket relay (v1.0.0).
 PROTOCOL = 2
 
@@ -83,6 +91,10 @@ class PatchSession(BaseModel):
     # Desktop-sidebar flags Hermes persists per session.
     pinned: bool | None = None
     archived: bool | None = None
+
+
+class ProjectIdea(BaseModel):
+    text: str = Field(default="", max_length=IDEA_MAX_BYTES)
 
 
 class CreateCronJob(BaseModel):
@@ -150,7 +162,11 @@ async def _hermes_cli(cfg: Config, *args: str) -> str:
 def create_app(cfg: Config, *, locator: BackendLocator | None = None, tailnet: TailnetClient | None = None,
                devices: DeviceStore | None = None, owner_login: str | None = None,
                hermes_cli=None, trust: TrustStore | None = None,
-               http: httpx.AsyncClient | None = None) -> FastAPI:
+               http: httpx.AsyncClient | None = None, monitor: Monitor | None = None,
+               shell_factory=None) -> FastAPI:
+    if monitor is None and cfg.monitor:
+        monitor = Monitor(cfg.monitor_db, ClaudeUsage(cfg.claude_credentials) if cfg.claude_usage else None)
+    shell_factory = shell_factory or Shell
     locator = locator or BackendLocator(cfg.hermes_home, cfg.hermes_root, cfg.hermes_python, cfg.backend_log,
                                         spawn=cfg.start_hermes)
     cli = hermes_cli or (lambda *a: _hermes_cli(cfg, *a))
@@ -174,10 +190,14 @@ def create_app(cfg: Config, *, locator: BackendLocator | None = None, tailnet: T
                     devices.flush_last_seen()
 
         task = asyncio.create_task(housekeeping())
+        if monitor is not None:
+            monitor.start()
         try:
             yield
         finally:
             task.cancel()
+            if monitor is not None:
+                monitor.stop()
             with contextlib.suppress(Exception):
                 devices.flush_last_seen()
             await locator.aclose()
@@ -319,6 +339,11 @@ def create_app(cfg: Config, *, locator: BackendLocator | None = None, tailnet: T
                 "lan_scheme": "https",
                 "network": await asyncio.to_thread(network_info, trust) if cfg.lan else None,
                 "pc_name": socket.gethostname(),
+                # What this bridge serves beyond chat, so the app hides pages an older or
+                # restricted bridge would refuse.
+                "features": [f for f, on in (("monitor", monitor is not None),
+                                              ("claude_usage", monitor is not None and cfg.claude_usage),
+                                              ("terminal", cfg.terminal)) if on],
                 "bridge_version": __version__, "protocol": PROTOCOL}
 
     @app.get("/v1/status")
@@ -515,22 +540,135 @@ def create_app(cfg: Config, *, locator: BackendLocator | None = None, tailnet: T
             raise ApiError(413, "too_large", "Image too large")
         return FileResponse(target, media_type=mime, headers={"Cache-Control": "private, max-age=86400"})
 
+    @app.get("/v1/sessions/{session_id}/file")
+    async def get_chat_file(session_id: str, path: str, profile: str | None = Depends(profile_param),
+                            _: Device = Depends(device_auth)):
+        """A file a chat names (a reply's `MEDIA:` line, or an `@file:` the user sent), for the
+        phone to preview or save. Only paths that chat's own stored messages reference are served."""
+        _check_id(session_id, "session id")
+        home = profile_home(cfg.hermes_home, profile)
+        target = await asyncio.to_thread(referenced_file, home, session_id, path)
+        if target is None:
+            raise ApiError(403, "not_in_chat", "This chat doesn't name that file")
+        if not os.path.isfile(target):
+            raise ApiError(404, "not_found", "File not found on the PC")
+        if os.path.getsize(target) > CHAT_FILE_MAX_BYTES:
+            raise ApiError(413, "too_large", "File too large to send to the phone")
+        mime = mimetypes.guess_type(target)[0] or "application/octet-stream"
+        return FileResponse(target, media_type=mime, filename=os.path.basename(target),
+                            headers={"Cache-Control": "private, no-cache"})
+
+    @app.get("/v1/projects/{project_id}/idea")
+    async def get_project_idea(project_id: str, profile: str | None = Depends(profile_param),
+                               _: Device = Depends(device_auth)):
+        """The project's IDEA.md (its description, as the desktop's "New project" writes it)."""
+        _check_id(project_id, "project id")
+        try:
+            return await asyncio.to_thread(read_idea, profile_home(cfg.hermes_home, profile), project_id)
+        except NoFolder as exc:
+            raise ApiError(404, "no_folder", str(exc))
+
+    @app.put("/v1/projects/{project_id}/idea")
+    async def put_project_idea(project_id: str, body: ProjectIdea, profile: str | None = Depends(profile_param),
+                               _: Device = Depends(device_auth)):
+        """Write (or, when empty, remove) IDEA.md in the project's own folder; no other path is writable."""
+        _check_id(project_id, "project id")
+        try:
+            return await asyncio.to_thread(write_idea, profile_home(cfg.hermes_home, profile), project_id, body.text)
+        except NoFolder as exc:
+            raise ApiError(404, "no_folder", str(exc))
+        except OSError as exc:
+            raise ApiError(500, "write_failed", f"Could not write IDEA.md: {exc.strerror or exc}")
+
     # ------------------------------------------------------------ the live connection
 
-    @app.websocket("/v1/ws")
-    async def live(ws: WebSocket):
+    # ------------------------------------------------------------ PC monitor + Claude usage
+
+    def need_monitor() -> Monitor:
+        if monitor is None:
+            raise ApiError(404, "monitor_off", "The PC monitor is turned off in the bridge's config.toml")
+        return monitor
+
+    async def off_loop(fn, *args):
+        return await asyncio.get_running_loop().run_in_executor(None, fn, *args)
+
+    @app.get("/v1/monitor/now")
+    async def monitor_now(live: bool = False, _: Device = Depends(device_auth)):
+        return await off_loop(need_monitor().now, live)
+
+    @app.get("/v1/monitor/history")
+    async def monitor_history(range: str = "1h", _: Device = Depends(device_auth)):  # noqa: A002 - query name
+        if range not in RANGES:
+            raise ApiError(400, "invalid_range", f"range must be one of {', '.join(RANGES)}")
+        return await off_loop(need_monitor().history, range)
+
+    @app.get("/v1/monitor/processes")
+    async def monitor_processes(sort: str = "cpu", limit: int = 80, q: str = "", _: Device = Depends(device_auth)):
+        return await off_loop(need_monitor().processes, sort, limit, q[:100])
+
+    @app.post("/v1/monitor/processes/{pid}/stop")
+    async def stop_process(pid: int, force: bool = False, device: Device = Depends(device_auth)):
+        m = need_monitor()
+        try:
+            result = await off_loop(m.signal, pid, force)
+        except PermissionError as exc:
+            raise ApiError(403, "forbidden_process", str(exc) or "Not allowed to stop that process") from exc
+        except Exception as exc:  # psutil.NoSuchProcess / AccessDenied
+            name = type(exc).__name__
+            if name == "NoSuchProcess":
+                raise ApiError(404, "no_such_process", f"No process {pid}") from exc
+            if name == "AccessDenied":
+                raise ApiError(403, "forbidden_process", "That process belongs to another user") from exc
+            raise
+        audit_event({"event": "process_stop", "device": device.name, "pid": pid, "name": result["name"], "force": force})
+        return result
+
+    @app.get("/v1/claude/usage")
+    async def claude_usage(refresh: bool = False, _: Device = Depends(device_auth)):
+        m = need_monitor()
+        return await off_loop(m.claude_poll) if refresh else m.claude_latest()
+
+    @app.get("/v1/claude/history")
+    async def claude_history(range: str = "24h", _: Device = Depends(device_auth)):  # noqa: A002
+        if range not in RANGES:
+            raise ApiError(400, "invalid_range", f"range must be one of {', '.join(RANGES)}")
+        return await off_loop(need_monitor().claude_history, range)
+
+    # ------------------------------------------------------------ live sockets
+
+    async def ws_device(ws: WebSocket) -> tuple[str | None, Device | None]:
+        """Same gate as HTTP: network, then the device token from the upgrade request's header."""
         peer = ws.client.host if ws.client else ""
         node, rejected = await peer_verdict(peer, ws.url.scheme == "wss")
         if rejected:
             await ws.close(code=4403, reason=rejected[2])
-            return
+            return None, None
         # The token rides in the Authorization header (OkHttp sets it on the upgrade request),
         # never in the URL, so it stays out of every log line.
         token = _bearer(ws.headers.get("authorization", ""))
         device = devices.authenticate(token) if token else None
         if device is None:
-            audit_event({"event": "ws_unauthorized", "peer": node})
+            audit_event({"event": "ws_unauthorized", "peer": node, "path": ws.url.path})
             await ws.close(code=4401, reason="Missing, invalid or revoked device token")
+            return node, None
+        return node, device
+
+    @app.websocket("/v1/terminal")
+    async def terminal(ws: WebSocket, cols: int = 80, rows: int = 24):
+        node, device = await ws_device(ws)
+        if device is None:
+            return
+        if not cfg.terminal:
+            await ws.close(code=4404, reason="The terminal is turned off in the bridge's config.toml")
+            return
+        await ws.accept()
+        shell = shell_factory(cols=max(10, min(cols, 500)), rows=max(4, min(rows, 300)))
+        await serve_terminal(ws, shell, audit=lambda e: audit_event({**e, "peer": node, "device": device.name}))
+
+    @app.websocket("/v1/ws")
+    async def live(ws: WebSocket):
+        node, device = await ws_device(ws)
+        if device is None:
             return
         frames_key = f"frames:{device.id}:{id(ws)}"
         relay = Relay(locator, max_frame_bytes=cfg.max_frame_bytes,

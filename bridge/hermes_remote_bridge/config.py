@@ -56,6 +56,13 @@ class Config:
     max_body_bytes: int = 1_000_000
     # One WebSocket frame from the phone (a prompt, or an image as base64).
     max_frame_bytes: int = 16_000_000
+    # PC monitor (stats, history, processes; was PC Glance) and Claude plan usage read with
+    # Claude Code's login on this PC. The terminal gives a paired phone a shell as this user.
+    monitor: bool = True
+    monitor_db: Path = STATE_DIR / "monitor.db"
+    claude_usage: bool = True
+    claude_credentials: Path = Path.home() / ".claude" / ".credentials.json"
+    terminal: bool = True
     requests_per_minute: int = 240
     # Frames per minute on one live connection (the phone's RPCs, not Hermes' events).
     frames_per_minute: int = 600

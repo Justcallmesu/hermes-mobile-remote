@@ -108,7 +108,9 @@ import io.github.nideta231.hermesremote.data.ModelConfirm
 import io.github.nideta231.hermesremote.data.ProjectRef
 import io.github.nideta231.hermesremote.data.ChatItem
 import io.github.nideta231.hermesremote.data.LiveReducer
-import io.github.nideta231.hermesremote.data.splitReplyImages
+import io.github.nideta231.hermesremote.data.ReplyMedia
+import io.github.nideta231.hermesremote.data.fileName
+import io.github.nideta231.hermesremote.data.splitReplyMedia
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.aspectRatio
@@ -157,8 +159,8 @@ class ChatActions(
     val modelPickerOpened: () -> Unit,
     /** New chat only: pick the project it starts in (null = no project). */
     val chooseProject: (String?) -> Unit = {},
-    /** Create a project on the PC (name, folder); callback gets null or an error message. */
-    val createProject: (String, String, (String?) -> Unit) -> Unit = { _, _, _ -> },
+    /** Create, edit and delete projects on the PC. */
+    val projects: ProjectActions = ProjectActions(),
     /** Open the phone's photo picker; picks land in [ChatState.attachments]. */
     val pickImages: () -> Unit = {},
     val removeAttachment: (String) -> Unit = {},
@@ -167,6 +169,8 @@ class ChatActions(
     val removeFile: (String) -> Unit = {},
     /** Bytes of a chat image (phone uri or PC path); null when it can't be had. */
     val loadImage: suspend (String) -> ByteArray? = { null },
+    /** A file the chat names (PC path), downloaded into the app's cache. */
+    val fetchFile: suspend (String) -> java.io.File = { throw java.io.IOException("Not available") },
     /** Answer the open masked prompt: (identifier for a login, value); empty value = skip. */
     val answerSecret: (String, String) -> Unit = { _, _ -> },
     /** Edit a sent message: Hermes drops it and what followed, then answers the new text. */
@@ -178,6 +182,9 @@ private val LocalEditMessage = staticCompositionLocalOf<((ChatItem.User, String)
 
 /** Loads a chat image's bytes; provided once by [ChatScreen] so every bubble can draw pictures. */
 private val LocalImageLoader = staticCompositionLocalOf<suspend (String) -> ByteArray?> { { null } }
+
+/** Downloads a chat file from the PC; provided once by [ChatScreen] so every bubble can show file cards. */
+private val LocalFileFetcher = staticCompositionLocalOf<suspend (String) -> java.io.File> { { throw java.io.IOException("Not available") } }
 
 /** How the phone reaches the PC right now, reduced to what the top bar shows. */
 enum class LinkHealth { LAN, TAILNET, SEARCHING, OFFLINE }
@@ -220,7 +227,8 @@ fun ChatScreen(
     val clarify = LiveReducer.openClarify(state.items)
     val secret = LiveReducer.openSecret(state.items)
 
-    CompositionLocalProvider(LocalImageLoader provides actions.loadImage, LocalEditMessage provides actions.edit) {
+    CompositionLocalProvider(LocalImageLoader provides actions.loadImage, LocalFileFetcher provides actions.fetchFile,
+        LocalEditMessage provides actions.edit) {
     Column(Modifier.fillMaxSize().imePadding()) {
         ChatTopBar(state, health, showMenuButton, actions, profile)
         ConnectionBanner(state, health, actions.openSettings)
@@ -270,7 +278,7 @@ fun ChatScreen(
         actions.chooseModel(it, false); modelSheet = false
     })
     if (projectSheet) ProjectSheet(projects, state.project?.id, onDismiss = { projectSheet = false },
-        onCreate = actions.createProject) {
+        actions = actions.projects) {
         actions.chooseProject(it); projectSheet = false
     }
     if (reasoningSheet) ReasoningSheet(catalog, reasoning, onDismiss = { reasoningSheet = false }) { actions.setReasoning(it); reasoningSheet = false }
@@ -315,14 +323,9 @@ private fun ChatTopBar(state: ChatState, health: LinkHealth, showMenu: Boolean, 
                     profile?.let { ProfileTag(it) }
                 }
             }
+            // New chat lives in the drawer and Pin in the chat's ⋮ menu; the top bar only shows the link.
             LinkBadge(health, actions.openSettings)
-            if (state.sessionId != null) {
-                val pinTint by animateColorAsState(if (state.pinned) Gold else MaterialTheme.colorScheme.onSurfaceVariant, label = "pin")
-                IconButton(onClick = actions.togglePin) {
-                    Icon(Glyphs.Pin, if (state.pinned) "Unpin" else "Pin", tint = pinTint)
-                }
-            }
-            IconButton(onClick = actions.newChat) { Icon(Glyphs.Compose, "New chat") }
+            Spacer(Modifier.width(4.dp))
         }
     }
 }
@@ -523,17 +526,29 @@ private fun UserBubble(item: ChatItem.User) {
     val haptics = LocalHapticFeedback.current
     var menu by remember { mutableStateOf(false) }
     var editing by remember { mutableStateOf(false) }
+    // With file cards drawn, the "📎 name" lines that stand for them would say it twice.
+    val shownText = remember(item.text, item.files) {
+        if (item.files.isEmpty()) item.text
+        else item.text.lines().filterNot { it.trim().startsWith("📎 ") }.joinToString("\n").trim()
+    }
+    // One Column: the list item is a Box, so a picture and the text emitted side by side were drawn
+    // on top of each other (the picture covered the start of the message).
+    Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.End) {
     if (item.images.isNotEmpty()) {
         Box(Modifier.fillMaxWidth().padding(bottom = if (item.text.isBlank()) 0.dp else 6.dp), contentAlignment = Alignment.CenterEnd) {
             ImageStrip(item.images, Modifier.padding(start = 40.dp))
         }
     }
-    if (item.text.isBlank()) return
-    Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.CenterEnd) {
+    if (item.files.isNotEmpty()) {
+        Box(Modifier.fillMaxWidth().padding(bottom = if (shownText.isBlank()) 0.dp else 6.dp), contentAlignment = Alignment.CenterEnd) {
+            FileCards(item.files, Modifier.padding(start = 40.dp), alignEnd = true)
+        }
+    }
+    if (shownText.isNotBlank()) Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.CenterEnd) {
         Surface(color = Gold.copy(alpha = alpha), shape = RoundedCornerShape(20.dp, 20.dp, 6.dp, 20.dp),
             modifier = Modifier.widthIn(max = 560.dp).padding(start = 40.dp).clip(RoundedCornerShape(20.dp, 20.dp, 6.dp, 20.dp))
                 .combinedClickable(onClick = {}, onLongClick = { haptics.performHapticFeedback(HapticFeedbackType.LongPress); menu = true })) {
-            Text(remember(item.text) { clipForDisplay(item.text) }, modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+            Text(remember(shownText) { clipForDisplay(shownText) }, modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
                 style = MaterialTheme.typography.bodyMedium.copy(lineHeight = 21.sp),
                 color = if (item.pending) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurface)
         }
@@ -543,6 +558,7 @@ private fun UserBubble(item: ChatItem.User) {
             if (edit != null && !item.pending) androidx.compose.material3.DropdownMenuItem(text = { Text("Edit") },
                 leadingIcon = { Icon(Glyphs.Edit, null, Modifier.size(18.dp)) }, onClick = { menu = false; editing = true })
         }
+    }
     }
     if (editing && edit != null) EditMessageDialog(item, onSave = { edit(item, it); editing = false }, onClose = { editing = false })
 }
@@ -568,12 +584,17 @@ private fun EditMessageDialog(item: ChatItem.User, onSave: (String) -> Unit, onC
 private fun AssistantBlock(item: ChatItem.Assistant) {
     val shown = rememberSmoothText(item.text, item.streaming)
     val caretOn by animateFloatAsState(if (item.streaming) 1f else 0f, tween(250), label = "caret")
-    val (body, images) = remember(shown, item.streaming) { if (item.streaming) shown to emptyList() else splitReplyImages(shown) }
+    val media = remember(shown, item.streaming) {
+        if (item.streaming) ReplyMedia(shown, emptyList(), emptyList()) else splitReplyMedia(shown)
+    }
+    val body = media.text
+    val images = media.images
     Column(Modifier.fillMaxWidth().padding(end = 8.dp)) {
         // Streaming replies are short-lived; a finished one is clipped so a huge answer can't stall scrolling.
         val safe = remember(body, item.streaming) { if (item.streaming) body else clipForDisplay(body) }
         MarkdownText(if (caretOn > 0.01f) "$safe ▍" else safe)
         if (images.isNotEmpty()) ImageStrip(images, Modifier.padding(top = 8.dp))
+        if (media.files.isNotEmpty()) FileCards(media.files, Modifier.padding(top = 8.dp))
         // Copy the whole reply as markdown, like the desktop's copy action under each answer.
         if (!item.streaming && item.text.isNotBlank()) CopyButton(item.text, Modifier.offset(x = (-6).dp))
     }
@@ -1053,57 +1074,41 @@ internal fun ModelSheet(
 @Composable
 private fun ProjectSheet(
     projects: List<ProjectRef>, current: String?, onDismiss: () -> Unit,
-    onCreate: (String, String, (String?) -> Unit) -> Unit, onPick: (String?) -> Unit,
+    actions: ProjectActions, onPick: (String?) -> Unit,
 ) {
     val sheet = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     var creating by remember { mutableStateOf(false) }
-    if (creating) NewProjectDialog(onDismiss = { creating = false }, onCreate = onCreate, onCreated = { creating = false; onDismiss() })
+    var editing by remember { mutableStateOf<ProjectRef?>(null) }
+    var query by remember { mutableStateOf("") }
+    val shown = remember(projects, query) {
+        val q = query.trim()
+        if (q.isEmpty()) projects else projects.filter { it.label.contains(q, true) || it.path?.contains(q, true) == true }
+    }
+    if (creating) NewProjectDialog(onDismiss = { creating = false }, onCreate = actions.create, onCreated = { creating = false; onDismiss() })
+    editing?.let { p -> EditProjectDialog(p.id, p.label, actions, onDismiss = { editing = null }) }
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheet, containerColor = MaterialTheme.colorScheme.surfaceContainer) {
         Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
             Text("Project", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
             Text("The new chat starts in this project's folder and shows under it on the desktop.",
                 style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            Spacer(Modifier.size(12.dp))
+            Spacer(Modifier.size(8.dp))
+            SearchField(query, { query = it }, "Search projects", Modifier.fillMaxWidth())
+            Spacer(Modifier.size(8.dp))
             LazyColumn(Modifier.fillMaxWidth().heightIn(max = 520.dp), contentPadding = PaddingValues(bottom = 24.dp)) {
-                item { SheetOption("+ New project", "Create one on the PC from a folder", selected = false) { creating = true } }
-                item { SheetOption("No project", "Hermes' default folder", selected = current == null) { onPick(null) } }
-                items(projects, key = { it.id }) { p ->
-                    SheetOption(p.label, p.path, selected = current == p.id) { onPick(p.id) }
+                if (query.isBlank()) {
+                    item { SheetOption("+ New project", "Create one on the PC; the folder is optional", selected = false) { creating = true } }
+                    item { SheetOption("No project", "Hermes' default folder", selected = current == null) { onPick(null) } }
+                }
+                if (shown.isEmpty()) item {
+                    Text("No project matches “$query”.", color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(12.dp))
+                }
+                items(shown, key = { it.id }) { p ->
+                    SheetOption(p.label, p.path, selected = current == p.id,
+                        onEdit = if (p.auto) null else ({ editing = p })) { onPick(p.id) }
                 }
             }
         }
     }
-}
-
-/** Name + PC folder for `projects.create`. The folder is a path on the PC, e.g. ~/Workspace/my-app. */
-@Composable
-private fun NewProjectDialog(onDismiss: () -> Unit, onCreate: (String, String, (String?) -> Unit) -> Unit, onCreated: () -> Unit) {
-    var name by remember { mutableStateOf("") }
-    var path by remember { mutableStateOf("") }
-    var busy by remember { mutableStateOf(false) }
-    var error by remember { mutableStateOf<String?>(null) }
-    AlertDialog(
-        onDismissRequest = { if (!busy) onDismiss() },
-        title = { Text("New project") },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedTextField(name, { name = it; error = null }, label = { Text("Name") }, singleLine = true,
-                    placeholder = { Text("My app") }, modifier = Modifier.fillMaxWidth())
-                OutlinedTextField(path, { path = it; error = null }, label = { Text("Folder on the PC") }, singleLine = true,
-                    placeholder = { Text("~/Workspace/my-app") }, modifier = Modifier.fillMaxWidth())
-                Text("A path on the PC, e.g. ~/Workspace/my-app. New chats in this project start there.",
-                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                error?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error) }
-            }
-        },
-        confirmButton = {
-            TextButton(enabled = !busy && name.isNotBlank() && path.isNotBlank(), onClick = {
-                busy = true
-                onCreate(name, path) { err -> busy = false; if (err == null) onCreated() else error = err }
-            }) { Text(if (busy) "Creating…" else "Create") }
-        },
-        dismissButton = { TextButton(enabled = !busy, onClick = onDismiss) { Text("Cancel") } },
-    )
 }
 
 private val effortHints = mapOf(
@@ -1136,7 +1141,7 @@ private fun ReasoningSheet(catalog: ModelCatalog?, reasoning: String?, onDismiss
 }
 
 @Composable
-private fun SheetOption(title: String, subtitle: String?, selected: Boolean, onClick: () -> Unit) {
+private fun SheetOption(title: String, subtitle: String?, selected: Boolean, onEdit: (() -> Unit)? = null, onClick: () -> Unit) {
     val bg by animateColorAsState(if (selected) Gold.copy(alpha = 0.14f) else Color.Transparent, label = "opt")
     Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(bg).clickable(onClick = onClick)
         .padding(horizontal = 14.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -1147,6 +1152,7 @@ private fun SheetOption(title: String, subtitle: String?, selected: Boolean, onC
         AnimatedVisibility(selected, enter = scaleIn() + fadeIn(), exit = scaleOut() + fadeOut()) {
             Icon(Glyphs.Check, null, tint = Gold, modifier = Modifier.size(20.dp))
         }
+        onEdit?.let { IconButton(onClick = it) { Icon(Glyphs.Edit, "Edit project", modifier = Modifier.size(18.dp)) } }
     }
 }
 
@@ -1237,9 +1243,34 @@ private fun ImageStrip(refs: List<String>, modifier: Modifier = Modifier) {
     open?.let { ImageViewer(it) { open = null } }
 }
 
-/** Full-screen picture: pinch to zoom, drag to pan, tap the X (or back) to close. */
+/** Full-screen picture: pinch to zoom, drag to pan, Download saves the original, X (or back) closes. */
 @Composable
 private fun ImageViewer(ref: String, onClose: () -> Unit) {
+    val load = LocalImageLoader.current
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val scope = rememberCoroutineScope()
+    var pending by remember { mutableStateOf<ByteArray?>(null) }
+    fun toast(msg: String) = android.widget.Toast.makeText(context, msg, android.widget.Toast.LENGTH_SHORT).show()
+    // Android 8/9 have no MediaStore folder writes without a permission: let the user pick a file.
+    val pick = androidx.activity.compose.rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.CreateDocument("image/*")) { uri ->
+        val bytes = pending; pending = null
+        if (uri == null || bytes == null) return@rememberLauncherForActivityResult
+        scope.launch {
+            val ok = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                runCatching { context.contentResolver.openOutputStream(uri)?.use { it.write(bytes) } != null }.getOrDefault(false)
+            }
+            toast(if (ok) "Picture saved" else "Couldn't save the picture")
+        }
+    }
+    fun download() = scope.launch {
+        val bytes = load(ref) ?: return@launch toast("Couldn't load the picture")
+        val name = pictureFileName(ref, bytes)
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+            val ok = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { savePicture(context, name, bytes) }
+            toast(if (ok) "Saved to Pictures/Hermes Remote" else "Couldn't save the picture")
+        } else { pending = bytes; pick.launch(name) }
+    }
     Dialog(onDismissRequest = onClose, properties = DialogProperties(usePlatformDefaultWidth = false)) {
         var scale by remember { mutableFloatStateOf(1f) }
         var dx by remember { mutableFloatStateOf(0f) }
@@ -1251,12 +1282,152 @@ private fun ImageViewer(ref: String, onClose: () -> Unit) {
                     if (scale == 1f) { dx = 0f; dy = 0f } else { dx += pan.x; dy += pan.y }
                 }
             }.graphicsLayer { scaleX = scale; scaleY = scale; translationX = dx; translationY = dy })
-            IconButton(onClick = onClose, modifier = Modifier.align(Alignment.TopEnd).statusBarsPadding().padding(8.dp)) {
-                Icon(Glyphs.Close, "Close", tint = Color.White)
+            Row(Modifier.align(Alignment.TopEnd).statusBarsPadding().padding(8.dp)) {
+                IconButton(onClick = { download() }) { Icon(Glyphs.Download, "Download", tint = Color.White) }
+                IconButton(onClick = onClose) { Icon(Glyphs.Close, "Close", tint = Color.White) }
             }
         }
     }
 }
+
+/** The file name a saved picture gets: the original's when it has one, else a timestamp; extension from its bytes. */
+internal fun pictureFileName(ref: String, bytes: ByteArray, now: Long = System.currentTimeMillis()): String {
+    val ext = pictureExtension(bytes)
+    val base = ref.substringBefore('?').substringAfterLast('/').substringAfterLast(':')
+        .substringBeforeLast('.').replace(Regex("[^A-Za-z0-9._-]"), "_").take(60)
+    return (if (base.length >= 3) base else "hermes-$now") + "." + ext
+}
+
+/** png/jpg/gif/webp from the file's magic bytes (jpg when unknown). */
+internal fun pictureExtension(b: ByteArray): String = when {
+    b.size >= 4 && b[0] == 0x89.toByte() && b[1] == 'P'.code.toByte() && b[2] == 'N'.code.toByte() -> "png"
+    b.size >= 3 && b[0] == 'G'.code.toByte() && b[1] == 'I'.code.toByte() && b[2] == 'F'.code.toByte() -> "gif"
+    b.size >= 12 && String(b, 0, 4, Charsets.US_ASCII) == "RIFF" && String(b, 8, 4, Charsets.US_ASCII) == "WEBP" -> "webp"
+    else -> "jpg"
+}
+
+/** Android 10+: writes into Pictures/Hermes Remote through MediaStore (no permission needed). */
+@androidx.annotation.RequiresApi(android.os.Build.VERSION_CODES.Q)
+private fun savePicture(context: android.content.Context, name: String, bytes: ByteArray): Boolean = runCatching {
+    val mime = when (name.substringAfterLast('.')) { "png" -> "image/png"; "gif" -> "image/gif"; "webp" -> "image/webp"; else -> "image/jpeg" }
+    val values = android.content.ContentValues().apply {
+        put(android.provider.MediaStore.Images.Media.DISPLAY_NAME, name)
+        put(android.provider.MediaStore.Images.Media.MIME_TYPE, mime)
+        put(android.provider.MediaStore.Images.Media.RELATIVE_PATH, android.os.Environment.DIRECTORY_PICTURES + "/Hermes Remote")
+        put(android.provider.MediaStore.Images.Media.IS_PENDING, 1)
+    }
+    val resolver = context.contentResolver
+    val uri = resolver.insert(android.provider.MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values) ?: return false
+    val ok = runCatching { resolver.openOutputStream(uri)?.use { it.write(bytes) } != null }.getOrDefault(false)
+    if (!ok) { resolver.delete(uri, null, null); return false }
+    values.clear(); values.put(android.provider.MediaStore.Images.Media.IS_PENDING, 0)
+    resolver.update(uri, values, null, null)
+    true
+}.getOrDefault(false)
+
+// ------------------------------------------------------------------ files
+
+/** Files of one message, one card each: tap opens it in a phone app, the arrow saves it to Downloads. */
+@Composable
+private fun FileCards(paths: List<String>, modifier: Modifier = Modifier, alignEnd: Boolean = false) {
+    Column(modifier, verticalArrangement = Arrangement.spacedBy(6.dp), horizontalAlignment = if (alignEnd) Alignment.End else Alignment.Start) {
+        paths.forEach { FileCard(it) }
+    }
+}
+
+@Composable
+private fun FileCard(path: String) {
+    val fetch = LocalFileFetcher.current
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val scope = rememberCoroutineScope()
+    var busy by remember(path) { mutableStateOf(false) }
+    var pending by remember { mutableStateOf<java.io.File?>(null) }
+    val name = remember(path) { fileName(path) }
+    fun toast(msg: String) = android.widget.Toast.makeText(context, msg, android.widget.Toast.LENGTH_SHORT).show()
+    // Android 8/9: no MediaStore Downloads without a permission, so the user picks where it goes.
+    val pick = androidx.activity.compose.rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.CreateDocument(mimeOf(name))) { uri ->
+        val file = pending; pending = null
+        if (uri == null || file == null) return@rememberLauncherForActivityResult
+        scope.launch {
+            val ok = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                runCatching { context.contentResolver.openOutputStream(uri)?.use { out -> file.inputStream().use { it.copyTo(out) } } != null }.getOrDefault(false)
+            }
+            toast(if (ok) "Saved $name" else "Couldn't save $name")
+        }
+    }
+    fun withFile(action: (java.io.File) -> Unit) {
+        if (busy) return
+        busy = true
+        scope.launch {
+            try { action(fetch(path)) }
+            catch (t: Throwable) {
+                if (t is kotlinx.coroutines.CancellationException) throw t
+                toast(fileError(name, t))
+            } finally { busy = false }
+        }
+    }
+    fun open() = withFile { f ->
+        val uri = androidx.core.content.FileProvider.getUriForFile(context, context.packageName + ".files", f)
+        val intent = android.content.Intent(android.content.Intent.ACTION_VIEW).setDataAndType(uri, mimeOf(name))
+            .addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION or android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+        try { context.startActivity(android.content.Intent.createChooser(intent, name).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)) }
+        catch (_: android.content.ActivityNotFoundException) { toast("No app on this phone opens $name. Use the download arrow.") }
+    }
+    fun save() = withFile { f ->
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) scope.launch {
+            val ok = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { saveDownload(context, name, f) }
+            toast(if (ok) "Saved to Downloads/Hermes Remote" else "Couldn't save $name")
+        } else { pending = f; pick.launch(name) }
+    }
+    Surface(color = MaterialTheme.colorScheme.surfaceContainer, shape = RoundedCornerShape(14.dp),
+        modifier = Modifier.widthIn(min = 180.dp, max = 300.dp).clip(RoundedCornerShape(14.dp)).clickable { open() }) {
+        Row(Modifier.padding(start = 12.dp, end = 4.dp, top = 6.dp, bottom = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+            Icon(Glyphs.Doc, null, tint = Gold, modifier = Modifier.size(20.dp))
+            Spacer(Modifier.width(10.dp))
+            Column(Modifier.weight(1f, fill = false)) {
+                Text(name, style = MaterialTheme.typography.bodyMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(if (busy) "Getting it from the PC…" else name.substringAfterLast('.', "file").uppercase().take(6) + " · tap to open",
+                    style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            Spacer(Modifier.width(4.dp))
+            if (busy) Box(Modifier.size(40.dp), contentAlignment = Alignment.Center) {
+                androidx.compose.material3.CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp, color = Gold)
+            } else IconButton(onClick = { save() }) { Icon(Glyphs.Download, "Save $name", modifier = Modifier.size(18.dp)) }
+        }
+    }
+}
+
+/** What went wrong getting a chat file, in words. */
+internal fun fileError(name: String, t: Throwable): String = when ((t as? io.github.nideta231.hermesremote.data.BridgeException)?.httpCode) {
+    404 -> if (t.message?.contains("not found", true) == true) "$name is no longer on the PC" else "Update the PC bridge to open files from the phone"
+    403 -> "The PC won't share $name"
+    413 -> "$name is too large to send to the phone"
+    else -> "Couldn't get $name: ${t.message ?: t.javaClass.simpleName}"
+}
+
+/** MIME type from the file name (for the viewer chooser and the save dialog). */
+internal fun mimeOf(name: String): String =
+    android.webkit.MimeTypeMap.getSingleton().getMimeTypeFromExtension(name.substringAfterLast('.', "").lowercase())
+        ?: "application/octet-stream"
+
+/** Android 10+: copies [file] into Downloads/Hermes Remote through MediaStore (no permission needed). */
+@androidx.annotation.RequiresApi(android.os.Build.VERSION_CODES.Q)
+private fun saveDownload(context: android.content.Context, name: String, file: java.io.File): Boolean = runCatching {
+    val values = android.content.ContentValues().apply {
+        put(android.provider.MediaStore.Downloads.DISPLAY_NAME, name)
+        put(android.provider.MediaStore.Downloads.MIME_TYPE, mimeOf(name))
+        put(android.provider.MediaStore.Downloads.RELATIVE_PATH, android.os.Environment.DIRECTORY_DOWNLOADS + "/Hermes Remote")
+        put(android.provider.MediaStore.Downloads.IS_PENDING, 1)
+    }
+    val resolver = context.contentResolver
+    val uri = resolver.insert(android.provider.MediaStore.Downloads.EXTERNAL_CONTENT_URI, values) ?: return false
+    val ok = runCatching { resolver.openOutputStream(uri)?.use { out -> file.inputStream().use { it.copyTo(out) } } != null }.getOrDefault(false)
+    if (!ok) { resolver.delete(uri, null, null); return false }
+    values.clear(); values.put(android.provider.MediaStore.Downloads.IS_PENDING, 0)
+    resolver.update(uri, values, null, null)
+    true
+}.getOrDefault(false)
 
 // ------------------------------------------------------------------ masked prompts
 

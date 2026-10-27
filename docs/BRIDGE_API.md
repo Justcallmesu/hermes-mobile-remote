@@ -85,6 +85,34 @@ for (see [Profiles](#profiles)). Without it, or with `default`, it is the defaul
 | GET | `/v1/cron/jobs` *(profile)* | `{jobs[]}`, each `{id, name, schedule_display, state, enabled, next_run_at, last_run_at, last_status, last_error, failure_streak, model}`. `state` is Hermes' `scheduled`, `paused`, `completed` or `error`. A job's prompt, script, delivery target and folder are not sent. |
 | GET | `/v1/cron/jobs/{id}/runs?limit` *(profile)* | `{runs[]}`, newest first, each `{id, title, preview, source, started_at, ended_at, message_count, model}`. `limit` 1–50, default 10. |
 | POST | `/v1/cron/jobs/{id}/pause\|resume\|trigger` *(profile)* | Pause, resume, or run now (`trigger`). Answers `{job}` as it is afterwards. Audited. A job that is not in that profile is 404 `job_not_found`. Creating, editing and deleting jobs is not offered. |
+| GET | `/v1/monitor/now?live` | `{host, stats, core_pct[], top[], claude, alerts[]}`. `stats` is `{cpu, mem, swap, temp, disk, load1, rx, tx, rd, wr, mem_used_gb, mem_total_gb, swap_used_gb, disk_used_gb, disk_total_gb, uptime_s, cores}` (null where the OS doesn't say; `temp` is Linux only). `live=true` samples now instead of returning the last 10 s sample. 404 `monitor_off` when `monitor = false`. |
+| GET | `/v1/monitor/history?range` | `range` is `1h,6h,24h,7d,30d,1y`. `{range, start, end, bucket, ts[], <metric>[], <metric>_max[]}`, at most 360 points. Raw samples are kept 48 h, 1-minute averages 30 days, 15-minute averages a year (SQLite in the state dir). |
+| GET | `/v1/monitor/processes?sort&limit&q` | `sort` is `cpu`, `mem`, `name` or `pid`; `q` filters by name, command line or PID. `{total, sort, processes[]}`, each `{pid, name, user, cpu, mem_mb, status, cmd}`. |
+| POST | `/v1/monitor/processes/{pid}/stop?force` | Terminate (or with `force=true`, kill) a process the bridge's user owns, waiting up to 3 s. `{pid, name, stopped}`. PID ≤ 1 and the bridge itself are 403 `forbidden_process`; another user's process is 403; gone is 404. Audited. |
+| GET | `/v1/claude/usage?refresh` | Claude plan usage read with Claude Code's own login on this PC: `{ok, plan, session, weekly, session_resets_at, weekly_resets_at, limits[{label, percent, resets_at, active}], ts}` or `{ok: false, error}`. Polled every 5 min; `refresh=true` asks now. The token is only read, never refreshed (that would sign Claude Code out). |
+| GET | `/v1/claude/history?range` | `{ts[], session[], weekly[]}` for the range. |
+
+`/v1/me` also lists `features`: any of `monitor`, `claude_usage`, `terminal`, so the app shows only
+the pages this bridge serves.
+
+## Terminal: `GET /v1/terminal?cols&rows` (WebSocket)
+
+A shell on the PC as the bridge's user (`$SHELL -l`; PowerShell on Windows), one per connection,
+killed when it closes. Same gate as the live socket: tailnet or pinned LAN, device token in the
+upgrade request's `Authorization` header. Turn it off with `terminal = false` in config.toml
+(closes with 4404).
+
+The bridge runs the terminal emulator (pyte), so it answers the shell's queries (fish waits for
+them) and the phone only draws rows. Frames are JSON text:
+
+- phone → bridge: `{"type":"input","data":"ls\r"}`, `{"type":"resize","cols":80,"rows":24}`, `{"type":"interrupt"}`
+- bridge → phone: `{"type":"screen","cols","rows","full","cursor":[x,y,visible],"lines":{"<row>":[[text,fg,bg,flags],…]},"scrolled":[[…]],"title"}`
+  (only changed rows, at most one frame per 40 ms; `scrolled` is rows that left the top, for the
+  phone's scrollback; flags: 1 bold, 2 reverse, 4 underline, 8 italic), `{"type":"exit","code"}`,
+  `{"type":"error","message"}`.
+
+On Windows the shell runs on pipes (no PTY in the standard library): line commands work,
+full-screen programs don't, and Ctrl-C isn't delivered.
 
 ## Profiles
 

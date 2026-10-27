@@ -61,3 +61,8 @@ def media_roots(hermes_home: Path, allowed: Iterable[str] = ()) -> list[str]:
         homes += [d for d in profiles_dir.iterdir()
                   if d.is_dir() and PROFILE_ID_RE.match(d.name) and is_visible(d.name, allowed)]
     return [os.path.realpath(home / sub) for home in homes for sub in MEDIA_DIRS]
+
+
+def profile_home(hermes_home: Path, profile: str | None) -> Path:
+    """Home folder of a profile [resolve_profile] accepted (None = the default profile)."""
+    return Path(hermes_home) if profile is None else Path(hermes_home) / "profiles" / profile
