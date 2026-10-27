@@ -3,6 +3,21 @@
 Releases are git tags; the version in the app comes from the tag. `git log v0.9.0..vX.Y.Z` is the
 authoritative history — this file only summarises what is worth knowing before upgrading.
 
+## v1.20.0
+
+- Move to project: long-press a chat and choose *Move to project* to file it under any project
+  that has a folder, like the desktop's move. Needs the updated bridge.
+- The Group by / Sort by / Status / Project chips now highlight in the theme's accent colour
+  instead of Material's default purple.
+- PC glance shows up reliably after pairing or a cold start. The app remembers which features the
+  bridge offers and retries the bridge's hello a few times, so a slow network wakeup no longer
+  hides the PC page until the next restart.
+- Claude usage ring beside the connection badge: the outer ring is the 5-hour session, the inner
+  ring is the week, and the number is the session %. It turns amber at 70% and red at 90%. Tap it
+  to open the PC page. Shown only when the bridge has the PC monitor.
+- On a tablet or in landscape, Enter sends the message and Shift+Enter adds a new line. On a phone
+  in portrait, Enter still adds a new line.
+
 ## v1.19.0
 
 - Switching between paired PCs no longer loses the profile dropdown. A reply from the PC you just
