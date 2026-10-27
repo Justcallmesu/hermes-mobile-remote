@@ -3,6 +3,7 @@
 
 pub mod bridge;
 pub mod control;
+pub mod setup;
 pub mod version;
 
 #[tauri::command]
@@ -36,7 +37,9 @@ pub fn run() {
             control::firewall_fix,
             control::open_logs,
             control::set_terminal_shell,
-            control::get_installed_list
+            control::get_installed_list,
+            setup::setup_state,
+            setup::setup_run
         ])
         .run(tauri::generate_context!())
         .expect("error while running Hermes Remote");

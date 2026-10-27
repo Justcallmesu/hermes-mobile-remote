@@ -219,7 +219,18 @@ pub struct CliOutput {
 }
 
 pub trait ProcessRunner {
-    fn run(&self, exe: &Path, args: &[String]) -> std::io::Result<CliOutput>;
+    /// Run `exe args` with extra environment variables, in `cwd` when given.
+    fn run_with(
+        &self,
+        exe: &Path,
+        args: &[String],
+        env: &[(String, String)],
+        cwd: Option<&Path>,
+    ) -> std::io::Result<CliOutput>;
+
+    fn run(&self, exe: &Path, args: &[String]) -> std::io::Result<CliOutput> {
+        self.run_with(exe, args, &[], None)
+    }
 }
 
 /// Process creation flags for the bridge CLI: no console window on Windows.
@@ -234,9 +245,18 @@ pub fn creation_flags(os: Os) -> u32 {
 pub struct SystemRunner;
 
 impl ProcessRunner for SystemRunner {
-    fn run(&self, exe: &Path, args: &[String]) -> std::io::Result<CliOutput> {
+    fn run_with(
+        &self,
+        exe: &Path,
+        args: &[String],
+        env: &[(String, String)],
+        cwd: Option<&Path>,
+    ) -> std::io::Result<CliOutput> {
         let mut cmd = std::process::Command::new(exe);
-        cmd.args(args);
+        cmd.args(args).envs(env.iter().map(|(k, v)| (k, v)));
+        if let Some(c) = cwd {
+            cmd.current_dir(c);
+        }
         #[cfg(windows)]
         {
             use std::os::windows::process::CommandExt;
@@ -504,7 +524,13 @@ mod tests {
     }
 
     impl ProcessRunner for Arc<FakeRunner> {
-        fn run(&self, exe: &Path, args: &[String]) -> std::io::Result<CliOutput> {
+        fn run_with(
+            &self,
+            exe: &Path,
+            args: &[String],
+            _env: &[(String, String)],
+            _cwd: Option<&Path>,
+        ) -> std::io::Result<CliOutput> {
             self.calls.lock().unwrap().push((exe.to_path_buf(), args.to_vec()));
             Ok(CliOutput { code: Some(0), stdout: self.out.clone(), stderr: String::new() })
         }

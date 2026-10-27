@@ -9,6 +9,14 @@ const invoke = vi.fn(async (cmd, args) => {
 });
 vi.mock("@tauri-apps/api/core", () => ({ invoke: (...x) => invoke(...x) }));
 
+let progressHandler;
+vi.mock("@tauri-apps/api/event", () => ({
+  listen: async (_name, h) => {
+    progressHandler = h;
+    return () => {};
+  },
+}));
+
 import App from "./App.vue";
 
 const running = {
@@ -134,6 +142,34 @@ describe("Pair", () => {
     expect(w.find('[data-test="qr"]').attributes("src")).toBe("data:image/png;base64,QUJD");
     await w.find('[data-test="copy"]').trigger("click");
     expect(writeText).toHaveBeenCalledWith("hermesremote://pair?x=1");
+  });
+});
+
+describe("Setup", () => {
+  it("lists the changes, waits for Continue, then shows each step and the error", async () => {
+    answers.setup_state = { needed: true, change_list: ["Virtual environment: /v", "Hermes Agent config: not changed"] };
+    answers.setup_run = () => {
+      const send = (step, state, message) => progressHandler({ payload: { step, state, message } });
+      send("uv", "running", "Getting uv");
+      send("uv", "done", "Getting uv");
+      send("sync", "running", "Installing the bridge");
+      send("sync", "error", "uv sync failed: boom");
+      throw new Error("uv sync failed: boom");
+    };
+    const w = await open();
+    expect(w.findAll('[data-test="change"]').map((c) => c.text())).toEqual([
+      "Virtual environment: /v",
+      "Hermes Agent config: not changed",
+    ]);
+    expect(invoke).not.toHaveBeenCalledWith("setup_run", expect.anything());
+    await w.find('[data-test="continue"]').trigger("click");
+    await flushPromises();
+    expect(invoke).toHaveBeenCalledWith("setup_run", { update: false });
+    expect(w.findAll('[data-test="step"]').map((s) => s.text())).toEqual([
+      "done: Getting uv",
+      "error: uv sync failed: boom",
+    ]);
+    expect(w.find('[data-test="error"]').text()).toContain("uv sync failed: boom");
   });
 });
 

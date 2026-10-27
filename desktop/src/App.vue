@@ -1,6 +1,7 @@
 <script setup>
 import { ref, onMounted } from "vue";
-import { appVersion } from "./api.js";
+import { appVersion, setupState } from "./api.js";
+import Setup from "./Setup.vue";
 import Home from "./Home.vue";
 import Devices from "./Devices.vue";
 import Pair from "./Pair.vue";
@@ -14,8 +15,14 @@ const tabs = [
   ["pair", "Pair a device"],
   ["settings", "Settings"],
 ];
+const showSetup = ref(false);
 onMounted(async () => {
   version.value = await appVersion();
+  try {
+    showSetup.value = !!(await setupState())?.needed;
+  } catch {
+    showSetup.value = false;
+  }
 });
 </script>
 
@@ -25,7 +32,8 @@ onMounted(async () => {
       <h1>Hermes Remote</h1>
       <p class="version">{{ version }}</p>
     </header>
-    <nav>
+    <Setup v-if="showSetup" @done="showSetup = false" />
+    <nav v-else>
       <button
         v-for="[id, label] in tabs"
         :key="id"
@@ -36,11 +44,11 @@ onMounted(async () => {
         {{ label }}
       </button>
     </nav>
-    <section>
+    <section v-if="!showSetup">
       <Home v-if="tab === 'home'" />
       <Devices v-else-if="tab === 'devices'" />
       <Pair v-else-if="tab === 'pair'" />
-      <Settings v-else />
+      <Settings v-else @setup="showSetup = true" />
     </section>
   </main>
 </template>

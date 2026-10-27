@@ -25,3 +25,11 @@ export const firewallFix = () => invoke("firewall_fix");
 export const openLogs = () => invoke("open_logs");
 export const setTerminalShell = (value) => invoke("set_terminal_shell", { value });
 export const getInstalledList = () => invoke("get_installed_list");
+
+// First-run setup: state {needed, change_list}; run emits "setup-progress" {step, state, message}.
+export const setupState = () => invoke("setup_state");
+export const setupRun = (update = false) => invoke("setup_run", { update });
+export async function onSetupProgress(cb) {
+  const { listen } = await import("@tauri-apps/api/event");
+  return listen("setup-progress", (e) => cb(e.payload));
+}

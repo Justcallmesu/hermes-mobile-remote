@@ -11,6 +11,7 @@ import {
   getInstalledList,
 } from "./api.js";
 
+defineEmits(["setup"]);
 const settings = ref({ start_at_logon: false, terminal_shell: "" });
 const installed = ref(null);
 const checks = ref([]);
@@ -91,5 +92,6 @@ onMounted(async () => {
     <h2>What this install changed</h2>
     <pre v-if="installed" data-test="installed">{{ installed }}</pre>
     <p v-else>Setup has not run yet</p>
+    <button data-test="rerun-setup" @click="$emit('setup')">Run setup again</button>
   </div>
 </template>
