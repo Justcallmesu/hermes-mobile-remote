@@ -34,6 +34,8 @@ class Config:
     lan: bool = False
     trust_file: Path = CONFIG_DIR / "networks.json"
     tls_dir: Path = CONFIG_DIR / "tls"
+    # Proves a request to /v1/local/* comes from a local client (see local_secret.py).
+    local_secret_file: Path = CONFIG_DIR / "local-secret"
     # Advertise the bridge over mDNS on trusted networks so the app finds a changed IP.
     mdns: bool = True
     # Hermes' home (spawn ledger, sessions) and install (to start `hermes serve` when the desktop

@@ -11,6 +11,7 @@ Two kinds of endpoint:
 from __future__ import annotations
 
 import asyncio
+import base64
 import contextlib
 import json
 import logging
@@ -20,6 +21,7 @@ import os
 import re
 import socket
 import time
+import urllib.parse
 from collections import defaultdict, deque
 from typing import Any
 
@@ -34,7 +36,9 @@ from . import __version__
 from .backend import SESSION_HEADER, Backend, BackendLocator, BackendUnavailable
 from .config import Config
 from .devices import Device, DeviceStore
-from .network import TrustStore, network_info, serving_lan_ips
+from . import local_secret
+from .local_api import devices_doc, pairing_payload, qr_png, trust_doc
+from .network import TrustStore, current_network, network_info, serving_lan_ips
 from .chat_files import referenced_file
 from .folders import FolderError, list_dirs, make_dir
 from .project_notes import IDEA_MAX_BYTES, NoFolder, read_idea, write_idea
@@ -57,6 +61,8 @@ MEDIA_MAX_BYTES = 25 * 1024 * 1024
 CHAT_FILE_MAX_BYTES = 100 * 1024 * 1024
 # The wire contract between this bridge and the app. 2 = the WebSocket relay (v1.0.0).
 PROTOCOL = 2
+# Sent by a local client (the desktop app) on every `/v1/local/*` request.
+LOCAL_HEADER = "X-Hermes-Local"
 
 
 class ApiError(Exception):
@@ -119,6 +125,19 @@ class SetDefaultModel(BaseModel):
     model: str = Field(min_length=1, max_length=200)
     provider: str = Field(default="", max_length=100)
     confirm_expensive_model: bool = False
+
+
+class LocalPair(BaseModel):
+    name: str = Field(min_length=1, max_length=64)
+    replace: bool = False
+
+
+class LocalName(BaseModel):
+    name: str = Field(min_length=1, max_length=64)
+
+
+class LocalNetworkId(BaseModel):
+    id: str = Field(min_length=1, max_length=200)
 
 
 class RateLimiter:
@@ -373,6 +392,86 @@ def create_app(cfg: Config, *, locator: BackendLocator | None = None, tailnet: T
         except Exception:
             components["tailscale"] = {"status": "unreachable"}
         return {"components": components, "checked_at": time.time()}
+
+    # ------------------------------------------------------------ local control API (desktop app)
+    # Loopback alone is not trusted (`tailscale serve`, other accounts and local programs reach
+    # 127.0.0.1): the caller must also present the secret from the user-only local-secret file.
+    # No device token, so no device rate limit; the guard middleware audits these like any request.
+
+    async def local_auth(request: Request) -> None:
+        peer = request.client.host if request.client else ""
+        presented = request.headers.get(LOCAL_HEADER, "")
+        if not is_loopback(peer) or not await asyncio.to_thread(
+                local_secret.matches, cfg.local_secret_file, presented):
+            raise ApiError(403, "forbidden_local", "Local control needs a local client with the local secret")
+
+    local = Depends(local_auth)
+    local_secret.ensure_secret(cfg.local_secret_file)  # first start creates it
+
+    @app.get("/v1/local/status")
+    async def local_status(_: None = local):
+        from . import firewall
+
+        fw = await asyncio.to_thread(firewall.state, cfg.port)
+        net = await asyncio.to_thread(current_network)
+        lan = await asyncio.to_thread(serving_lan_ips, cfg.lan, trust)
+        return {"running": True, "version": __version__, "protocol": PROTOCOL, "port": cfg.port,
+                "listen": [h for h in cfg.listen if h != "tailscale"] + await _tailnet_ips() + lan,
+                "network": ({"id": net.id, "name": net.name, "trusted": net.id in trust.list()}
+                            if net else None),
+                "firewall_ok": not fw.needs_opening}
+
+    @app.get("/v1/local/devices")
+    async def local_devices(_: None = local):
+        return await asyncio.to_thread(devices_doc, devices)
+
+    @app.post("/v1/local/pair")
+    async def local_pair(body: LocalPair, _: None = local):
+        from . import cli  # the one place that knows which addresses go in a pairing code
+
+        try:
+            urls = await asyncio.to_thread(cli._bridge_urls, cfg)
+        except SystemExit as exc:
+            raise ApiError(409, "no_address", str(exc))
+        try:
+            device, token = await asyncio.to_thread(lambda: devices.pair(body.name, replace=body.replace))
+        except ValueError as exc:
+            raise ApiError(409, "pair_refused", str(exc))
+        payload = await asyncio.to_thread(pairing_payload, device, token, urls, cfg.tls_dir)
+        code = "hermesremote://pair?" + urllib.parse.urlencode(payload)
+        return {"device": {"id": device.id, "name": device.name}, "code": code, "url": urls[0], "token": token,
+                "qr_png_base64": base64.b64encode(await asyncio.to_thread(qr_png, code)).decode()}
+
+    @app.post("/v1/local/revoke")
+    async def local_revoke(body: LocalName, _: None = local):
+        try:
+            device = await asyncio.to_thread(devices.revoke, body.name)
+        except ValueError as exc:
+            raise ApiError(404, "no_such_device", str(exc))
+        return {"revoked": {"id": device.id, "name": device.name}}
+
+    @app.get("/v1/local/trust")
+    async def local_trust(_: None = local):
+        return trust_doc(trust, await asyncio.to_thread(current_network))
+
+    @app.post("/v1/local/trust")
+    async def local_trust_now(_: None = local):
+        net = await asyncio.to_thread(current_network)
+        if net is None:
+            raise ApiError(409, "no_network", "Not on a private network (or the router has not been seen yet)")
+        trust.trust(net)
+        return trust_doc(trust, net)
+
+    @app.post("/v1/local/untrust")
+    async def local_untrust(body: LocalNetworkId, _: None = local):
+        removed = trust.untrust(body.id)
+        return {**trust_doc(trust, await asyncio.to_thread(current_network)), "removed": removed}
+
+    @app.get("/v1/local/doctor")
+    async def local_doctor(_: None = local):
+        from . import doctor
+
+        return {"checks": await asyncio.to_thread(doctor.collect, cfg)}
 
     # ------------------------------------------------------------ Hermes profiles
     # One `hermes serve` serves every profile. A REST call names the one it means with

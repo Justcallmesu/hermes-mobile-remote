@@ -18,6 +18,7 @@ from pathlib import Path
 from .config import Config
 from .devices import DeviceStore
 from .host import host
+from .local_api import devices_doc, pairing_payload, trust_doc
 from .network import TrustStore, current_network, serving_lan_ips
 from .tailnet import sync_tailscale_ips
 from .supervise import EXIT_PORT_CONFLICT
@@ -328,12 +329,7 @@ def cmd_pair(cfg: Config, args: argparse.Namespace) -> None:
     store = DeviceStore(cfg.devices_file)
     device, token = store.pair(args.name, replace=getattr(args, "replace", False))
     urls = [args.url] if args.url else _bridge_urls(cfg)
-    # v2: LAN entries are HTTPS and `pin` is the certificate the app must see before it sends
-    # the token there. Tailscale entries stay HTTP inside WireGuard.
-    payload = {"v": 2, "url": urls[0], "device": device.name, "token": token,
-               "pin": cert_pin(ensure_identity(cfg.tls_dir)[0])}
-    if len(urls) > 1:
-        payload["alt"] = ",".join(urls[1:])
+    payload = pairing_payload(device, token, urls, cfg.tls_dir)
     if args.token_file:  # non-interactive use; never print the token
         fd = os.open(args.token_file, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
         with os.fdopen(fd, "w") as fh:
@@ -413,12 +409,7 @@ def cmd_trust(cfg: Config, args: argparse.Namespace) -> None:
         current = current_network()
         rows = trust.list()
         if getattr(args, "json", False):
-            print(json.dumps({
-                "current": ({"id": current.id, "name": current.name, "trusted": current.id in rows,
-                             "interface": current.interface} if current else None),
-                "trusted": [{"id": net_id, "name": info.get("name", "?"), "since": info.get("since")}
-                            for net_id, info in rows.items()],
-            }, indent=2))
+            print(json.dumps(trust_doc(trust, current), indent=2))
             return
         if not rows:
             print("No trusted networks.")
@@ -442,9 +433,7 @@ def cmd_devices(cfg: Config, args: argparse.Namespace) -> None:
     fmt = lambda ts: datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M") if ts else "-"
     rows = DeviceStore(cfg.devices_file).list()
     if getattr(args, "json", False):
-        print(json.dumps({"devices": [
-            {"id": d.id, "name": d.name, "active": d.active, "created_at": d.created_at,
-             "last_seen_at": d.last_seen_at, "revoked_at": d.revoked_at} for d in rows]}, indent=2))
+        print(json.dumps(devices_doc(DeviceStore(cfg.devices_file)), indent=2))
         return
     if not rows:
         print("No paired devices.")
