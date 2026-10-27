@@ -21,7 +21,6 @@ import os
 import re
 import socket
 import time
-import urllib.parse
 from collections import defaultdict, deque
 from typing import Any
 
@@ -37,7 +36,7 @@ from .backend import SESSION_HEADER, Backend, BackendLocator, BackendUnavailable
 from .config import Config
 from .devices import Device, DeviceStore
 from . import local_secret
-from .local_api import devices_doc, pairing_payload, qr_png, trust_doc
+from .local_api import devices_doc, pairing_payload, pairing_uri, qr_png, trust_doc
 from .network import TrustStore, current_network, network_info, serving_lan_ips
 from .chat_files import referenced_file
 from .folders import FolderError, list_dirs, make_dir
@@ -438,7 +437,7 @@ def create_app(cfg: Config, *, locator: BackendLocator | None = None, tailnet: T
         except ValueError as exc:
             raise ApiError(409, "pair_refused", str(exc))
         payload = await asyncio.to_thread(pairing_payload, device, token, urls, cfg.tls_dir)
-        code = "hermesremote://pair?" + urllib.parse.urlencode(payload)
+        code = pairing_uri(payload)
         return {"device": {"id": device.id, "name": device.name}, "code": code, "url": urls[0], "token": token,
                 "qr_png_base64": base64.b64encode(await asyncio.to_thread(qr_png, code)).decode()}
 

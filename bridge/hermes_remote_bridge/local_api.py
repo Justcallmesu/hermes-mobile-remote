@@ -5,6 +5,7 @@ One builder per document, so the two cannot drift.
 from __future__ import annotations
 
 import io
+import urllib.parse
 
 from .devices import DeviceStore
 from .network import TrustStore
@@ -35,6 +36,10 @@ def pairing_payload(device, token: str, urls: list[str], tls_dir) -> dict:
     if len(urls) > 1:
         payload["alt"] = ",".join(urls[1:])
     return payload
+
+
+def pairing_uri(payload: dict) -> str:
+    return "hermesremote://pair?" + urllib.parse.urlencode(payload)
 
 
 def qr_png(uri: str) -> bytes:

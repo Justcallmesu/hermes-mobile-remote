@@ -11,14 +11,13 @@ import socket
 import sys
 import threading
 import time
-import urllib.parse
 from datetime import datetime
 from pathlib import Path
 
 from .config import Config
 from .devices import DeviceStore
 from .host import host
-from .local_api import devices_doc, pairing_payload, trust_doc
+from .local_api import devices_doc, pairing_payload, pairing_uri, qr_png, trust_doc
 from .network import TrustStore, current_network, serving_lan_ips
 from .tailnet import sync_tailscale_ips
 from .supervise import EXIT_PORT_CONFLICT
@@ -337,13 +336,10 @@ def cmd_pair(cfg: Config, args: argparse.Namespace) -> None:
             json.dump(payload, fh)
         print(f"Paired {device.name} ({device.id}); credentials written to {args.token_file}")
         return
-    import segno
-
-    uri = "hermesremote://pair?" + urllib.parse.urlencode(payload)
     if args.qr_png:
         fd = os.open(args.qr_png, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
         with os.fdopen(fd, "wb") as fh:
-            segno.make(uri, error="m").save(fh, kind="png", scale=8, border=3, dark="#000", light="#fff")
+            fh.write(qr_png(pairing_uri(payload)))
         print(f"Paired {device.name} ({device.id}); QR written to {args.qr_png} (delete it after scanning)")
         return
     print(f"Paired device {device.name!r} (id {device.id}).")
@@ -432,9 +428,10 @@ def cmd_trust(cfg: Config, args: argparse.Namespace) -> None:
 
 def cmd_devices(cfg: Config, args: argparse.Namespace) -> None:
     fmt = lambda ts: datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M") if ts else "-"
-    rows = DeviceStore(cfg.devices_file).list()
+    store = DeviceStore(cfg.devices_file)
+    rows = store.list()
     if getattr(args, "json", False):
-        print(json.dumps(devices_doc(DeviceStore(cfg.devices_file)), indent=2))
+        print(json.dumps(devices_doc(store), indent=2))
         return
     if not rows:
         print("No paired devices.")
