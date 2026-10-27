@@ -3,6 +3,14 @@
 Releases are git tags; the version in the app comes from the tag. `git log v0.9.0..vX.Y.Z` is the
 authoritative history — this file only summarises what is worth knowing before upgrading.
 
+## v1.25.0
+
+- Pictures returned by tools (vision_analyze, screenshots, browser captures) now show as images
+  in the tool row instead of a wall of base64 text. Tap to open full screen.
+- While the agent works, a *Steer / Queue* switch sits beside Send. Steer folds your message into
+  the running reply (as before); Queue sends it as the next turn, run once the current reply ends.
+  The choice is remembered.
+
 ## v1.24.0
 
 - Background processes: a chat's background jobs (dev servers, builds, watchers the agent started
