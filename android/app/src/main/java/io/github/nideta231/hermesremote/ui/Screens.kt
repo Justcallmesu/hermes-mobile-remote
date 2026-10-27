@@ -661,7 +661,7 @@ private fun MoveToProjectSheet(s: SessionSummary, projects: List<ProjectRef>, on
 /** Group by / sort by / status / project, mirroring the desktop sidebar's filter menu. Changes apply live. */
 /** Selected chips in the app's accent (Gold follows the chosen theme), not Material's default secondary container. */
 @Composable
-private fun themedChip() = FilterChipDefaults.filterChipColors(
+internal fun themedChip() = FilterChipDefaults.filterChipColors(
     selectedContainerColor = Gold.copy(alpha = 0.18f), selectedLabelColor = Gold, selectedLeadingIconColor = Gold)
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)

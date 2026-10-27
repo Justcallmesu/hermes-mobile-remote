@@ -143,7 +143,7 @@ private fun PcContent(state: PcState, actions: PcActions, onStop: (PcProcess) ->
         Column(Modifier.padding(horizontal = 12.dp, vertical = 10.dp)) {
             Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 listOf("1h", "6h", "24h", "7d", "30d", "1y").forEach { r ->
-                    FilterChip(selected = state.range == r, onClick = { actions.setRange(r) }, label = { Text(r) })
+                    FilterChip(colors = themedChip(), selected = state.range == r, onClick = { actions.setRange(r) }, label = { Text(r) })
                 }
             }
             Spacer(Modifier.size(8.dp))
@@ -302,7 +302,7 @@ private fun ProcessPanel(state: PcState, actions: PcActions, onStop: (PcProcess)
                 leadingIcon = { Icon(Glyphs.Search, null, Modifier.size(18.dp)) }, shape = RoundedCornerShape(14.dp),
                 modifier = Modifier.fillMaxWidth())
             Row(Modifier.padding(vertical = 6.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                ProcessSort.entries.forEach { s -> FilterChip(selected = state.sort == s, onClick = { actions.setSort(s) }, label = { Text(s.label) }) }
+                ProcessSort.entries.forEach { s -> FilterChip(colors = themedChip(), selected = state.sort == s, onClick = { actions.setSort(s) }, label = { Text(s.label) }) }
             }
         }
         state.processes.forEach { p ->
