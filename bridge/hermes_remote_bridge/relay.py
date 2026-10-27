@@ -42,6 +42,9 @@ ALLOWED_METHODS = frozenset({
     "projects.add_folder", "projects.remove_folder", "projects.set_primary",
     # turns
     "prompt.submit", "prompt.btw", "prompt.background", "session.interrupt", "session.steer", "session.redirect",
+    # subagents the open chat delegated to: the roster (to catch up mid-run) and stopping one. Hermes
+    # only answers for sessions this socket is attached to.
+    "subagent.list", "subagent.interrupt",
     # slash commands, models, settings
     "slash.exec", "command.dispatch", "command.resolve", "commands.catalog", "complete.slash",
     "config.get", "config.set", "model.options",

@@ -297,7 +297,7 @@ class MainActivity : ComponentActivity() {
             repairPc = vm::startRepair,
         )
         val chatActions = ChatActions(
-            send = vm::send, stop = vm::stop, steer = vm::steer, approve = vm::answerApproval,
+            send = vm::send, stop = vm::stop, steer = vm::steer, approve = vm::answerApproval, stopSubagent = vm::stopSubagent,
             answerClarify = vm::answerClarify, draft = vm::setDraft,
             togglePin = vm::togglePin, newChat = { vm.newChat() },
             openDrawer = { vm.refreshSessions(); scope.launch { drawer.open() } },
