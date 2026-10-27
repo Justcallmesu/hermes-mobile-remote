@@ -188,6 +188,8 @@ class ChatActions(
     val edit: (ChatItem.User, String) -> Unit = { _, _ -> },
     /** Stop one child agent of the open chat. */
     val stopSubagent: (String) -> Unit = {},
+    /** Kill one background process of the open chat. */
+    val stopProcess: (String) -> Unit = {},
 )
 
 /** The long-press menu of a sent message; provided by [ChatScreen]. */
@@ -271,7 +273,7 @@ fun ChatScreen(
                 when (body) {
                     0 -> LoadingChat()
                     1 -> EmptyChat(onPick = { actions.draft(it) })
-                    else -> MessageList(state, actions.stopSubagent)
+                    else -> MessageList(state, actions.stopSubagent, actions.stopProcess)
                 }
             }
         }
@@ -487,7 +489,7 @@ private fun EmptyChat(onPick: (String) -> Unit) {
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun MessageList(state: ChatState, stopSubagent: (String) -> Unit) {
+private fun MessageList(state: ChatState, stopSubagent: (String) -> Unit, stopProcess: (String) -> Unit) {
     val listState = rememberLazyListState()
     val scope = rememberCoroutineScope()
     var follow by remember { mutableStateOf(true) }
@@ -502,7 +504,7 @@ private fun MessageList(state: ChatState, stopSubagent: (String) -> Unit) {
     val seen = remember(state.sessionId) { HashSet<String>(state.items.map { it.key }) }
     val lastText = (state.items.lastOrNull() as? ChatItem.Assistant)?.text?.length ?: 0
     val viewport by remember { derivedStateOf { listState.layoutInfo.viewportSize.height } }
-    LaunchedEffect(state.items.size, lastText, viewport, state.busy, state.subagents.size) {
+    LaunchedEffect(state.items.size, lastText, viewport, state.busy, state.subagents.size, state.processes.size) {
         if (follow && state.items.isNotEmpty()) listState.scrollToItem(listState.layoutInfo.totalItemsCount.coerceAtLeast(1) - 1, Int.MAX_VALUE / 2)
     }
     val last = state.items.lastOrNull()
@@ -532,6 +534,11 @@ private fun MessageList(state: ChatState, stopSubagent: (String) -> Unit) {
             if (state.subagents.isNotEmpty()) item(key = "subagents") {
                 Box(Modifier.animateItem(fadeInSpec = null, fadeOutSpec = null).entrance("subagents", seen)) {
                     SubagentPanel(state.subagents, stopSubagent)
+                }
+            }
+            if (state.processes.isNotEmpty()) item(key = "processes") {
+                Box(Modifier.animateItem(fadeInSpec = null, fadeOutSpec = null).entrance("processes", seen)) {
+                    ProcessPanel(state.processes, stopProcess)
                 }
             }
             if (thinking) item(key = "typing") {
