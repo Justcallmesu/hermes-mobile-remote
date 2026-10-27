@@ -39,7 +39,15 @@ data class PcStats(
 data class PcProcess(val pid: Int, val name: String, val cpu: Double, val memMb: Long, val user: String = "",
                      val status: String = "", val cmd: String = "")
 
-data class ClaudeLimit(val label: String, val percent: Double, val resetsAt: String?, val active: Boolean)
+data class ClaudeLimit(val label: String, val percent: Double, val resetsAt: String?, val active: Boolean,
+                       val severity: String = "normal", val group: String? = null)
+
+/** Pay-as-you-go credits beyond the plan ("extra usage"); amounts in [currency] units. */
+data class ClaudeExtra(val enabled: Boolean, val currency: String, val used: Double?, val limit: Double?,
+                       val percent: Double?, val limitReached: Boolean, val disabledReason: String?)
+
+/** One internet speed test of the PC (Cloudflare). */
+data class SpeedResult(val ts: Long, val pingMs: Double?, val jitterMs: Double?, val downMbps: Double?, val upMbps: Double?)
 
 data class ClaudeUsage(
     val ok: Boolean = false,
@@ -51,6 +59,11 @@ data class ClaudeUsage(
     val limits: List<ClaudeLimit> = emptyList(),
     val checkedAt: Long? = null,
     val error: String? = null,
+    /** Claude's rate-limit tier, e.g. `default_claude_max_5x`. */
+    val tier: String? = null,
+    /** Why the plan is locked right now (limit hit), when it is. */
+    val lockedReason: String? = null,
+    val extra: ClaudeExtra? = null,
 ) {
     val hasNumbers: Boolean get() = session != null || weekly != null
 }
@@ -91,11 +104,27 @@ fun parseClaude(o: JSONObject?): ClaudeUsage {
         session = o.dbl("session"), weekly = o.dbl("weekly"),
         sessionResetsAt = o.str("session_resets_at"), weeklyResetsAt = o.str("weekly_resets_at"),
         limits = o.optJSONArray("limits").objects().map {
-            ClaudeLimit(it.str("label") ?: "?", it.optDouble("percent", 0.0), it.str("resets_at"), it.optBoolean("active"))
+            ClaudeLimit(it.str("label") ?: "?", it.optDouble("percent", 0.0), it.str("resets_at"), it.optBoolean("active"),
+                it.str("severity") ?: "normal", it.str("group"))
         },
         checkedAt = if (o.has("ts")) o.optLong("ts") else null,
-        error = o.str("error"))
+        error = o.str("error"),
+        tier = o.str("tier")?.takeIf { it.isNotBlank() },
+        lockedReason = o.str("locked_reason")?.takeIf { it.isNotBlank() },
+        extra = o.optJSONObject("extra")?.let { e ->
+            ClaudeExtra(e.optBoolean("enabled"), e.str("currency") ?: "USD", e.dbl("used"), e.dbl("limit"), e.dbl("percent"),
+                e.optBoolean("limit_reached"), e.str("disabled_reason")?.takeIf { it.isNotBlank() })
+        })
 }
+
+/** "Max 5x" from `default_claude_max_5x`; null when there's nothing readable. */
+fun fmtTier(tier: String?): String? {
+    val t = tier?.removePrefix("default_")?.removePrefix("claude_") ?: return null
+    if (t.isBlank()) return null
+    return t.split('_').joinToString(" ") { w -> if (w.matches(Regex("\\d+x"))) w else w.replaceFirstChar { it.uppercase() } }
+}
+
+fun parseSpeed(o: JSONObject) = SpeedResult(o.optLong("ts"), o.dbl("ping_ms"), o.dbl("jitter_ms"), o.dbl("down_mbps"), o.dbl("up_mbps"))
 
 fun parseNow(o: JSONObject) = PcNow(host = o.str("host").orEmpty(), stats = parseStats(o.optJSONObject("stats")),
     corePct = o.optJSONArray("core_pct").doubles().map { it ?: 0.0 },
@@ -122,6 +151,13 @@ fun fmtUptime(s: Long): String {
     val d = s / 86400; val h = (s % 86400) / 3600; val m = (s % 3600) / 60
     return when { d > 0 -> "${d}d ${h}h"; h > 0 -> "${h}h ${m}m"; else -> "${m}m" }
 }
+
+/** "14:05" (or "Mon 27 14:05" when [withDay]) in the phone's time zone, from epoch seconds. */
+fun fmtClock(epochS: Long, withDay: Boolean = false, zone: java.time.ZoneId = java.time.ZoneId.systemDefault()): String =
+    java.time.format.DateTimeFormatter.ofPattern(if (withDay) "EEE d MMM HH:mm" else "HH:mm")
+        .format(Instant.ofEpochSecond(epochS).atZone(zone))
+
+fun fmtMbps(v: Double): String = if (v >= 100) "%.0f Mbps".format(v) else "%.1f Mbps".format(v)
 
 fun fmtMem(mb: Long): String = if (mb >= 1024) "%.1f GB".format(mb / 1024.0) else "$mb MB"
 
@@ -155,6 +191,10 @@ data class PcState(
     val unsupported: Boolean = false,
     /** Processes with a stop in flight. */
     val stopping: Set<Int> = emptySet(),
+    /** Past speed tests, newest first. */
+    val speedTests: List<SpeedResult> = emptyList(),
+    val speedRunning: Boolean = false,
+    val speedError: String? = null,
 )
 
 /**
@@ -186,6 +226,7 @@ class PcMonitor(
             var tick = 0
             while (isActive) {
                 refreshNow(live = tick == 0)
+                if (tick == 0) loadSpeedTests()
                 if (tick % 20 == 0) loadHistory(_state.value.range)
                 tick++
                 delay(periodMs)
@@ -248,6 +289,29 @@ class PcMonitor(
             } catch (t: Throwable) {
                 if (t is CancellationException) throw t
                 say(describe(t))
+            }
+        }
+    }
+
+    private suspend fun loadSpeedTests() {
+        val c = client() ?: return
+        runCatching { c.speedTests() }.onFailure { if (it is CancellationException) throw it }.getOrNull()?.let { (running, tests) ->
+            _state.update { it.copy(speedTests = tests, speedRunning = it.speedRunning || running) }
+        }
+    }
+
+    /** Runs a speed test on the PC (~20 s): latency, then download, then upload. */
+    fun runSpeedTest() {
+        val c = client() ?: return
+        if (_state.value.speedRunning) return
+        _state.update { it.copy(speedRunning = true, speedError = null) }
+        scope.launch {
+            try {
+                val r = c.runSpeedTest()
+                _state.update { st -> st.copy(speedRunning = false, speedTests = (listOf(r) + st.speedTests).distinctBy { it.ts }.take(30)) }
+            } catch (t: Throwable) {
+                if (t is CancellationException) { _state.update { it.copy(speedRunning = false) }; throw t }
+                _state.update { it.copy(speedRunning = false, speedError = describe(t)) }
             }
         }
     }

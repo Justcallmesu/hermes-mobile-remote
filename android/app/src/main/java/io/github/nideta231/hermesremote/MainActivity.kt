@@ -310,6 +310,9 @@ class MainActivity : ComponentActivity() {
 
         val projectActions = remember(vm) {
             ProjectActions(create = vm::createProject, details = vm::projectDetails, save = vm::saveProject, delete = vm::deleteProject)
+        }.let { base ->
+            if ("folders" in features) ProjectActions(base.create, base.details, base.save, base.delete,
+                browse = vm::browseFolders, makeFolder = vm::makeFolder) else base
         }
         val sessionActions = SessionActions(
             open = { vm.openSession(it); go(Page.CHAT) },
@@ -363,7 +366,8 @@ class MainActivity : ComponentActivity() {
         val pcActions = PcActions(watch = { vm.monitor.watch() }, unwatch = vm.monitor::stop, refresh = vm.monitor::refresh,
             setRange = vm.monitor::setRange, setSort = vm.monitor::setSort, setQuery = vm.monitor::setQuery,
             stopProcess = vm.monitor::stopProcess, refreshClaude = vm.monitor::refreshClaude,
-            openTerminal = if (hasTerminal) ({ page = Page.TERMINAL }) else null)
+            openTerminal = if (hasTerminal) ({ page = Page.TERMINAL }) else null,
+            runSpeedTest = if ("speedtest" in features) vm.monitor::runSpeedTest else null)
         val cronActions = CronActions(refresh = vm.cron::refresh, loadRuns = vm.cron::loadRuns,
             pause = vm.cron::pause, resume = vm.cron::resume, runNow = vm.cron::runNow, create = vm.cron::create)
         val openUpdate = { scope.launch { drawer.close() }; updateSheet = true }
@@ -380,11 +384,12 @@ class MainActivity : ComponentActivity() {
                         Page.CHAT -> ChatScreen(chat, health, models, vm.shownModel(models, chat), reasoning, suggestions,
                             openModelPicker, confirm, showMenuButton = !wide, actions = chatActions,
                             update = update, onOpenUpdate = openUpdate, onDismissUpdate = vm.updates::dismissUpdateBanner,
-                            projects = sessions.projects.filter { it.path != null },
+                            projects = sessions.projects.filter { it.path != null || (!it.auto && it.id != io.github.nideta231.hermesremote.data.SessionView.NO_PROJECT) },
                             profile = hermesProfiles.headerLabel,
                             claudeUsage = if (hasMonitor) claudeUsage else null,
                             onOpenMonitor = if (hasMonitor) ({ go(Page.PC) }) else null,
-                            loadContext = vm::contextBreakdown, onRefreshUsage = vm::refreshClaudeUsage)
+                            loadContext = vm::contextBreakdown, loadUsageHistory = vm::claudeHistory,
+                            onRefreshUsage = vm::refreshClaudeUsage)
                         Page.SCHEDULED -> CronScreen(cron, hermesProfiles.active.takeIf { hermesProfiles.items.size > 1 }, cronActions, onBack = { page = Page.CHAT })
                         Page.PC -> PcScreen(pcState, pcActions, onBack = { page = Page.CHAT })
                         Page.TERMINAL -> TerminalScreen(open = vm::openTerminal, onBack = { page = Page.CHAT })

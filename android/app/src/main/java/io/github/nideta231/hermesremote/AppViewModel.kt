@@ -375,6 +375,9 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
         return parseContext(rpc("session.context_breakdown", { JSONObject().put("session_id", it) }, 60_000))
     }
 
+    /** Claude usage over [range] for the usage popup's chart. */
+    suspend fun claudeHistory(range: String): io.github.nideta231.hermesremote.data.PcHistory? = client?.claudeHistory(range)
+
     /** Ask the bridge to check Claude usage upstream now (the ring and popup update). */
     fun refreshClaudeUsage() {
         val c = client ?: return
@@ -1412,6 +1415,13 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
             done(ideaError?.let { "Project created, but IDEA.md wasn't written: $it" })
         }
     }
+
+    /** Sub-folders of a PC path for the project folder picker (bridge with the `folders` feature). */
+    suspend fun browseFolders(path: String): io.github.nideta231.hermesremote.data.FolderListing =
+        (client ?: throw IOException("Not connected to the PC.")).folders(path)
+
+    suspend fun makeFolder(path: String): io.github.nideta231.hermesremote.data.FolderListing =
+        (client ?: throw IOException("Not connected to the PC.")).makeFolder(path)
 
     /** Name, folder and description of a saved project, for the edit dialog. */
     suspend fun projectDetails(id: String): ProjectDetails {

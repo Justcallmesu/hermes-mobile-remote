@@ -51,6 +51,8 @@ import io.github.nideta231.hermesremote.data.PcHistory
 import io.github.nideta231.hermesremote.data.PcProcess
 import io.github.nideta231.hermesremote.data.PcState
 import io.github.nideta231.hermesremote.data.ProcessSort
+import io.github.nideta231.hermesremote.data.fmtClock
+import io.github.nideta231.hermesremote.data.fmtMbps
 import io.github.nideta231.hermesremote.data.fmtMem
 import io.github.nideta231.hermesremote.data.fmtRate
 import io.github.nideta231.hermesremote.data.fmtResetsIn
@@ -60,6 +62,8 @@ val CpuColor = Color(0xFF3DDC97)
 val MemColor = Color(0xFF5B8DEF)
 val TempColor = Color(0xFFF5A524)
 val ClaudeColor = Color(0xFFD97757)
+val NetDownColor = Color(0xFF4FC1C9)
+val NetUpColor = Color(0xFFB57EDC)
 
 class PcActions(
     val watch: () -> Unit,
@@ -71,6 +75,8 @@ class PcActions(
     val stopProcess: (PcProcess, Boolean) -> Unit,
     val refreshClaude: () -> Unit,
     val openTerminal: (() -> Unit)? = null,
+    /** Runs an internet speed test on the PC; null when the bridge has no speed test. */
+    val runSpeedTest: (() -> Unit)? = null,
 )
 
 /** The PC page: what was PC Glance. Live numbers poll every 3 s while the page is open. */
@@ -138,7 +144,7 @@ private fun PcContent(state: PcState, actions: PcActions, onStop: (PcProcess) ->
             CoreBars(now.corePct)
         }
     }
-    // History
+    // History: tap or drag any chart to read the exact values at that time.
     Panel {
         Column(Modifier.padding(horizontal = 12.dp, vertical = 10.dp)) {
             Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -152,13 +158,24 @@ private fun PcContent(state: PcState, actions: PcActions, onStop: (PcProcess) ->
                 Text("Collecting history… (the bridge samples every 10 s)", style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(4.dp))
             } else {
-                Legend(listOf("CPU" to CpuColor, "RAM" to MemColor) + (if (h["temp"].any { it != null }) listOf("Temp °C" to TempColor) else emptyList()))
-                LineChart(listOf(h["cpu"] to CpuColor, h["mem"] to MemColor, h["temp"] to TempColor), Modifier.fillMaxWidth().height(140.dp))
+                val pct: (Double) -> String = { "%.0f%%".format(it) }
+                LineChart(listOfNotNull(ChartSeries("CPU", h["cpu"], CpuColor, pct), ChartSeries("RAM", h["mem"], MemColor, pct),
+                    if (h["temp"].any { it != null }) ChartSeries("Temp", h["temp"], TempColor) { "%.0f°C".format(it) } else null),
+                    h.ts, 140.dp, Modifier.fillMaxWidth())
                 Text("Peak CPU %.0f%% · peak RAM %.0f%%".format(h["cpu_max"].maxOf { it ?: 0.0 }, h["mem_max"].maxOf { it ?: 0.0 }),
                     style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Spacer(Modifier.size(14.dp))
+                Text("Network", style = MaterialTheme.typography.labelLarge)
+                LineChart(listOf(ChartSeries("Down", h["rx"], NetDownColor, ::fmtRate), ChartSeries("Up", h["tx"], NetUpColor, ::fmtRate)),
+                    h.ts, 100.dp, Modifier.fillMaxWidth(), maxValue = null, axisFormat = ::fmtRate)
+                Spacer(Modifier.size(14.dp))
+                Text("Disk I/O", style = MaterialTheme.typography.labelLarge)
+                LineChart(listOf(ChartSeries("Read", h["rd"], MemColor, ::fmtRate), ChartSeries("Write", h["wr"], TempColor, ::fmtRate)),
+                    h.ts, 100.dp, Modifier.fillMaxWidth(), maxValue = null, axisFormat = ::fmtRate)
             }
         }
     }
+    actions.runSpeedTest?.let { SpeedTestPanel(state, it) }
     ClaudePanel(now.claude, state.claudeHistory, actions.refreshClaude)
     actions.openTerminal?.let { open -> Panel { PanelRow("Terminal", "A shell on this PC", Glyphs.Terminal, onClick = open) } }
     ProcessPanel(state, actions, onStop)
@@ -208,43 +225,6 @@ private fun CoreBars(cores: List<Double>) {
 }
 
 @Composable
-private fun Legend(items: List<Pair<String, Color>>) {
-    Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.padding(bottom = 6.dp)) {
-        items.forEach { (name, c) ->
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Box(Modifier.size(8.dp).padding(0.dp)) { Canvas(Modifier.fillMaxSize()) { drawCircle(c) } }
-                Spacer(Modifier.width(4.dp))
-                Text(name, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-        }
-    }
-}
-
-/** Lines on a 0-100 scale; gaps (null) break the line. */
-@Composable
-fun LineChart(series: List<Pair<List<Double?>, Color>>, modifier: Modifier) {
-    val grid = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)
-    Canvas(modifier) {
-        for (k in 0..4) {
-            val y = size.height * k / 4f
-            drawLine(grid, Offset(0f, y), Offset(size.width, y), strokeWidth = 1f)
-        }
-        series.forEach { (vals, color) ->
-            if (vals.size < 2) return@forEach
-            val path = Path()
-            var started = false
-            vals.forEachIndexed { i, v ->
-                if (v == null) { started = false; return@forEachIndexed }
-                val x = size.width * i / (vals.size - 1f)
-                val y = size.height - size.height * (v / 100.0).coerceIn(0.0, 1.0).toFloat()
-                if (!started) { path.moveTo(x, y); started = true } else path.lineTo(x, y)
-            }
-            drawPath(path, color, style = Stroke(width = 2.dp.toPx(), cap = StrokeCap.Round))
-        }
-    }
-}
-
-@Composable
 fun ClaudePanel(c: ClaudeUsage, history: PcHistory?, onRefresh: () -> Unit) {
     Panel {
         Column(Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
@@ -263,27 +243,79 @@ fun ClaudePanel(c: ClaudeUsage, history: PcHistory?, onRefresh: () -> Unit) {
                 listOfNotNull(c.session?.let { io.github.nideta231.hermesremote.data.ClaudeLimit("Session (5h)", it, c.sessionResetsAt, true) },
                     c.weekly?.let { io.github.nideta231.hermesremote.data.ClaudeLimit("Weekly", it, c.weeklyResetsAt, true) })
             }
-            limits.forEach { l ->
-                Spacer(Modifier.size(10.dp))
-                Row {
-                    Text(l.label, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
-                    Text("%.0f%%".format(l.percent), style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
-                }
-                LinearProgressIndicator(progress = { (l.percent / 100.0).coerceIn(0.0, 1.0).toFloat() },
-                    color = if (l.percent >= 90) Bad else if (l.percent >= 70) Warn else ClaudeColor,
-                    modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp).height(6.dp))
-                fmtResetsIn(l.resetsAt).takeIf { it.isNotBlank() }?.let {
-                    Text(it, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
-            }
+            limits.forEach { l -> Spacer(Modifier.size(10.dp)); ClaudeLimitRow(l) }
+            ClaudeDetails(c)
             if (history != null && history.ts.size >= 2) {
                 Spacer(Modifier.size(10.dp))
-                Legend(listOf("Session" to ClaudeColor, "Weekly" to MemColor))
-                LineChart(listOf(history["session"] to ClaudeColor, history["weekly"] to MemColor), Modifier.fillMaxWidth().height(90.dp))
+                val pct: (Double) -> String = { "%.0f%%".format(it) }
+                LineChart(listOf(ChartSeries("Session", history["session"], ClaudeColor, pct),
+                    ChartSeries("Weekly", history["weekly"], MemColor, pct)), history.ts, 90.dp, Modifier.fillMaxWidth())
             }
             if (!c.ok && c.error != null) {
                 Text("Last check failed: ${c.error}", style = MaterialTheme.typography.labelSmall, color = Warn,
                     modifier = Modifier.padding(top = 6.dp))
+            }
+        }
+    }
+}
+
+/** Run an internet speed test on the PC and see past results; the chart shows them over time. */
+@Composable
+private fun SpeedTestPanel(state: PcState, run: () -> Unit) {
+    Panel {
+        Column(Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("Internet speed", style = MaterialTheme.typography.labelLarge)
+                    Text("The PC's connection, tested against Cloudflare", style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                androidx.compose.material3.FilledTonalButton(onClick = run, enabled = !state.speedRunning) {
+                    Text(if (state.speedRunning) "Testing…" else if (state.speedTests.isEmpty()) "Run test" else "Test again")
+                }
+            }
+            if (state.speedRunning) {
+                LinearProgressIndicator(Modifier.fillMaxWidth().padding(top = 10.dp), color = Gold)
+                Text("Measuring latency, then download, then upload (about 20 s).", style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 4.dp))
+            }
+            state.speedError?.let { Text(it, color = Bad, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 6.dp)) }
+            val last = state.speedTests.firstOrNull()
+            if (last != null) {
+                Spacer(Modifier.size(12.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    SpeedStat("Download", last.downMbps?.let { "%.1f".format(it) } ?: "--", "Mbps", NetDownColor, Modifier.weight(1f))
+                    SpeedStat("Upload", last.upMbps?.let { "%.1f".format(it) } ?: "--", "Mbps", NetUpColor, Modifier.weight(1f))
+                    SpeedStat("Ping", last.pingMs?.let { "%.0f".format(it) } ?: "--", "ms", CpuColor, Modifier.weight(1f))
+                }
+                Text("Last test ${fmtClock(last.ts, withDay = true)}" + (last.jitterMs?.let { " · jitter %.1f ms".format(it) } ?: ""),
+                    style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 8.dp))
+            }
+            if (state.speedTests.size >= 2) {
+                Spacer(Modifier.size(10.dp))
+                val tests = state.speedTests.reversed()
+                LineChart(listOf(ChartSeries("Down", tests.map { it.downMbps }, NetDownColor, ::fmtMbps),
+                    ChartSeries("Up", tests.map { it.upMbps }, NetUpColor, ::fmtMbps),
+                    ChartSeries("Ping", tests.map { it.pingMs }, CpuColor) { "%.0f ms".format(it) }),
+                    tests.map { it.ts }, 100.dp, Modifier.fillMaxWidth(), maxValue = null)
+                Text("${state.speedTests.size} tests", style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+    }
+}
+
+@Composable
+private fun SpeedStat(label: String, value: String, unit: String, color: Color, modifier: Modifier) {
+    Surface(color = MaterialTheme.colorScheme.surfaceContainerHigh, shape = RoundedCornerShape(14.dp), modifier = modifier) {
+        Column(Modifier.padding(10.dp)) {
+            Text(label, style = MaterialTheme.typography.labelSmall, color = color)
+            Row(verticalAlignment = Alignment.Bottom) {
+                Text(value, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
+                Spacer(Modifier.width(3.dp))
+                Text(unit, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(bottom = 3.dp))
             }
         }
     }

@@ -48,7 +48,11 @@ import androidx.compose.ui.unit.dp
 import io.github.nideta231.hermesremote.data.ClaudeLimit
 import io.github.nideta231.hermesremote.data.ClaudeUsage
 import io.github.nideta231.hermesremote.data.ContextInfo
+import io.github.nideta231.hermesremote.data.PcHistory
+import io.github.nideta231.hermesremote.data.fmtClock
 import io.github.nideta231.hermesremote.data.fmtResetsIn
+import io.github.nideta231.hermesremote.data.fmtTier
+import androidx.compose.material3.FilterChip
 import kotlin.math.PI
 import kotlin.math.cos
 import kotlin.math.sin
@@ -101,6 +105,7 @@ fun UsageSheet(
     hasChat: Boolean,
     busy: Boolean,
     loadContext: suspend () -> ContextInfo?,
+    loadHistory: suspend (String) -> PcHistory? = { null },
     onRefresh: () -> Unit,
     onCompact: (String) -> Unit,
     onOpenMonitor: (() -> Unit)?,
@@ -113,6 +118,13 @@ fun UsageSheet(
     var ctxError by remember { mutableStateOf<String?>(null) }
     var ctxLoading by remember { mutableStateOf(hasChat) }
     var focus by remember { mutableStateOf("") }
+    var range by remember { mutableStateOf("24h") }
+    var history by remember { mutableStateOf<PcHistory?>(null) }
+    var historyError by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(range, usage.checkedAt) {
+        runCatching { loadHistory(range) }.onSuccess { history = it; historyError = null }
+            .onFailure { if (it is kotlinx.coroutines.CancellationException) throw it; historyError = it.message ?: "Could not load history" }
+    }
     LaunchedEffect(hasChat) {
         if (!hasChat) return@LaunchedEffect
         ctxLoading = true
@@ -126,26 +138,40 @@ fun UsageSheet(
             Row(verticalAlignment = Alignment.CenterVertically) {
                 ClaudeMark(Modifier.size(20.dp))
                 Spacer(Modifier.width(8.dp))
-                Text("Claude" + (usage.plan?.let { " · " + it.replaceFirstChar { ch -> ch.uppercase() } } ?: ""),
-                    style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
+                Column(Modifier.weight(1f)) {
+                    Text("Claude" + (usage.plan?.let { " · " + it.replaceFirstChar { ch -> ch.uppercase() } } ?: ""),
+                        style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                    fmtTier(usage.tier)?.let { Text("Rate tier: $it", style = MaterialTheme.typography.labelSmall, color = onVariant) }
+                }
                 Icon(Glyphs.Refresh, "Check now", tint = onVariant, modifier = Modifier.size(32.dp).clip(CircleShape)
                     .clickable(onClick = onRefresh).padding(6.dp))
             }
             val limits = listOfNotNull(usage.session?.let { ClaudeLimit("Session (5 hours)", it, usage.sessionResetsAt, true) },
                 usage.weekly?.let { ClaudeLimit("Week", it, usage.weeklyResetsAt, true) }) +
                 usage.limits.filter { l -> !l.label.contains("session", true) && !l.label.contains("week", true) }
-            limits.forEach { l ->
-                Spacer(Modifier.height(12.dp))
-                Row {
-                    Text(l.label, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
-                    Text("%.0f%%".format(l.percent), style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
+            limits.forEach { l -> Spacer(Modifier.height(12.dp)); ClaudeLimitRow(l, 8.dp) }
+            ClaudeDetails(usage)
+            // Usage over time, tap the chart for the exact % at a moment.
+            Spacer(Modifier.height(14.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("History", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
+                listOf("24h", "7d", "30d").forEach { r ->
+                    FilterChip(colors = themedChip(), selected = range == r, onClick = { range = r }, label = { Text(r) },
+                        modifier = Modifier.padding(start = 6.dp))
                 }
-                LinearProgressIndicator(progress = { (l.percent / 100.0).coerceIn(0.0, 1.0).toFloat() },
-                    color = if (l.percent >= 90) Bad else if (l.percent >= 70) Warn else ClaudeColor, trackColor = track,
-                    strokeCap = StrokeCap.Round, modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp).height(8.dp))
-                fmtResetsIn(l.resetsAt).takeIf { it.isNotBlank() }?.let {
-                    Text(it, style = MaterialTheme.typography.labelSmall, color = onVariant)
+            }
+            val h = history
+            when {
+                h != null && h.ts.size >= 2 -> {
+                    val pct: (Double) -> String = { "%.0f%%".format(it) }
+                    LineChart(listOf(ChartSeries("Session", h["session"], ClaudeColor, pct), ChartSeries("Weekly", h["weekly"], MemColor, pct)),
+                        h.ts, 110.dp, Modifier.fillMaxWidth().padding(top = 6.dp))
+                    val peak = h["session"].filterNotNull().maxOrNull()
+                    if (peak != null) Text("Peak session %.0f%% in this range · %d checks".format(peak, h.ts.size),
+                        style = MaterialTheme.typography.labelSmall, color = onVariant)
                 }
+                historyError != null -> Text(historyError!!, style = MaterialTheme.typography.bodySmall, color = onVariant)
+                else -> Text("Not enough checks yet (the PC checks every 5 minutes).", style = MaterialTheme.typography.bodySmall, color = onVariant)
             }
             if (!usage.ok && usage.error != null) {
                 Text("Last check failed: ${usage.error}", style = MaterialTheme.typography.labelSmall, color = Warn,
@@ -216,7 +242,8 @@ private fun ContextBreakdown(c: ContextInfo, accent: Color, track: Color, onVari
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Box(Modifier.size(9.dp).clip(CircleShape).background(sliceColor(s.id, accent)))
                 Spacer(Modifier.width(5.dp))
-                Text("${s.label} ${tokens(s.tokens)}", style = MaterialTheme.typography.labelMedium, color = onVariant)
+                Text("${s.label} ${tokens(s.tokens)} · ${"%.0f".format(s.tokens * 100.0 / total)}%",
+                    style = MaterialTheme.typography.labelMedium, color = onVariant)
             }
         }
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -226,4 +253,59 @@ private fun ContextBreakdown(c: ContextInfo, accent: Color, track: Color, onVari
         }
     }
     if (c.model.isNotBlank()) Text(c.model, style = MaterialTheme.typography.labelSmall, color = onVariant, modifier = Modifier.padding(top = 6.dp))
+}
+
+
+/** "Fri 30 Oct 06:00" from an ISO-8601 instant, in the phone's zone; empty when unknown. */
+internal fun fmtResetAt(iso: String?): String {
+    if (iso.isNullOrBlank()) return ""
+    val at = runCatching { java.time.OffsetDateTime.parse(iso).toInstant() }.getOrNull()
+        ?: runCatching { java.time.Instant.parse(iso) }.getOrNull() ?: return ""
+    return fmtClock(at.epochSecond, withDay = true)
+}
+
+/** One plan limit: label, %, bar, and when it resets (relative and the exact time). */
+@Composable
+fun ClaudeLimitRow(l: ClaudeLimit, barHeight: androidx.compose.ui.unit.Dp = 6.dp) {
+    val onVariant = MaterialTheme.colorScheme.onSurfaceVariant
+    val track = MaterialTheme.colorScheme.surfaceContainerHighest
+    val tone = when {
+        l.severity == "critical" || l.severity == "exceeded" || l.percent >= 90 -> Bad
+        l.severity == "warning" || l.percent >= 70 -> Warn
+        else -> ClaudeColor
+    }
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Text(l.label, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
+        if (!l.active) Text("not in use", style = MaterialTheme.typography.labelSmall, color = onVariant,
+            modifier = Modifier.padding(end = 8.dp))
+        Text("%.0f%%".format(l.percent), style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold, color = tone)
+    }
+    LinearProgressIndicator(progress = { (l.percent / 100.0).coerceIn(0.0, 1.0).toFloat() }, color = tone, trackColor = track,
+        strokeCap = StrokeCap.Round, modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp).height(barHeight))
+    val rel = fmtResetsIn(l.resetsAt)
+    val abs = fmtResetAt(l.resetsAt)
+    if (rel.isNotBlank()) {
+        Text(rel + (if (abs.isNotBlank()) " · $abs" else "") + " · %.0f%% left".format((100 - l.percent).coerceAtLeast(0.0)),
+            style = MaterialTheme.typography.labelSmall, color = onVariant)
+    }
+}
+
+/** Plan tier, lock state, extra-usage credits and when it was last checked. */
+@Composable
+fun ClaudeDetails(c: ClaudeUsage) {
+    val onVariant = MaterialTheme.colorScheme.onSurfaceVariant
+    Column(Modifier.padding(top = 10.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+        c.lockedReason?.let { Text("Locked: $it", style = MaterialTheme.typography.labelMedium, color = Bad) }
+        c.extra?.let { e ->
+            val money: (Double?) -> String = { v -> v?.let { "%.2f %s".format(it, e.currency) } ?: "--" }
+            val text = when {
+                !e.enabled -> "Extra usage: off" + (e.disabledReason?.let { " ($it)" } ?: "")
+                e.limit != null -> "Extra usage: ${money(e.used)} of ${money(e.limit)}" + (e.percent?.let { " · %.0f%%".format(it) } ?: "")
+                else -> "Extra usage: ${money(e.used)} spent"
+            }
+            Text(text + if (e.limitReached) " · limit reached" else "", style = MaterialTheme.typography.labelSmall,
+                color = if (e.limitReached) Bad else onVariant)
+        }
+        c.checkedAt?.let { Text("Checked ${fmtClock(it)}", style = MaterialTheme.typography.labelSmall, color = onVariant) }
+    }
 }

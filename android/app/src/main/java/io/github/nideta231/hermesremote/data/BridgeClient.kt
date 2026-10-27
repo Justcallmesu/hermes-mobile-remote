@@ -75,14 +75,15 @@ class BridgeClient(
     }
 
     private suspend fun call(method: String, path: String, query: Map<String, Any?> = emptyMap(),
-                             body: JSONObject? = null): JSONObject = runInterruptible(Dispatchers.IO) {
+                             body: JSONObject? = null, readTimeoutS: Long = 0): JSONObject = runInterruptible(Dispatchers.IO) {
         val reqBody = when {
             body != null -> body.toString().toRequestBody(jsonType)
             method == "POST" -> "{}".toRequestBody(jsonType)
             else -> null
         }
         val req = Request.Builder().url(url(path, query)).method(method, reqBody).build()
-        http.newCall(req).execute().use { resp ->
+        val client = if (readTimeoutS > 0) http.newBuilder().readTimeout(readTimeoutS, TimeUnit.SECONDS).build() else http
+        client.newCall(req).execute().use { resp ->
             val text = resp.body?.string().orEmpty()
             if (!resp.isSuccessful) throw parseError(resp, text)
             if (text.isBlank()) JSONObject() else JSONObject(text)
@@ -207,6 +208,19 @@ class BridgeClient(
         call("POST", "/v1/monitor/processes/$pid/stop", mapOf("force" to force)).optBoolean("stopped")
 
     suspend fun claudeUsage(refresh: Boolean = false): ClaudeUsage = parseClaude(call("GET", "/v1/claude/usage", mapOf("refresh" to refresh)))
+
+    /** Runs an internet speed test on the PC (bridge with the `speedtest` feature); takes ~20 s. */
+    suspend fun runSpeedTest(): SpeedResult = parseSpeed(call("POST", "/v1/monitor/speedtest", readTimeoutS = 90))
+
+    /** (a test is running now, past tests newest first). */
+    suspend fun speedTests(): Pair<Boolean, List<SpeedResult>> =
+        call("GET", "/v1/monitor/speedtest").let { it.optBoolean("running") to it.optJSONArray("tests").objects().map(::parseSpeed) }
+
+    /** Sub-folders of [path] on the PC (home when blank), for the project folder picker. */
+    suspend fun folders(path: String, hidden: Boolean = false): FolderListing =
+        parseFolders(call("GET", "/v1/folders", mapOf("path" to path.ifBlank { null }, "hidden" to hidden.takeIf { it })))
+
+    suspend fun makeFolder(path: String): FolderListing = parseFolders(call("POST", "/v1/folders", body = JSONObject().put("path", path)))
 
     suspend fun claudeHistory(range: String): PcHistory = parseHistory(call("GET", "/v1/claude/history", mapOf("range" to range)))
 

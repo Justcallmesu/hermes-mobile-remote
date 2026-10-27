@@ -224,7 +224,7 @@ fun ChatScreen(
     update: UpdateState? = null,
     onOpenUpdate: () -> Unit = {},
     onDismissUpdate: () -> Unit = {},
-    /** Projects a new chat can start in (only those with a folder). */
+    /** Saved projects; those without a folder are listed so one can be added to them. */
     projects: List<ProjectRef> = emptyList(),
     /** The Hermes profile this chat runs in; null when the PC has only the default one. */
     profile: String? = null,
@@ -233,6 +233,7 @@ fun ChatScreen(
     /** Opens the System Monitor from the usage popup; null hides that link. */
     onOpenMonitor: (() -> Unit)? = null,
     loadContext: suspend () -> io.github.nideta231.hermesremote.data.ContextInfo? = { null },
+    loadUsageHistory: suspend (String) -> io.github.nideta231.hermesremote.data.PcHistory? = { null },
     onRefreshUsage: () -> Unit = {},
 ) {
     var usageSheet by remember { mutableStateOf(false) }
@@ -252,7 +253,7 @@ fun ChatScreen(
     Column(Modifier.fillMaxSize().imePadding()) {
         ChatTopBar(state, health, showMenuButton, actions, profile, claudeUsage) { usageSheet = true }
         if (usageSheet && claudeUsage != null) UsageSheet(claudeUsage, hasChat = state.sessionId != null, busy = state.busy,
-            loadContext = loadContext, onRefresh = onRefreshUsage,
+            loadContext = loadContext, loadHistory = loadUsageHistory, onRefresh = onRefreshUsage,
             onCompact = { topic -> actions.send(if (topic.isEmpty()) "/compact" else "/compact $topic") },
             onOpenMonitor = onOpenMonitor, onDismiss = { usageSheet = false })
         ConnectionBanner(state, health, actions.openSettings)
@@ -1180,7 +1181,9 @@ private fun ProjectSheet(
         val q = query.trim()
         if (q.isEmpty()) projects else projects.filter { it.label.contains(q, true) || it.path?.contains(q, true) == true }
     }
-    if (creating) NewProjectDialog(onDismiss = { creating = false }, onCreate = actions.create, onCreated = { creating = false; onDismiss() })
+    // A project without a folder can't host a chat yet: keep the sheet open so it shows in the list.
+    if (creating) NewProjectDialog(onDismiss = { creating = false }, actions = actions,
+        onCreated = { hasFolder -> creating = false; if (hasFolder) onDismiss() })
     editing?.let { p -> EditProjectDialog(p.id, p.label, actions, onDismiss = { editing = null }) }
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheet, containerColor = MaterialTheme.colorScheme.surfaceContainer) {
         Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
@@ -1199,8 +1202,14 @@ private fun ProjectSheet(
                     Text("No project matches “$query”.", color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(12.dp))
                 }
                 items(shown, key = { it.id }) { p ->
-                    SheetOption(p.label, p.path, selected = current == p.id,
-                        onEdit = if (p.auto) null else ({ editing = p })) { onPick(p.id) }
+                    if (p.path == null) {
+                        // Saved without a folder: chats need one to start in, so tapping asks for it.
+                        SheetOption(p.label, "No folder yet: tap to choose one", selected = false,
+                            onEdit = { editing = p }) { editing = p }
+                    } else {
+                        SheetOption(p.label, p.path, selected = current == p.id,
+                            onEdit = if (p.auto) null else ({ editing = p })) { onPick(p.id) }
+                    }
                 }
             }
         }
