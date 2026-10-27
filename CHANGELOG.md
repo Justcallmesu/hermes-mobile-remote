@@ -3,6 +3,14 @@
 Releases are git tags; the version in the app comes from the tag. `git log v0.9.0..vX.Y.Z` is the
 authoritative history — this file only summarises what is worth knowing before upgrading.
 
+## v1.23.0
+
+- Drawer groups: *Show more* now adds 5 chats at a time (was 10), and once a group is expanded a
+  *Show less* button folds it back to its first page.
+- Bridge doctor no longer reports "no firewall" when the PC runs inside a container (e.g.
+  systemd-nspawn): the host's firewall can't be seen from there, so it now warns and says which
+  port to allow on the host.
+
 ## v1.22.0
 
 - New project: a project saved without a folder used to vanish (it was created, but the app hid
