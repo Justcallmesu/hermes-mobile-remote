@@ -3,6 +3,11 @@
 Releases are git tags; the version in the app comes from the tag. `git log v0.9.0..vX.Y.Z` is the
 authoritative history — this file only summarises what is worth knowing before upgrading.
 
+## v1.23.1
+
+- *Show more* adds the number set in Settings > Chats per group (3, 5 or 10) instead of a fixed
+  amount; v1.23.0 wrongly forced 5.
+
 ## v1.23.0
 
 - Drawer groups: *Show more* now adds 5 chats at a time (was 10), and once a group is expanded a
