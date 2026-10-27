@@ -12,6 +12,7 @@ import androidx.lifecycle.viewModelScope
 import io.github.nideta231.hermesremote.data.mergeSessionHead
 import io.github.nideta231.hermesremote.data.BridgeClient
 import io.github.nideta231.hermesremote.data.PcMonitor
+import io.github.nideta231.hermesremote.data.ClaudeUsage
 import io.github.nideta231.hermesremote.data.TerminalSession
 import io.github.nideta231.hermesremote.data.BridgeException
 import io.github.nideta231.hermesremote.data.ProjectRef
@@ -347,9 +348,10 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
     private var sessionsRefreshJob: Job? = null
 
     private val foregroundObserver = object : DefaultLifecycleObserver {
-        override fun onStart(owner: LifecycleOwner) { onForeground(); startHeartbeat(); startActivePolling(); updates.startChecks() }
+        override fun onStart(owner: LifecycleOwner) { onForeground(); startHeartbeat(); startActivePolling(); startUsagePolling(); updates.startChecks() }
         override fun onStop(owner: LifecycleOwner) {
             heartbeatJob?.cancel()
+            usageJob?.cancel()
             updates.stopChecks()
             activeJob?.cancel()
             // A turn still running: keep the process (and the socket) up so its end or its
@@ -359,6 +361,25 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
     }
 
     private var heartbeatJob: Job? = null
+    private var usageJob: Job? = null
+
+    /** Claude plan usage for the top-bar ring; null until the bridge (with the monitor feature) answers. */
+    private val _claudeUsage = MutableStateFlow<ClaudeUsage?>(null)
+    val claudeUsage: StateFlow<ClaudeUsage?> = _claudeUsage.asStateFlow()
+
+    /** Polls the bridge's cached Claude usage while the app is in front (cheap: the bridge caches upstream). */
+    private fun startUsagePolling() {
+        usageJob?.cancel()
+        usageJob = viewModelScope.launch {
+            while (true) {
+                val c = client
+                if (c != null && "monitor" in _features.value) {
+                    runCatching { c.claudeUsage() }.getOrNull()?.let { u -> if (u.hasNumbers) _claudeUsage.value = u }
+                }
+                delay(if (_claudeUsage.value == null) 10_000 else 60_000)
+            }
+        }
+    }
 
     /**
      * While the app is on screen, notice a dead link (PC left the network, stopped trusting it,
@@ -466,6 +487,7 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
         _conn.update { it.copy(activeUrl = p.url, mode = savedMode, needsRepairForLan = p.pin == null,
             transport = EndpointResolver.transportOf(EndpointResolver.hostOf(p.url).orEmpty())) }
         useClient(BridgeClient(p))
+        _features.value = store.bridgeFeatures
         loadCachedDrawer()
         store.lastSessionId?.let { openSession(it) }
         refreshProfiles()
@@ -487,7 +509,6 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
         val creds = if (pr.kind == HostKind.GATEWAY) GatewayCredentialStore(app, pr.id).load() else null
         _pairing.value = if (pr.kind == HostKind.BRIDGE) store.load() else null
         when (val how = decideConnection(pr.kind, creds)) {
-        _features.value = store.bridgeFeatures
             HostConnection.BridgePairing -> {
                 _gatewayHost.value = null
                 refreshPcs()
@@ -824,6 +845,7 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
         vault.clear()
         monitor.clear()
         _features.value = emptySet()
+        _claudeUsage.value = null
         _unauthorized.value = false
         _models.value = null
         _modelChoice.value = null
@@ -1497,6 +1519,26 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
         }
     }
 
+    /** Re-home a stored chat into a project's folder, like desktop's "Move to project". */
+    fun moveToProject(id: String, projectId: String) {
+        val g = gateway ?: return
+        val project = _sessions.value.projects.firstOrNull { it.id == projectId && it.path != null } ?: return
+        viewModelScope.launch {
+            try {
+                g.call("session.workspace.move", scoped(JSONObject().put("session_key", id).put("cwd", project.path)))
+                _sessions.update { s ->
+                    s.copy(projects = s.projects.map {
+                        if (it.id == projectId) it.copy(sessionIds = it.sessionIds + id) else it.copy(sessionIds = it.sessionIds - id)
+                    })
+                }
+                refreshProjects()
+            } catch (t: Throwable) {
+                if (t is CancellationException) throw t
+                say(t)
+            }
+        }
+    }
+
     fun rename(id: String, title: String) {
         val c = source ?: return
         viewModelScope.launch {
@@ -1530,26 +1572,6 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
     fun send(text: String) {
         val trimmed = text.trim()
         if ((_chat.value.attachments.isNotEmpty() || _chat.value.files.isNotEmpty()) && !trimmed.startsWith("/")) return sendMessage(trimmed, trimmed)
-    /** Re-home a stored chat into a project's folder, like desktop's "Move to project". */
-    fun moveToProject(id: String, projectId: String) {
-        val g = gateway ?: return
-        val project = _sessions.value.projects.firstOrNull { it.id == projectId && it.path != null } ?: return
-        viewModelScope.launch {
-            try {
-                g.call("session.workspace.move", scoped(JSONObject().put("session_key", id).put("cwd", project.path)))
-                _sessions.update { s ->
-                    s.copy(projects = s.projects.map {
-                        if (it.id == projectId) it.copy(sessionIds = it.sessionIds + id) else it.copy(sessionIds = it.sessionIds - id)
-                    })
-                }
-                refreshProjects()
-            } catch (t: Throwable) {
-                if (t is CancellationException) throw t
-                say(t)
-            }
-        }
-    }
-
         if (trimmed.isEmpty()) return
         if (trimmed.startsWith("/") && !trimmed.startsWith("//")) return runSlash(trimmed)
         sendMessage(trimmed.removePrefix("/"), trimmed.removePrefix("/"))

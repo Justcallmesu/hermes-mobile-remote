@@ -1,6 +1,16 @@
 package io.github.nideta231.hermesremote.ui
 
 import io.github.nideta231.hermesremote.data.UpdateState
+import androidx.compose.ui.platform.LocalConfiguration
+import android.content.res.Configuration
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.ui.text.input.ImeAction
+import io.github.nideta231.hermesremote.data.ClaudeUsage
+import androidx.compose.foundation.Canvas
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
@@ -218,6 +228,9 @@ fun ChatScreen(
     projects: List<ProjectRef> = emptyList(),
     /** The Hermes profile this chat runs in; null when the PC has only the default one. */
     profile: String? = null,
+    /** Claude plan usage for the ring beside the link icon; null hides it. Tapping opens the PC page. */
+    claudeUsage: ClaudeUsage? = null,
+    onOpenUsage: (() -> Unit)? = null,
 ) {
     var modelSheet by remember { mutableStateOf(false) }
     var projectSheet by remember { mutableStateOf(false) }
@@ -233,7 +246,7 @@ fun ChatScreen(
     CompositionLocalProvider(LocalImageLoader provides actions.loadImage, LocalFileFetcher provides actions.fetchFile,
         LocalEditMessage provides actions.edit) {
     Column(Modifier.fillMaxSize().imePadding()) {
-        ChatTopBar(state, health, showMenuButton, actions, profile)
+        ChatTopBar(state, health, showMenuButton, actions, profile, claudeUsage, onOpenUsage)
         ConnectionBanner(state, health, actions.openSettings)
         update?.let { UpdateStrip(it, onOpenUpdate, onDismissUpdate) }
         Box(Modifier.weight(1f).fillMaxWidth()) {
@@ -296,7 +309,8 @@ fun ChatScreen(
 // ------------------------------------------------------------------ top bar
 
 @Composable
-private fun ChatTopBar(state: ChatState, health: LinkHealth, showMenu: Boolean, actions: ChatActions, profile: String?) {
+private fun ChatTopBar(state: ChatState, health: LinkHealth, showMenu: Boolean, actions: ChatActions, profile: String?,
+                       usage: ClaudeUsage?, onOpenUsage: (() -> Unit)?) {
     Surface(color = MaterialTheme.colorScheme.surface) {
         Row(Modifier.fillMaxWidth().statusBarsPadding().padding(horizontal = 4.dp, vertical = 4.dp),
             verticalAlignment = Alignment.CenterVertically) {
@@ -327,6 +341,7 @@ private fun ChatTopBar(state: ChatState, health: LinkHealth, showMenu: Boolean, 
                 }
             }
             // New chat lives in the drawer and Pin in the chat's ⋮ menu; the top bar only shows the link.
+            usage?.let { UsageRing(it, onOpenUsage) }
             LinkBadge(health, actions.openSettings)
             Spacer(Modifier.width(4.dp))
         }
@@ -341,6 +356,38 @@ private fun ProfileTag(name: String) {
     Spacer(Modifier.width(3.dp))
     Text(name, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant,
         maxLines = 1, overflow = TextOverflow.Ellipsis)
+}
+
+/** Claude plan usage at a glance: outer ring = 5-hour session, inner ring = weekly; the number is the session %. */
+@Composable
+private fun UsageRing(u: ClaudeUsage, onClick: (() -> Unit)?) {
+    val session = (u.session ?: 0.0).coerceIn(0.0, 100.0)
+    val weekly = u.weekly?.coerceIn(0.0, 100.0)
+    val accent = Gold
+    fun tone(p: Double) = when { p >= 90 -> Bad; p >= 70 -> Warn; else -> accent }
+    val sessionColor = tone(session)
+    val track = MaterialTheme.colorScheme.surfaceContainerHighest
+    val desc = buildString {
+        append("Claude usage: session ${session.toInt()}%")
+        weekly?.let { append(", week ${it.toInt()}%") }
+    }
+    Box(Modifier.size(40.dp).clip(CircleShape).then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier)
+        .semantics { contentDescription = desc }, contentAlignment = Alignment.Center) {
+        Canvas(Modifier.size(28.dp)) {
+            val outer = Stroke(width = 3.dp.toPx(), cap = StrokeCap.Round)
+            drawArc(track, -90f, 360f, false, style = outer)
+            drawArc(sessionColor, -90f, (360f * session / 100.0).toFloat(), false, style = outer)
+            if (weekly != null) {
+                val inset = 5.dp.toPx()
+                val inner = Stroke(width = 2.dp.toPx(), cap = StrokeCap.Round)
+                val sz = androidx.compose.ui.geometry.Size(size.width - inset * 2, size.height - inset * 2)
+                val tl = androidx.compose.ui.geometry.Offset(inset, inset)
+                drawArc(track, -90f, 360f, false, topLeft = tl, size = sz, style = inner)
+                drawArc(tone(weekly).copy(alpha = 0.75f), -90f, (360f * weekly / 100.0).toFloat(), false, topLeft = tl, size = sz, style = inner)
+            }
+        }
+        Text("${session.toInt()}", fontSize = 8.sp, fontWeight = FontWeight.Bold, color = sessionColor, maxLines = 1)
+    }
 }
 
 @Composable

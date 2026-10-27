@@ -278,6 +278,7 @@ class MainActivity : ComponentActivity() {
         val hermesProfiles by vm.hermesProfiles.collectAsState()
         val cron by vm.cron.state.collectAsState()
         val vaultState by vm.vault.state.collectAsState()
+        val claudeUsage by vm.claudeUsage.collectAsState()
         val pcState by vm.monitor.state.collectAsState()
         val features by vm.features.collectAsState()
         val unauthorized by vm.unauthorized.collectAsState()
@@ -316,8 +317,8 @@ class MainActivity : ComponentActivity() {
             loadMore = vm::loadMoreSessions,
             setView = vm::setSessionView,
             moveGroup = vm::moveSessionGroup,
-            resetGroupOrder = vm::resetGroupOrder,
             moveToProject = vm::moveToProject,
+            resetGroupOrder = vm::resetGroupOrder,
             rename = vm::rename,
             delete = vm::delete,
             setPinned = vm::setPinned,
@@ -380,7 +381,9 @@ class MainActivity : ComponentActivity() {
                             openModelPicker, confirm, showMenuButton = !wide, actions = chatActions,
                             update = update, onOpenUpdate = openUpdate, onDismissUpdate = vm.updates::dismissUpdateBanner,
                             projects = sessions.projects.filter { it.path != null },
-                            profile = hermesProfiles.headerLabel)
+                            profile = hermesProfiles.headerLabel,
+                            claudeUsage = if (hasMonitor) claudeUsage else null,
+                            onOpenUsage = if (hasMonitor) ({ go(Page.PC) }) else null)
                         Page.SCHEDULED -> CronScreen(cron, hermesProfiles.active.takeIf { hermesProfiles.items.size > 1 }, cronActions, onBack = { page = Page.CHAT })
                         Page.PC -> PcScreen(pcState, pcActions, onBack = { page = Page.CHAT })
                         Page.TERMINAL -> TerminalScreen(open = vm::openTerminal, onBack = { page = Page.CHAT })
