@@ -3,6 +3,21 @@
 Releases are git tags; the version in the app comes from the tag. `git log v0.9.0..vX.Y.Z` is the
 authoritative history — this file only summarises what is worth knowing before upgrading.
 
+## v1.22.0
+
+- New project: a project saved without a folder used to vanish (it was created, but the app hid
+  it). It now shows in the project list as *No folder yet*; tap it to add one.
+- Folder picker: the folder icon in the project's path field browses the PC's folders (Up, Home,
+  New folder, git repos marked), so you no longer type a path from memory. An empty name takes
+  the folder's name. Needs the updated bridge.
+- System Monitor: every chart can be tapped or dragged to read the exact time and values. New
+  Network and Disk I/O charts.
+- Internet speed test of the PC (download, upload, ping, jitter, against Cloudflare) with a
+  history chart. Needs the updated bridge.
+- Claude usage popup shows more: rate tier, % left with the exact reset time, warning colours,
+  lock reason, extra-usage credits, when it was last checked, a 24h / 7d / 30d history chart and
+  each context slice's share of the window.
+
 ## v1.21.0
 
 - Tap the Claude usage badge to open a usage popup instead of jumping to the System Monitor:
