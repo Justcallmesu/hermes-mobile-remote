@@ -1,4 +1,5 @@
 import io
+import os
 import threading
 
 import pytest
@@ -150,6 +151,15 @@ def test_tty_or_missing_stdin_is_not_watched(tmp_path):
     sup = Supervisor(lambda: BlockingChild(), tmp_path / "bridge.log")
     assert sup.watch_stdin(NoRead(tty=True)) is False
     assert sup.watch_stdin(None) is False
+
+
+@pytest.mark.skipif(not os.path.exists("/dev/null"), reason="no /dev/null")
+def test_devnull_stdin_is_not_watched(tmp_path):
+    # A service's stdin is /dev/null: already at EOF, but no parent app to follow.
+    sup = Supervisor(lambda: BlockingChild(), tmp_path / "bridge.log")
+    with open("/dev/null") as devnull:
+        assert sup.watch_stdin(devnull) is False
+    assert not sup._stop.is_set()
 
 
 def test_supervise_subcommand_exists(capsys):
