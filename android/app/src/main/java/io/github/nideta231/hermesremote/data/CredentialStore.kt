@@ -53,6 +53,11 @@ class CredentialStore(context: Context, file: String = "pairing") {
         set(v) = prefs.edit().putString("bridge_addresses",
             v?.let { m -> org.json.JSONObject(m.mapValues { org.json.JSONArray(it.value) }).toString() }).apply()
 
+    /** What the bridge said it serves last time (monitor, terminal...), so its pages show before /me answers. */
+    var bridgeFeatures: Set<String>
+        get() = prefs.getStringSet("bridge_features", null)?.toSet().orEmpty()
+        set(v) = prefs.edit().putStringSet("bridge_features", v).apply()
+
     /** Manual network choice: "auto", "lan" or "tailnet". */
     var transportMode: String
         get() = prefs.getString("transport_mode", "auto") ?: "auto"

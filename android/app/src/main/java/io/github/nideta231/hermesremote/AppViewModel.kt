@@ -487,6 +487,7 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
         val creds = if (pr.kind == HostKind.GATEWAY) GatewayCredentialStore(app, pr.id).load() else null
         _pairing.value = if (pr.kind == HostKind.BRIDGE) store.load() else null
         when (val how = decideConnection(pr.kind, creds)) {
+        _features.value = store.bridgeFeatures
             HostConnection.BridgePairing -> {
                 _gatewayHost.value = null
                 refreshPcs()
@@ -542,7 +543,15 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
     private fun discoverEndpoints() {
         val c = client ?: return
         viewModelScope.launch {
-            val me = runCatching { c.me() }.getOrNull()
+            // /me can miss right after pairing or a cold start (network still waking): a lost answer used to
+            // leave the PC glance hidden until the next foreground. Retry a few times before giving up.
+            var me = runCatching { c.me() }.getOrNull()
+            var tries = 0
+            while (me == null && tries++ < 3 && client === c) {
+                delay(2_000L * tries)
+                me = runCatching { c.me() }.getOrNull()
+            }
+            if (client !== c) return@launch
             val addresses: Map<String, List<String>>? = me?.optJSONObject("addresses")?.let { obj ->
                 mapOf("lan" to obj.optJSONArray("lan").strings(), "tailnet" to obj.optJSONArray("tailnet").strings())
             }
@@ -551,7 +560,9 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
                 if (me == null && !_conn.value.searching) reconnect()
                 return@launch
             }
-            _features.value = me.optJSONArray("features").strings().toSet()
+            val features = me.optJSONArray("features").strings().toSet()
+            _features.value = features
+            store.bridgeFeatures = features
             if (me.optInt("protocol", 0) < MIN_BRIDGE_PROTOCOL) {
                 _toast.value = "Your PC runs an older bridge. Update it: run install.sh on the PC."
             }
