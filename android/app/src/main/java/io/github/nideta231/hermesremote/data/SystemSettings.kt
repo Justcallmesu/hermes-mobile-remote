@@ -30,6 +30,8 @@ data class SystemState(
 class SystemSettings(
     private val scope: CoroutineScope,
     private val client: () -> BridgeClient?,
+    /** Where the health rows come from: the bridge, or a gateway host's `/api/status`. */
+    private val source: () -> SessionsSource? = client,
     /** The PC and Hermes profile in use now. */
     private val target: () -> Target,
     private val describe: (Throwable) -> String,
@@ -42,14 +44,15 @@ class SystemSettings(
 
 
     fun refresh() {
-        val c = client() ?: return
+        val src = source() ?: return
+        val c = client()  // null on a gateway host: no approval mode or default model there
         val asked = target()
         _system.update { it.copy(loading = true) }
         scope.launch {
             try {
-                val comps = c.status()
-                val mode = runCatching { c.approvalMode(asked.profile) }.getOrNull()
-                val def = runCatching { c.defaultModel(asked.profile) }.getOrNull()
+                val comps = src.status()
+                val mode = c?.let { runCatching { it.approvalMode(asked.profile) }.getOrNull() }
+                val def = c?.let { runCatching { it.defaultModel(asked.profile) }.getOrNull() }
                 if (asked != target()) return@launch
                 _system.update {
                     it.copy(components = comps, loading = false, error = null, checkedAt = System.currentTimeMillis(),

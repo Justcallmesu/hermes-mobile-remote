@@ -19,12 +19,12 @@ import java.util.concurrent.TimeUnit
  */
 class BridgeClient(
     private val pairing: Pairing,
-    baseClient: OkHttpClient = OkHttpClient(),
+    baseClient: OkHttpClient = SharedHttp.client,
     // Tests only: lets a loopback TLS server stand in for the PC. Production always uses the
     // real rule (tailnet, or LAN over pinned HTTPS).
     private val hostGuard: (host: String, https: Boolean) -> Boolean =
         { host, https -> Transport.allowsToken(host, https, pairing.pin != null) },
-) {
+) : SessionsSource, CronSource {
     private val base = pairing.url.trimEnd('/')
     private val jsonType = "application/json".toMediaType()
 
@@ -94,7 +94,7 @@ class BridgeClient(
     suspend fun me() = call("GET", "/v1/me")
 
     /** An image a chat shows, by the PC path Hermes stored for it (`/v1/media`; bridges before 1.11 answer 404). */
-    suspend fun media(path: String): ByteArray = runInterruptible(Dispatchers.IO) {
+    override suspend fun media(path: String): ByteArray = runInterruptible(Dispatchers.IO) {
         http.newCall(Request.Builder().url(url("/v1/media", mapOf("path" to path))).build()).execute().use { resp ->
             if (!resp.isSuccessful) throw parseError(resp, resp.body?.string().orEmpty())
             resp.body?.bytes() ?: ByteArray(0)
@@ -133,15 +133,15 @@ class BridgeClient(
         }.getOrDefault(Probe.UNREACHABLE)
     }
 
-    suspend fun status(): List<ComponentStatus> = StatusMapper.map(call("GET", "/v1/status").getJSONObject("components"))
+    override suspend fun status(): List<ComponentStatus> = StatusMapper.map(call("GET", "/v1/status").getJSONObject("components"))
 
     /** Hermes profiles the phone may use. Older bridges have no such route (404): treat as default only. */
-    suspend fun profiles(): List<HermesProfile> = parseProfiles(call("GET", "/v1/profiles"))
+    override suspend fun profiles(): List<HermesProfile> = parseProfiles(call("GET", "/v1/profiles"))
 
     // Every call below acts on one Hermes profile: [profile] null (or "default") is the default profile.
 
     /** The desktop sidebar's list: same query, same order (newest activity first). */
-    suspend fun sessions(limit: Int = 50, offset: Int = 0, profile: String? = null): Pair<List<SessionSummary>, Boolean> {
+    override suspend fun sessions(limit: Int, offset: Int, profile: String?): Pair<List<SessionSummary>, Boolean> {
         val o = call("GET", "/v1/sessions", mapOf("limit" to limit, "offset" to offset) + scoped(profile))
         val list = o.optJSONArray("sessions").objects().map(::parseSession)
         val total = if (o.isNull("total")) null else o.optInt("total")
@@ -155,10 +155,10 @@ class BridgeClient(
     suspend fun setProjectIdea(id: String, text: String, profile: String? = null) =
         call("PUT", "/v1/projects/${enc(id)}/idea", scoped(profile), JSONObject().put("text", text))
 
-    suspend fun renameSession(id: String, title: String, profile: String? = null) =
+    override suspend fun renameSession(id: String, title: String, profile: String?) =
         call("PATCH", "/v1/sessions/${enc(id)}", scoped(profile), JSONObject().put("title", title))
 
-    suspend fun setPinned(id: String, pinned: Boolean, profile: String? = null) =
+    override suspend fun setPinned(id: String, pinned: Boolean, profile: String?) =
         call("PATCH", "/v1/sessions/${enc(id)}", scoped(profile), JSONObject().put("pinned", pinned))
 
     suspend fun approvalMode(profile: String? = null): String =
@@ -177,18 +177,18 @@ class BridgeClient(
             .put("confirm_expensive_model", confirmed))
 
     /** The profile's scheduled jobs. Bridges older than this route answer 404. */
-    suspend fun cronJobs(profile: String? = null): List<CronJob> = parseCronJobs(call("GET", "/v1/cron/jobs", scoped(profile)))
+    override suspend fun cronJobs(profile: String?): List<CronJob> = parseCronJobs(call("GET", "/v1/cron/jobs", scoped(profile)))
 
-    suspend fun cronRuns(jobId: String, profile: String? = null, limit: Int = 10): List<CronRun> =
+    override suspend fun cronRuns(jobId: String, profile: String?, limit: Int): List<CronRun> =
         parseCronRuns(call("GET", "/v1/cron/jobs/${enc(jobId)}/runs", mapOf("limit" to limit) + scoped(profile)))
 
     /** A new job: [prompt] run on [schedule] ("every 30m", "every day 8am", "0 9 * * 1-5"), saved locally. */
-    suspend fun createCronJob(name: String, schedule: String, prompt: String, profile: String? = null): CronJob? =
+    override suspend fun createCronJob(name: String, schedule: String, prompt: String, profile: String?): CronJob? =
         call("POST", "/v1/cron/jobs", scoped(profile), JSONObject().put("name", name).put("schedule", schedule)
             .put("prompt", prompt)).optJSONObject("job")?.let(::parseCronJob)
 
     /** [action] is pause, resume or trigger (run now). Returns the job as it is afterwards, when Hermes says. */
-    suspend fun cronAction(jobId: String, action: String, profile: String? = null): CronJob? =
+    override suspend fun cronAction(jobId: String, action: String, profile: String?): CronJob? =
         call("POST", "/v1/cron/jobs/${enc(jobId)}/$action", scoped(profile)).optJSONObject("job")?.let(::parseCronJob)
 
     // PC monitor (bridge 1.18+; older bridges answer 404).
@@ -218,8 +218,6 @@ class BridgeClient(
     }
 
     private fun scoped(profile: String?): Map<String, Any?> = mapOf("profile" to profileParam(profile))
-
-    private fun enc(s: String) = URLEncoder.encode(s, "UTF-8").replace("+", "%20")
 }
 
 object StatusMapper {

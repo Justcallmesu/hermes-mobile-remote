@@ -57,7 +57,10 @@ import androidx.compose.ui.unit.dp
 import com.journeyapps.barcodescanner.ScanContract
 import com.journeyapps.barcodescanner.ScanOptions
 import io.github.nideta231.hermesremote.data.DEFAULT_HERMES_PROFILE
+import io.github.nideta231.hermesremote.data.HostKind
 import io.github.nideta231.hermesremote.data.Notifier
+import io.github.nideta231.hermesremote.data.hiddenFeatures
+import io.github.nideta231.hermesremote.ui.LocalHiddenFeatures
 import io.github.nideta231.hermesremote.ui.ChatActions
 import io.github.nideta231.hermesremote.ui.ProjectActions
 import io.github.nideta231.hermesremote.ui.CronActions
@@ -73,7 +76,10 @@ import io.github.nideta231.hermesremote.ui.ChatScreen
 import io.github.nideta231.hermesremote.ui.HermesTheme
 import io.github.nideta231.hermesremote.ui.ThemePrefs
 import io.github.nideta231.hermesremote.ui.isDark
+import io.github.nideta231.hermesremote.data.Root
+import io.github.nideta231.hermesremote.data.rootScreen
 import io.github.nideta231.hermesremote.ui.PairScreen
+import io.github.nideta231.hermesremote.ui.SignInAgainScreen
 import io.github.nideta231.hermesremote.ui.SessionActions
 import io.github.nideta231.hermesremote.ui.SessionsPane
 import io.github.nideta231.hermesremote.ui.UpdateSheet
@@ -182,7 +188,7 @@ class MainActivity : ComponentActivity() {
         val data = intent?.data ?: return
         if (data.scheme == "hermesremote") {
             // A new code while paired adds that PC (or re-pairs it) without dropping the current one.
-            if (vm.pairing.value != null) vm.startAddingPc()
+            if (vm.pairing.value != null || vm.gatewayHost.value != null) vm.startAddingPc()
             pairUri.value = data.toString()
         }
     }
@@ -192,15 +198,27 @@ class MainActivity : ComponentActivity() {
             .setBeepEnabled(false).setOrientationLocked(false))
     }
 
+    /** The gateway's own login runs in a Custom Tab (not a WebView) so its login cookie survives. */
+    private fun openCustomTab(url: String) = runOnUiThread {
+        androidx.browser.customtabs.CustomTabsIntent.Builder().build().launchUrl(this, android.net.Uri.parse(url))
+    }
+
     private fun pickImage() = runCatching { imagePicker.launch("image/*") }
 
     @Composable
     private fun App() {
         val pairing by vm.pairing.collectAsState()
         val adding by vm.addingPc.collectAsState()
+        val gw by vm.gatewayHost.collectAsState()
+        val hasHost = pairing != null || gw != null
         val repairDevice by vm.repairDevice.collectAsState()
-        AnimatedContent(pairing != null && !adding, transitionSpec = { fadeIn(tween(300)) togetherWith fadeOut(tween(200)) }, label = "root") { paired ->
-            if (!paired) {
+        AnimatedContent(rootScreen(pairing != null, gw?.signedOut, adding), transitionSpec = { fadeIn(tween(300)) togetherWith fadeOut(tween(200)) }, label = "root") { root ->
+            if (root == Root.SIGN_IN) {
+                gw?.let { h ->
+                    SignInAgainScreen(h.name, h.baseUrl, onSignIn = { raw -> vm.signInGateway(raw, ::openCustomTab, h.id) },
+                        onCancelSignIn = vm::cancelGatewaySignIn, onAddHost = vm::startAddingPc)
+                }
+            } else if (root == Root.PAIR) {
                 PairScreen(pairUri.value, onScan = ::scan, onPickImage = { pickImage() }, onPair = {
                     vm.pair(it).also { err ->
                         if (err == null) {
@@ -209,11 +227,19 @@ class MainActivity : ComponentActivity() {
                             askForNotifications()
                         }
                     }
-                }, imageError = imageError.value,
-                    onCancel = if (pairing != null) ({ pairUri.value = null; imageError.value = null; vm.cancelAddingPc() }) else null,
+                }, onSignInGateway = { raw ->
+                    vm.signInGateway(raw, ::openCustomTab).also { err ->
+                        if (err == null) {
+                            android.widget.Toast.makeText(this@MainActivity, "Signed in. The gateway is in your host list.", android.widget.Toast.LENGTH_LONG).show()
+                            if (hasHost) vm.cancelAddingPc()
+                        }
+                    }
+                }, onCancelSignIn = vm::cancelGatewaySignIn, imageError = imageError.value,
+                    onCancel = if (hasHost) ({ pairUri.value = null; imageError.value = null; vm.cancelAddingPc() }) else null,
                     repairDevice = repairDevice)
             } else {
-                PairedApp()
+                val hidden = hiddenFeatures(if (gw != null) HostKind.GATEWAY else HostKind.BRIDGE)
+                androidx.compose.runtime.CompositionLocalProvider(LocalHiddenFeatures provides hidden) { PairedApp() }
             }
         }
     }

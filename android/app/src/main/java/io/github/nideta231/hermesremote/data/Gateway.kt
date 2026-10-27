@@ -40,6 +40,30 @@ sealed interface Incoming {
     data class Request(val id: String, val method: String, val params: JSONObject) : Incoming
 }
 
+/** Asked for the socket URL on every (re)connect attempt. */
+interface SocketUrlProvider {
+    /** True for a gateway host: credentials are refreshable and a 401 means "sign in", not "pair". */
+    val gatewayMode: Boolean
+    suspend fun url(): String
+    /** Refresh the credentials; throws [GatewayAuthException] ([GatewayAuthError.SIGNED_OUT] = give up). */
+    suspend fun refresh()
+}
+
+/** Bridge mode: one fixed URL, nothing to refresh. */
+class FixedUrl(private val fixed: String) : SocketUrlProvider {
+    override val gatewayMode = false
+    override suspend fun url() = fixed
+    override suspend fun refresh() {}
+}
+
+/** Gateway mode: `ws(s)://<base>/api/ws?ticket=<fresh>` with a new ticket from [auth] each time. */
+class GatewayTicketUrl(baseUrl: String, private val auth: GatewayAuth) : SocketUrlProvider {
+    private val wsBase = baseUrl.trimEnd('/').replaceFirst(Regex("^http"), "ws")
+    override val gatewayMode = true
+    override suspend fun url() = "$wsBase/api/ws?ticket=" + java.net.URLEncoder.encode(auth.wsTicket(), "UTF-8")
+    override suspend fun refresh() { auth.refresh() }
+}
+
 enum class GatewayState { CONNECTING, OPEN, RECONNECTING, UNAUTHORIZED, CLOSED }
 
 /**
@@ -52,8 +76,13 @@ enum class GatewayState { CONNECTING, OPEN, RECONNECTING, UNAUTHORIZED, CLOSED }
  */
 class Gateway(
     private val http: OkHttpClient,
+    /** Identifies the target host (the bridge socket URL, or the gateway's base URL). */
     val url: String,
+    private val provider: SocketUrlProvider,
 ) {
+    /** Bridge mode: the same fixed URL on every connect. */
+    constructor(http: OkHttpClient, url: String) : this(http, url, FixedUrl(url))
+
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val pending = ConcurrentHashMap<Long, CompletableDeferred<JSONObject>>()
     private val nextId = AtomicLong(1)
@@ -75,10 +104,26 @@ class Gateway(
         if (loop != null) return
         loop = scope.launch {
             var backoff = 1_000L
+            var refreshedAfter401 = false
             while (!closed) {
+                val connectUrl = try {
+                    nextUrl()
+                } catch (e: GatewayAuthException) {
+                    if (closed) break
+                    if (e.error == GatewayAuthError.SIGNED_OUT) {
+                        lastError = SIGN_IN_AGAIN
+                        _state.value = GatewayState.UNAUTHORIZED
+                        break
+                    }
+                    lastError = e.message
+                    _state.value = GatewayState.RECONNECTING
+                    delay(backoff)
+                    backoff = (backoff * 2).coerceAtMost(15_000)
+                    continue
+                }
                 val ended = CompletableDeferred<Int>()
                 val opened = CompletableDeferred<Unit>()
-                val ws = http.newWebSocket(Request.Builder().url(url).build(), Listener(opened, ended))
+                val ws = http.newWebSocket(Request.Builder().url(connectUrl).build(), Listener(opened, ended))
                 socket = ws
                 val code = runCatching {
                     withTimeout(20_000) { opened.await() }
@@ -88,6 +133,7 @@ class Gateway(
                     _state.value = GatewayState.OPEN
                     lastError = null
                     backoff = 1_000L
+                    refreshedAfter401 = false
                     _incoming.emit(Incoming.Open)
                     ended.await()
                 }.getOrElse { t ->
@@ -98,13 +144,42 @@ class Gateway(
                 socket = null
                 failPending(IOException(lastError ?: "Connection to the PC closed"))
                 if (closed) break
-                if (code == CLOSE_UNAUTHORIZED) { _state.value = GatewayState.UNAUTHORIZED; break }
+                if (code == CLOSE_UNAUTHORIZED && provider.gatewayMode && !refreshedAfter401) {
+                    // A rejected upgrade may just mean a stale token: refresh once, retry once.
+                    refreshedAfter401 = true
+                    try {
+                        provider.refresh()
+                        continue
+                    } catch (e: GatewayAuthException) {
+                        if (e.error != GatewayAuthError.SIGNED_OUT) {
+                            lastError = e.message
+                            refreshedAfter401 = false
+                            _state.value = GatewayState.RECONNECTING
+                            delay(backoff)
+                            backoff = (backoff * 2).coerceAtMost(15_000)
+                            continue
+                        }
+                    }
+                }
+                if (code == CLOSE_UNAUTHORIZED) {
+                    if (provider.gatewayMode) lastError = SIGN_IN_AGAIN
+                    _state.value = GatewayState.UNAUTHORIZED; break
+                }
                 _state.value = GatewayState.RECONNECTING
                 delay(backoff)
                 backoff = (backoff * 2).coerceAtMost(15_000)
             }
             if (_state.value != GatewayState.UNAUTHORIZED) _state.value = GatewayState.CLOSED
         }
+    }
+
+    /** A ticket call that says the session expired gets one refresh, then one more ticket. */
+    private suspend fun nextUrl(): String = try {
+        provider.url()
+    } catch (e: GatewayAuthException) {
+        if (e.error != GatewayAuthError.SIGNED_OUT || !provider.gatewayMode) throw e
+        provider.refresh()
+        provider.url()
     }
 
     /** Ask the socket to reconnect now (network changed); a live socket is left alone. */
@@ -178,7 +253,7 @@ class Gateway(
         override fun onClosed(webSocket: WebSocket, code: Int, reason: String) { ended.complete(code) }
         override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
             lastError = when {
-                response?.code == 401 -> "This device was revoked or the token is wrong. Pair again."
+                response?.code == 401 -> if (provider.gatewayMode) SIGN_IN_AGAIN else "This device was revoked or the token is wrong. Pair again."
                 response?.code == 404 -> "Your PC runs an older bridge. Update it: run install.sh on the PC."
                 t is javax.net.ssl.SSLException -> "That address isn't your PC (certificate mismatch). Nothing was sent."
                 else -> t.message ?: "Connection to the PC failed"
@@ -189,6 +264,7 @@ class Gateway(
     }
 
     companion object {
+        const val SIGN_IN_AGAIN = "Your session ended. Sign in again."
         const val CLOSE_UNAUTHORIZED = 4401
         const val CLOSE_FORBIDDEN = 4403
         const val CLOSE_UNAVAILABLE = 1013

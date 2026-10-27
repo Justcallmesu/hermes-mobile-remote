@@ -7,7 +7,10 @@ import org.json.JSONObject
 import java.util.UUID
 
 /** One paired PC. [name] is blank until the bridge reports its computer name. */
-data class Profile(val id: String, val name: String = "")
+data class Profile(val id: String, val name: String = "", val kind: HostKind = HostKind.BRIDGE)
+
+/** What a host is: a paired bridge, or a gateway signed in with an account. */
+enum class HostKind { BRIDGE, GATEWAY }
 
 /**
  * The paired PCs and which one the app talks to.
@@ -26,7 +29,7 @@ class ProfileStore(private val prefs: SharedPreferences) {
         val raw = prefs.getString(KEY_LIST, null) ?: return listOf(Profile(LEGACY))
         val items = runCatching {
             val arr = JSONArray(raw)
-            (0 until arr.length()).map { i -> arr.getJSONObject(i).let { Profile(it.getString("id"), it.optString("name")) } }
+            (0 until arr.length()).map { i -> arr.getJSONObject(i).let { Profile(it.getString("id"), it.optString("name"), kindOf(it.optString("kind"))) } }
         }.getOrDefault(emptyList())
         return items.ifEmpty { listOf(Profile(LEGACY)) }
     }
@@ -38,8 +41,8 @@ class ProfileStore(private val prefs: SharedPreferences) {
     fun active(): Profile = list().first { it.id == activeId }
 
     /** A new empty slot; the caller fills it with a pairing. */
-    fun add(name: String = ""): Profile {
-        val p = Profile(UUID.randomUUID().toString().replace("-", "").take(12), name.trim())
+    fun add(name: String = "", kind: HostKind = HostKind.BRIDGE): Profile {
+        val p = Profile(UUID.randomUUID().toString().replace("-", "").take(12), name.trim(), kind)
         save(list() + p)
         return p
     }
@@ -57,7 +60,7 @@ class ProfileStore(private val prefs: SharedPreferences) {
 
     private fun save(items: List<Profile>) {
         val arr = JSONArray()
-        items.forEach { arr.put(JSONObject().put("id", it.id).put("name", it.name)) }
+        items.forEach { arr.put(JSONObject().put("id", it.id).put("name", it.name).put("kind", it.kind.name.lowercase())) }
         prefs.edit().putString(KEY_LIST, arr.toString()).apply()
     }
 
@@ -69,5 +72,14 @@ class ProfileStore(private val prefs: SharedPreferences) {
 
         fun pairingFile(id: String) = if (id == LEGACY) "pairing" else "pairing_$id"
         fun draftsFile(id: String) = if (id == LEGACY) "drafts" else "drafts_$id"
+        /** Per-host gateway credentials; covered by the blanket sharedpref backup exclusion. */
+        fun gatewayFile(id: String) = "gateway_$id"
+
+        /** Empties everything this host keeps in prefs files: pairing, drafts and gateway credentials. */
+        fun clearHostFiles(id: String, prefsOf: (String) -> SharedPreferences) {
+            listOf(pairingFile(id), draftsFile(id), gatewayFile(id)).forEach { prefsOf(it).edit().clear().apply() }
+        }
+
+        private fun kindOf(s: String) = if (s == "gateway") HostKind.GATEWAY else HostKind.BRIDGE
     }
 }

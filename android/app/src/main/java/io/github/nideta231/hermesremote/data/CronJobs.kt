@@ -29,7 +29,7 @@ data class CronState(
  */
 class CronJobs(
     private val scope: CoroutineScope,
-    private val client: () -> BridgeClient?,
+    private val source: () -> CronSource?,
     /** The PC and Hermes profile in use now. */
     private val target: () -> Target,
     private val describe: (Throwable) -> String,
@@ -42,7 +42,7 @@ class CronJobs(
     fun clear() { _state.value = CronState() }
 
     fun refresh() {
-        val c = client() ?: return
+        val c = source() ?: return
         val asked = target()
         _state.update { it.copy(loading = true, error = null) }
         scope.launch {
@@ -59,7 +59,7 @@ class CronJobs(
     }
 
     fun loadRuns(jobId: String) {
-        val c = client() ?: return
+        val c = source() ?: return
         val asked = target()
         scope.launch {
             try {
@@ -74,7 +74,7 @@ class CronJobs(
 
     /** Create a job; [onDone] gets null on success or the error to show in the form. */
     fun create(name: String, schedule: String, prompt: String, onDone: (String?) -> Unit) {
-        val c = client() ?: return onDone("Not connected to your PC")
+        val c = source() ?: return onDone("Not connected to your PC")
         val asked = target()
         scope.launch {
             try {
@@ -94,7 +94,7 @@ class CronJobs(
     fun runNow(job: CronJob) = act(job, "trigger", "Started ${job.name}")
 
     private fun act(job: CronJob, action: String, done: String) {
-        val c = client() ?: return
+        val c = source() ?: return
         if (job.id in _state.value.busy) return
         val asked = target()
         _state.update { it.copy(busy = it.busy + job.id) }

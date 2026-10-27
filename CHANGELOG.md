@@ -13,6 +13,14 @@ authoritative history — this file only summarises what is worth knowing before
   current tool, tool count, model and running time, then how it ended. *Stop* ends one subagent
   without stopping the chat. Opening a chat mid-run catches up on the ones already running.
 - Bridge: the phone may call `subagent.list` and `subagent.interrupt` (needs the updated bridge).
+- Sign in to a gateway: the phone can now connect straight to a gated Hermes gateway (`hermes serve`
+  behind its own login), with no bridge and nothing installed on the PC. In Add host, choose
+  "Sign in to a gateway" and type its address. The gateway's login page opens in a browser tab; you
+  type the password there, never in the app. Tokens are kept in the Android Keystore and refreshed
+  automatically. Plain `http` is accepted only for Tailscale or LAN addresses. Pairing a bridge is unchanged.
+- Gateway hosts hide the features that need the bridge: the project
+  description (IDEA.md), chat file download, the bridge status card, and the default-model and
+  approval settings. Notifications while the app is closed do not work for a gateway host yet.
 
 ## v1.18.0
 

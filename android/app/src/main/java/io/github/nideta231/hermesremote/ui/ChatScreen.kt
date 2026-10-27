@@ -1337,6 +1337,7 @@ private fun savePicture(context: android.content.Context, name: String, bytes: B
 /** Files of one message, one card each: tap opens it in a phone app, the arrow saves it to Downloads. */
 @Composable
 private fun FileCards(paths: List<String>, modifier: Modifier = Modifier, alignEnd: Boolean = false) {
+    if (io.github.nideta231.hermesremote.data.HostFeature.CHAT_FILE_DOWNLOAD in LocalHiddenFeatures.current) return
     Column(modifier, verticalArrangement = Arrangement.spacedBy(6.dp), horizontalAlignment = if (alignEnd) Alignment.End else Alignment.Start) {
         paths.forEach { FileCard(it) }
     }

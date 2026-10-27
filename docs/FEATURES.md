@@ -128,6 +128,29 @@ router's MAC address, so a hotspot that copies your Wi-Fi name is not trusted.
 **Finding the PC again.** If its IP changes, the app finds it over mDNS without re-pairing. The PC
 side notices network changes within about 5 s.
 
+## Gateway hosts
+
+A host is either a bridge (paired with the QR code) or a gateway. To add a gateway, open Add host,
+choose **Sign in to a gateway**, and type its address. The gateway's login page opens in a browser
+tab; sign in there and the app returns with a host named after the address. The password is typed
+on that page, never in the app.
+
+- Works with a gateway behind its own login (`hermes serve` with auth on). `https` works for any
+  address; plain `http` is accepted only for Tailscale or LAN addresses.
+- Tokens are kept in the Android Keystore and renewed automatically. If the gateway no longer accepts
+  the session, the app shows **Sign in again** and keeps the host. Removing a host deletes its tokens
+  and drafts. Whether the gateway also revokes the session on sign-out is not confirmed.
+- Hidden on gateway hosts, because they need the bridge: the project
+  description (IDEA.md), chat file download, the bridge status card, and the default-model and
+  approval settings.
+- Chat, streaming, approvals, sessions and pins use the same socket calls as a bridge host. Chat
+  pictures load from the gateway. Each reconnect gets a fresh single-use ticket.
+- Limits: no notifications while the app is closed (a follow-up). A gateway host has no bridge in
+  front of it, so there is no device pin, rate limit or method allowlist; the gateway's login and
+  your network are the only protection. See [SECURITY.md](SECURITY.md#gateway-hosts).
+- Not yet tried on a real phone against a signed-in gateway. The checklist is in
+  [gateway-manual-checks.md](gateway-manual-checks.md).
+
 ## Running alongside the PC
 
 **One session, many surfaces.** Sessions, pins and titles are Hermes' own, so a chat started on
@@ -152,7 +175,8 @@ Answering on the PC clears the notification.
 
 ## Known limits
 
-- The PC has to be on, with the bridge running. There is no cloud relay.
+- A bridge host needs the PC on, with the bridge running. A gateway host needs its gateway running
+  and reachable. There is no cloud relay.
 - The bridge runs on Linux (supported) and Windows (experimental). macOS is not implemented. See
   [PLATFORMS.md](PLATFORMS.md).
 - Password, sudo and secret prompts are answered on the PC.

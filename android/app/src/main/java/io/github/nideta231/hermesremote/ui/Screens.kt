@@ -98,6 +98,7 @@ import io.github.nideta231.hermesremote.ProfilesState
 import io.github.nideta231.hermesremote.SessionsState
 import io.github.nideta231.hermesremote.data.SystemState
 import io.github.nideta231.hermesremote.data.UpdateState
+import io.github.nideta231.hermesremote.data.HostFeature
 import io.github.nideta231.hermesremote.data.Pairing
 import io.github.nideta231.hermesremote.data.PairingParser
 import io.github.nideta231.hermesremote.data.ProjectRef
@@ -410,7 +411,7 @@ private fun PcSheet(pcs: List<PairedPc>, actions: SessionActions, onDismiss: () 
                 Spacer(Modifier.size(8.dp))
                 if (!pc.active) PanelRow("Switch to ${pc.name}", icon = Glyphs.Check, iconTint = Gold,
                     onClick = { menuFor = null; onDismiss(); actions.switchPc(pc.id) })
-                if (pc.active) PanelRow("Re-pair", "Scan a fresh code; chats and drafts stay", icon = Glyphs.Refresh,
+                if (pc.active && !pc.gateway) PanelRow("Re-pair", "Scan a fresh code; chats and drafts stay", icon = Glyphs.Refresh,
                     onClick = { menuFor = null; onDismiss(); actions.repairPc() })
                 PanelRow("Rename", icon = Glyphs.Edit, onClick = { menuFor = null; renaming = pc })
                 PanelRow("Forget this PC", icon = Glyphs.Trash, iconTint = Bad, titleColor = Bad, onClick = { menuFor = null; forgetting = pc })
@@ -786,21 +787,27 @@ fun SettingsScreen(
 ) {
     var confirmUnpair by remember { mutableStateOf(false) }
     var modelSheet by remember { mutableStateOf(false) }
+    val hidden = LocalHiddenFeatures.current
     LaunchedEffect(Unit) { actions.refresh() }
     PageScaffold("Settings", onBack) {
         PullToRefreshBox(isRefreshing = state.loading, onRefresh = actions.refresh, modifier = Modifier.fillMaxSize()) {
             Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).navigationBarsPadding()
                 .padding(horizontal = 16.dp, vertical = 4.dp)) {
                 UpdateBanner(update, actions.openUpdate)
-                SettingsSection("Connection", "How this phone reaches your PC.") {
+                // The bridge's status card, transport choice, approvals and default model are bridge routes.
+                val bridgeCard = HostFeature.BRIDGE_STATUS !in hidden
+                if (bridgeCard) SettingsSection("Connection", "How this phone reaches your PC.") {
                     ConnectionPanel(conn, state.error, actions)
                 }
                 SettingsSection("Hermes on your PC", "Shared with the desktop app and messaging.") {
                     StatusPanel(state)
-                    Spacer(Modifier.size(10.dp))
-                    DefaultModelPanel(state, models) { actions.loadModels(); modelSheet = true }
-                    Spacer(Modifier.size(10.dp))
-                    ApprovalPanel(state, actions.setApprovalMode)
+                    if (bridgeCard) {
+                        Spacer(Modifier.size(10.dp))
+                        DefaultModelPanel(state, models) { actions.loadModels(); modelSheet = true }
+                        Spacer(Modifier.size(10.dp))
+                        ApprovalPanel(state, actions.setApprovalMode)
+                    }
+                    // Vault is Hermes' own vault.* RPC over the live socket, so a gateway host has it too.
                     Spacer(Modifier.size(10.dp))
                     Panel {
                         PanelRow("Vault", "Saved logins, cards and addresses Hermes can fill", Glyphs.Shield, onClick = actions.openVault)
@@ -1133,6 +1140,53 @@ private fun ThemeSwatch(label: String, selected: Boolean, bg: Color, dot: Color,
 
 // ================================================================ Pairing
 
+/**
+ * A gateway host whose tokens are gone or refused: say so and offer sign-in again (the host entry stays).
+ * [baseUrl] is null when the tokens were lost with it, then the address is asked again.
+ */
+@Composable
+fun SignInAgainScreen(
+    name: String,
+    baseUrl: String?,
+    onSignIn: suspend (String) -> String?,
+    onCancelSignIn: () -> Unit,
+    onAddHost: () -> Unit,
+) {
+    val scope = rememberCoroutineScope()
+    var url by remember(baseUrl) { mutableStateOf(baseUrl ?: "https://") }
+    var error by remember { mutableStateOf<String?>(null) }
+    var busy by remember { mutableStateOf(false) }
+    Column(Modifier.fillMaxSize().imePadding().verticalScroll(rememberScrollState()).statusBarsPadding().navigationBarsPadding()
+        .padding(horizontal = 24.dp, vertical = 16.dp)) {
+        Spacer(Modifier.size(40.dp))
+        Text(name, style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.SemiBold)
+        Text("Your session ended. Sign in again.", style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Spacer(Modifier.size(20.dp))
+        OutlinedTextField(url, { url = it }, label = { Text("Gateway URL") }, singleLine = true, enabled = !busy,
+            modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(14.dp), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri))
+        Spacer(Modifier.size(10.dp))
+        Button(onClick = {
+            busy = true; error = null
+            scope.launch { error = onSignIn(url); busy = false }
+        }, enabled = !busy && url.isNotBlank(), modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp),
+            contentPadding = PaddingValues(vertical = 16.dp)) { Text("Sign in again", fontWeight = FontWeight.SemiBold) }
+        AnimatedVisibility(busy) {
+            Row(Modifier.fillMaxWidth().padding(top = 16.dp), verticalAlignment = Alignment.CenterVertically) {
+                TypingDots(Gold); Spacer(Modifier.width(10.dp)); Text("Waiting for the sign-in", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Spacer(Modifier.weight(1f))
+                TextButton(onClick = onCancelSignIn) { Text("Cancel sign-in") }
+            }
+        }
+        AnimatedVisibility(error != null) {
+            Surface(color = Bad.copy(alpha = 0.14f), shape = RoundedCornerShape(14.dp), modifier = Modifier.fillMaxWidth().padding(top = 16.dp)) {
+                Text(error ?: "", color = Bad, modifier = Modifier.padding(14.dp), style = MaterialTheme.typography.bodyMedium)
+            }
+        }
+        Spacer(Modifier.size(16.dp))
+        TextButton(onClick = onAddHost, enabled = !busy) { Text("Add another host") }
+    }
+}
+
 @Composable
 fun PairScreen(
     initialUri: String?,
@@ -1141,10 +1195,14 @@ fun PairScreen(
     onPair: suspend (Pairing) -> String?,
     imageError: String? = null,
     onCancel: (() -> Unit)? = null,
+    onSignInGateway: (suspend (String) -> String?)? = null,
+    onCancelSignIn: (() -> Unit)? = null,
     /** Re-pairing the PC in use as this device name (its pairing broke). */
     repairDevice: String? = null,
 ) {
     val scope = rememberCoroutineScope()
+    var gatewayMode by remember { mutableStateOf(false) }
+    var gatewayUrl by remember { mutableStateOf("https://") }
     var url by remember { mutableStateOf("https://") }
     var token by remember { mutableStateOf("") }
     var error by remember { mutableStateOf<String?>(null) }
@@ -1185,6 +1243,38 @@ fun PairScreen(
             else -> "Your Hermes agent, from your phone."
         }, style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
         Spacer(Modifier.size(28.dp))
+        if (onSignInGateway != null && repairDevice == null) {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                FilterChip(!gatewayMode, { gatewayMode = false; error = null }, label = { Text("Pair a bridge") }, enabled = !busy)
+                FilterChip(gatewayMode, { gatewayMode = true; error = null }, label = { Text("Sign in to a gateway") }, enabled = !busy)
+            }
+        }
+        Spacer(Modifier.size(8.dp))
+        if (gatewayMode && onSignInGateway != null) {
+            Text("Enter the gateway's address. Its own login opens in your browser.", style = MaterialTheme.typography.bodyLarge)
+            Spacer(Modifier.size(10.dp))
+            OutlinedTextField(gatewayUrl, { gatewayUrl = it }, label = { Text("Gateway URL") }, singleLine = true, enabled = !busy,
+                modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(14.dp), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri))
+            Spacer(Modifier.size(10.dp))
+            Button(onClick = {
+                busy = true; error = null
+                scope.launch { error = onSignInGateway(gatewayUrl); busy = false }
+            }, enabled = !busy && gatewayUrl.isNotBlank(), modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp),
+                contentPadding = PaddingValues(vertical = 16.dp)) { Text("Sign in", fontWeight = FontWeight.SemiBold) }
+            AnimatedVisibility(busy) {
+                Row(Modifier.fillMaxWidth().padding(top = 16.dp), verticalAlignment = Alignment.CenterVertically) {
+                    TypingDots(Gold); Spacer(Modifier.width(10.dp)); Text("Waiting for the sign-in", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Spacer(Modifier.weight(1f))
+                    TextButton(onClick = { onCancelSignIn?.invoke() }) { Text("Cancel sign-in") }
+                }
+            }
+            AnimatedVisibility(error != null) {
+                Surface(color = Bad.copy(alpha = 0.14f), shape = RoundedCornerShape(14.dp), modifier = Modifier.fillMaxWidth().padding(top = 16.dp)) {
+                    Text(error ?: "", color = Bad, modifier = Modifier.padding(14.dp), style = MaterialTheme.typography.bodyMedium)
+                }
+            }
+            return@Column
+        }
         if (repairDevice != null) {
             Step(1, "On your PC, open the tray: Devices > $repairDevice > Re-pair. Or run", code = "hermes-remote-bridge pair $repairDevice --replace")
         } else {

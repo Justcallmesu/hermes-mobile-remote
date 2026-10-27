@@ -50,7 +50,7 @@ class PcSwitchTest {
     @Test fun aLateAnswerFromTheOtherPcIsDropped() = runBlocking {
         var now = Target(pc = "little-boy", profile = "default")
         val c = client()
-        val cron = CronJobs(scope, client = { c }, target = { now }, describe = { it.message ?: "?" }, say = {})
+        val cron = CronJobs(scope, source = { c }, target = { now }, describe = { it.message ?: "?" }, say = {})
 
         // little-boy answers slowly; the user switches to the other PC before it does.
         server.enqueue(jobs("LittleBoyJob").setBodyDelay(600, TimeUnit.MILLISECONDS))
@@ -75,7 +75,7 @@ class PcSwitchTest {
     @Test fun anAnswerForTheCurrentPcStillLands() = runBlocking {
         val now = Target("little-boy", "developer")
         val c = client()
-        val cron = CronJobs(scope, client = { c }, target = { now }, describe = { it.message ?: "?" }, say = {})
+        val cron = CronJobs(scope, source = { c }, target = { now }, describe = { it.message ?: "?" }, say = {})
         server.enqueue(jobs("A", "B"))
         cron.refresh()
         withTimeout(5_000) { while (cron.state.value.jobs.isEmpty()) delay(20) }

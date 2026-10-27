@@ -1,6 +1,7 @@
 package io.github.nideta231.hermesremote
 
 import android.app.Application
+import android.content.Context
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import androidx.lifecycle.AndroidViewModel
@@ -48,6 +49,20 @@ import io.github.nideta231.hermesremote.data.LiveReducer
 import io.github.nideta231.hermesremote.data.ModelCatalog
 import io.github.nideta231.hermesremote.data.ModelOption
 import io.github.nideta231.hermesremote.data.ProfileStore
+import io.github.nideta231.hermesremote.data.GatewayAuth
+import io.github.nideta231.hermesremote.data.GatewayAuthException
+import io.github.nideta231.hermesremote.data.GatewayCredentialStore
+import io.github.nideta231.hermesremote.data.GatewayCredentials
+import io.github.nideta231.hermesremote.data.GatewayUrl
+import io.github.nideta231.hermesremote.data.HostConnection
+import io.github.nideta231.hermesremote.data.HostKind
+import io.github.nideta231.hermesremote.data.decideConnection
+import io.github.nideta231.hermesremote.data.gatewayAuthFor
+import io.github.nideta231.hermesremote.data.LoopbackListener
+import io.github.nideta231.hermesremote.data.GatewayRestClient
+import io.github.nideta231.hermesremote.data.OkHttpTransport
+import io.github.nideta231.hermesremote.data.SessionsSource
+import io.github.nideta231.hermesremote.data.Pkce
 import io.github.nideta231.hermesremote.data.Notifier
 import io.github.nideta231.hermesremote.data.Pairing
 import io.github.nideta231.hermesremote.data.REASONING_LEVELS
@@ -76,6 +91,8 @@ import io.github.nideta231.hermesremote.data.withInflight
 import io.github.nideta231.hermesremote.data.turnPromptKey
 import io.github.nideta231.hermesremote.data.withLiveUser
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -132,7 +149,8 @@ data class SessionsState(
 )
 
 /** A paired PC in the switcher. [name] is the PC's computer name, or the host it was paired at. */
-data class PairedPc(val id: String, val name: String, val url: String, val active: Boolean)
+/** [gateway]: a direct gateway host (signs in, no bridge pairing to redo). */
+data class PairedPc(val id: String, val name: String, val url: String, val active: Boolean, val gateway: Boolean = false)
 
 /**
  * The Hermes profiles on the PC in use, and which one the app talks to. [items] is empty until
@@ -172,11 +190,23 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
     private var drafts = DraftStore(app, ProfileStore.draftsFile(profiles.activeId))
     private var bridgeAddresses: Map<String, List<String>>? = null
     private var client: BridgeClient? = null
+    /** Sessions, profiles, pin/rename, status and pictures of the active host: [client] for a bridge, the gateway's own REST routes otherwise. */
+    private var source: SessionsSource? = null
     private var gateway: Gateway? = null
     private var gatewayJobs: List<Job> = emptyList()
 
     private val _pairing = MutableStateFlow(store.load())
     val pairing: StateFlow<Pairing?> = _pairing.asStateFlow()
+
+    /**
+     * The active host when it is a gateway (it has no [pairing]): null otherwise. [signedOut] is true when it
+     * holds no tokens or the socket ended unauthorized: the root then asks to sign in again, keeping the host.
+     */
+    data class GatewayHostState(val id: String, val name: String, val baseUrl: String?, val signedOut: Boolean)
+    private val _gatewayHost = MutableStateFlow<GatewayHostState?>(null)
+    val gatewayHost: StateFlow<GatewayHostState?> = _gatewayHost.asStateFlow()
+
+    private fun hasHost() = _pairing.value != null || _gatewayHost.value != null
 
     /** Every paired PC, for the switcher. */
     private val _pcs = MutableStateFlow<List<PairedPc>>(emptyList())
@@ -281,14 +311,14 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
     val toast: StateFlow<String?> = _toast.asStateFlow()
 
     /** The Scheduled page: cron jobs of the profile in use. */
-    val cron = CronJobs(viewModelScope, client = { client }, target = ::target,
+    val cron = CronJobs(viewModelScope, source = { source as? io.github.nideta231.hermesremote.data.CronSource }, target = ::target,
         describe = ::describe, say = { _toast.value = it })
     /** The Vault page: saved logins, cards and addresses on the PC (metadata; secrets stay there). */
     val vault = io.github.nideta231.hermesremote.data.Vault(viewModelScope,
         call = { method, params -> (gateway ?: throw IOException("Not connected to your PC")).call(method, scoped(params), 30_000) },
         target = ::target, describe = ::describe, say = { _toast.value = it })
     /** Settings > PC: the bridge's health, and the profile's approval mode and default model. */
-    val settings = SystemSettings(viewModelScope, client = { client }, target = ::target,
+    val settings = SystemSettings(viewModelScope, client = { client }, source = { source }, target = ::target,
         describe = ::describe, say = { _toast.value = it },
         onDefaultModel = { option -> _models.update { cat -> cat?.copy(options = cat.options.map { o ->
             o.copy(current = o.id == option.id && o.provider == option.provider) }) } })
@@ -408,8 +438,7 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
     }
 
     init {
-        refreshPcs()
-        _pairing.value?.let { start(it) }
+        enterActiveHost()
         updates.showWhatsNew()
         ProcessLifecycleOwner.get().lifecycle.addObserver(foregroundObserver)
         runCatching { connectivity?.registerDefaultNetworkCallback(networkCallback) }
@@ -448,7 +477,42 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
     /** Point the app (REST and the live socket) at [c]. */
     private fun useClient(c: BridgeClient) {
         client = c
-        val g = LiveLink.connect(app, c)
+        source = c
+        attach(LiveLink.connect(app, c))
+    }
+
+    /** Make the active host (bridge or gateway) go live: [decideConnection] picks how, from its kind and tokens. */
+    private fun enterActiveHost() {
+        val pr = profiles.active()
+        val creds = if (pr.kind == HostKind.GATEWAY) GatewayCredentialStore(app, pr.id).load() else null
+        _pairing.value = if (pr.kind == HostKind.BRIDGE) store.load() else null
+        when (val how = decideConnection(pr.kind, creds)) {
+            HostConnection.BridgePairing -> {
+                _gatewayHost.value = null
+                refreshPcs()
+                _pairing.value?.let { start(it) }
+            }
+            is HostConnection.GatewayLogin -> {
+                val c = how.credentials
+                _gatewayHost.value = GatewayHostState(pr.id, pr.name.ifBlank { GatewayUrl.hostName(c.baseUrl) }, c.baseUrl, signedOut = false)
+                refreshPcs()
+                _conn.update { it.copy(activeUrl = c.baseUrl) }
+                // No BridgeClient: nothing calls the bridge's /v1 routes. Sessions, profiles and status come from the gateway's /api routes.
+                val auth = gatewayAuthFor(c, GatewayCredentialStore(app, pr.id), OkHttpTransport())
+                source = GatewayRestClient(c.baseUrl, auth, OkHttpTransport()) { _gatewayHost.update { it?.copy(signedOut = true) } }
+                attach(LiveLink.connectGateway(app, c, auth))
+                refreshProfiles()
+                refreshSessions()
+                settings.refresh()
+            }
+            HostConnection.NeedsSignIn -> {
+                _gatewayHost.value = GatewayHostState(pr.id, pr.name.ifBlank { "Gateway" }, null, signedOut = true)
+                refreshPcs()
+            }
+        }
+    }
+
+    private fun attach(g: Gateway) {
         if (g === gateway && gatewayJobs.all { it.isActive }) return
         gatewayJobs.forEach { it.cancel() }
         gateway = g
@@ -462,7 +526,12 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
                         GatewayState.CONNECTING, GatewayState.RECONNECTING -> Link.RECONNECTING
                         else -> Link.IDLE
                     }) }
-                    if (s == GatewayState.UNAUTHORIZED) _unauthorized.value = true
+                    if (s == GatewayState.UNAUTHORIZED) {
+                        if (_gatewayHost.value != null) {
+                            _toast.value = g.lastError
+                            _gatewayHost.update { it?.copy(signedOut = true) }
+                        } else _unauthorized.value = true
+                    }
                     if (s == GatewayState.OPEN) _unauthorized.value = false
                 }
             },
@@ -631,7 +700,7 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
             val candidate = p.copy(url = url)
             try {
                 BridgeClient(candidate).me()
-                if (_pairing.value != null) {
+                if (hasHost()) {
                     // Another PC while one is paired: its own profile. The same PC paired again
                     // (same certificate, or same address) replaces its old pairing instead.
                     val same = profiles.list().firstOrNull { pr ->
@@ -664,37 +733,35 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
     /** Forget the PC this app is on now, and move to the next paired one (if any). */
     fun unpair() {
         teardown()
-        store.clear()
-        drafts.clearAll()
         val gone = profiles.activeId
+        clearHostData(gone)
         // The legacy slot keeps its file names, so it stays in the list as the empty fallback.
         val next = profiles.remove(gone)
         activate(next)
-        _pairing.value = store.load()
-        refreshPcs()
-        _pairing.value?.let { start(it) }
+        enterActiveHost()
     }
 
     /** Talk to another paired PC. Its chats, drafts and addresses come back as they were left. */
     fun switchPc(id: String) {
-        if (id == profiles.activeId && _pairing.value != null) return
+        if (id == profiles.activeId && hasHost()) return
         if (profiles.list().none { it.id == id }) return
-        teardown()
+        teardown() // closes the old socket first: never two live sockets
         activate(id)
-        _pairing.value = store.load()
-        refreshPcs()
-        _pairing.value?.let { start(it) }
+        enterActiveHost()
     }
 
     /** Forget any paired PC; forgetting the one in use is [unpair]. */
     fun forgetPc(id: String) {
         if (id == profiles.activeId) return unpair()
-        CredentialStore(app, ProfileStore.pairingFile(id)).clear()
-        DraftStore(app, ProfileStore.draftsFile(id)).clearAll()
+        clearHostData(id)
         DrawerCache(app, id).clear()
         profiles.remove(id)
         refreshPcs()
     }
+
+    /** The one step both [unpair] and [forgetPc] use: pairing, drafts and gateway credentials of host [id]. */
+    private fun clearHostData(id: String) =
+        ProfileStore.clearHostFiles(id) { app.getSharedPreferences(it, Context.MODE_PRIVATE) }
 
     fun renamePc(id: String, name: String) {
         if (name.isBlank()) return
@@ -735,8 +802,10 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
         LiveLink.close()
         gateway = null
         client = null
+        source = null
         bridgeAddresses = null
         _pairing.value = null
+        _gatewayHost.value = null
         _chat.value = ChatState()
         _sessions.value = SessionsState()
         settings.clear()
@@ -751,9 +820,58 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
         _conn.value = ConnectionState()
     }
 
+    private var signInListener: LoopbackListener? = null
+
+    /**
+     * Sign in to a gateway: [openBrowser] gets the gateway's login URL (a Custom Tab), the loopback
+     * listener catches the redirect, and only a finished sign-in adds a [HostKind.GATEWAY] host with
+     * its tokens. Returns null on success, else the message to show; nothing is stored on failure.
+     */
+    suspend fun signInGateway(rawUrl: String, openBrowser: (String) -> Unit, hostId: String? = null): String? {
+        val base = try { GatewayUrl.validate(rawUrl) } catch (e: IllegalArgumentException) { return e.message }
+        val auth = GatewayAuth(base, OkHttpTransport())
+        val state = Pkce.newVerifier()
+        val verifier = Pkce.newVerifier()
+        return try {
+            val code = withContext(Dispatchers.IO) {
+                LoopbackListener(state).also { signInListener = it }.let { l ->
+                    openBrowser(auth.authorizeUrl(Pkce.challenge(verifier), l.redirectUri, state))
+                    l.awaitCode()
+                }
+            }
+            val t = auth.signIn(code, verifier, state, state)
+            // [hostId]: signing in again to a host the app already lists (keeps its entry); else a new host.
+            val firstHost = !hasHost()
+            val id = hostId?.takeIf { h -> profiles.list().any { it.id == h } }
+                ?: profiles.add(GatewayUrl.hostName(base), HostKind.GATEWAY).id
+            GatewayCredentialStore(app, id).save(GatewayCredentials(base, t.accessToken, t.refreshToken, t.expiresAt, t.provider))
+            if (firstHost || id == profiles.activeId) {
+                // Nothing else is live (first launch) or this is the active host coming back: go live on it.
+                teardown()
+                activate(id)
+                enterActiveHost()
+            } else refreshPcs()
+            null
+        } catch (t: Throwable) {
+            if (t is CancellationException) throw t
+            if (t is GatewayAuthException) "The gateway did not accept the sign-in (${t.message})." else describe(t)
+        } finally {
+            signInListener?.close()
+            signInListener = null
+        }
+    }
+
+    fun cancelGatewaySignIn() { signInListener?.close() }
+
     private fun refreshPcs() {
         val active = profiles.activeId
         _pcs.value = profiles.list().mapNotNull { pr ->
+            if (pr.kind == HostKind.GATEWAY) {
+                // The active gateway host stays listed while signed out, so the user can see and remove it.
+                val gw = GatewayCredentialStore(app, pr.id).load()
+                if (gw == null && pr.id != active) return@mapNotNull null
+                return@mapNotNull PairedPc(pr.id, pr.name.ifBlank { gw?.let { GatewayUrl.hostName(it.baseUrl) } ?: "Gateway" }, gw?.baseUrl.orEmpty(), pr.id == active, gateway = true)
+            }
             val saved = if (pr.id == active) _pairing.value ?: store.load()
                 else CredentialStore(app, ProfileStore.pairingFile(pr.id)).load()
             saved ?: return@mapNotNull null
@@ -765,7 +883,7 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
 
     /** Back on screen: the socket may have died while the process was frozen. Catch up. */
     fun onForeground() {
-        client ?: return
+        if (client == null && gateway == null) return
         gateway?.nudge()
         discoverEndpoints()
         refreshProfiles()
@@ -956,7 +1074,7 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
      * the list jumped on every refresh.
      */
     private fun refreshSessionsHead() {
-        val c = client ?: return
+        val c = source ?: return
         if (_sessions.value.items.isEmpty()) return refreshSessions(quiet = true)
         val asked = target()
         viewModelScope.launch {
@@ -1091,7 +1209,7 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
      * dropped, so neither PC's dropdown shows (or loses) the other's profiles.
      */
     fun refreshProfiles() {
-        val c = client ?: return
+        val c = source ?: return
         val pc = profiles.activeId
         viewModelScope.launch {
             val items = try {
@@ -1137,7 +1255,7 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
     // ------------------------------------------------------------ sessions
 
     fun refreshSessions(quiet: Boolean = false) {
-        val c = client ?: return
+        val c = source ?: return
         val asked = target()
         if (!quiet) _sessions.update { it.copy(loading = true, error = null) }
         viewModelScope.launch {
@@ -1188,7 +1306,7 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
     }
 
     fun loadMoreSessions() {
-        val c = client ?: return
+        val c = source ?: return
         val cur = _sessions.value
         if (cur.loading || !cur.hasMore) return
         _sessions.update { it.copy(loading = true) }
@@ -1351,7 +1469,7 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
 
     /** Pin or unpin any session; updates the list and the open chat optimistically. */
     fun setPinned(id: String, pinned: Boolean) {
-        val c = client ?: return
+        val c = source ?: return
         fun apply(value: Boolean) {
             if (_chat.value.sessionId == id) _chat.update { it.copy(pinned = value) }
             _sessions.update { s -> s.copy(items = s.items.map { if (it.id == id) it.copy(pinned = value) else it }) }
@@ -1369,7 +1487,7 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
     }
 
     fun rename(id: String, title: String) {
-        val c = client ?: return
+        val c = source ?: return
         viewModelScope.launch {
             try {
                 c.renameSession(id, title, profile)
@@ -1596,13 +1714,14 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
 
     /** Bytes of a chat image: a phone uri (still sending) or a PC path, fetched over the bridge and cached. */
     suspend fun loadImage(ref: String): ByteArray? = ImageAttachments.load(app, ref) { path ->
-        val c = client ?: return@load null
+        val c = source ?: return@load null
         try { c.media(path) } catch (e: BridgeException) {
             // A picture outside Hermes' image folders (e.g. a chart saved in a project): the chat names it.
             val sid = _chat.value.sessionId
-            if (sid == null || e.httpCode != 403) throw e
+            val bridge = client
+            if (sid == null || bridge == null || e.httpCode != 403) throw e
             val f = java.io.File(app.cacheDir, "chat-images/${path.hashCode().toUInt()}")
-            c.chatFile(sid, path, profileParam(profile), f)
+            bridge.chatFile(sid, path, profileParam(profile), f)
             f.readBytes().also { f.delete() }
         }
     }

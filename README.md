@@ -10,8 +10,9 @@ token by token on both screens. Send, steer and stop, answer approvals and quest
 and reasoning, and use every slash command — while Hermes keeps running on your own PC, with its
 full toolset.
 
-The app never talks to Hermes directly. A small bridge runs next to Hermes, admits only the phones
-you paired, and relays them to the same backend socket the desktop uses.
+The app never talks to Hermes directly on a bridge host. A small bridge runs next to Hermes, admits
+only the phones you paired, and relays them to the same backend socket the desktop uses. A phone can
+also sign in straight to a gated Hermes gateway with no bridge; see [gateway hosts](docs/FEATURES.md#gateway-hosts).
 
 ```
 Android app ── trusted Wi-Fi: HTTPS, pinned certificate ──┐
