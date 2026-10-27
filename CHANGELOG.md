@@ -3,6 +3,17 @@
 Releases are git tags; the version in the app comes from the tag. `git log v0.9.0..vX.Y.Z` is the
 authoritative history — this file only summarises what is worth knowing before upgrading.
 
+## v1.21.0
+
+- Tap the Claude usage badge to open a usage popup instead of jumping to the System Monitor:
+  session (5 hours) and weekly limits with reset times, this chat's context window as a stacked
+  bar by category (system prompt, tools, memory, conversation...), and *Compact now* with an
+  optional focus topic. The badge now shows Claude's mark with the session % beside it. The
+  System Monitor is still one tap away from the popup. Context needs the updated bridge.
+- System Monitor range and sort chips use the theme accent instead of Material purple.
+- Move to project works once the bridge is restarted on the PC (it was still running the old
+  allowlist).
+
 ## v1.20.0
 
 - Move to project: long-press a chat and choose *Move to project* to file it under any project
