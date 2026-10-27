@@ -35,7 +35,7 @@ ALLOWED_METHODS = frozenset({
     "session.list", "session.active_list", "session.most_recent", "session.resume", "session.activate",
     "session.create", "session.close", "session.history", "session.events.since", "session.title",
     "session.delete", "session.undo", "session.branch", "session.compress", "session.usage", "session.status",
-    "session.save", "session.workspace.move",
+    "session.save", "session.workspace.move", "session.context_breakdown",
     # projects: the drawer's group-by-project, plus "New project", rename, folder and delete from the
     # phone (delete drops Hermes' saved project only; files on the PC are never touched)
     "projects.tree", "projects.get", "projects.create", "projects.update", "projects.delete",

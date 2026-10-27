@@ -383,7 +383,8 @@ class MainActivity : ComponentActivity() {
                             projects = sessions.projects.filter { it.path != null },
                             profile = hermesProfiles.headerLabel,
                             claudeUsage = if (hasMonitor) claudeUsage else null,
-                            onOpenUsage = if (hasMonitor) ({ go(Page.PC) }) else null)
+                            onOpenMonitor = if (hasMonitor) ({ go(Page.PC) }) else null,
+                            loadContext = vm::contextBreakdown, onRefreshUsage = vm::refreshClaudeUsage)
                         Page.SCHEDULED -> CronScreen(cron, hermesProfiles.active.takeIf { hermesProfiles.items.size > 1 }, cronActions, onBack = { page = Page.CHAT })
                         Page.PC -> PcScreen(pcState, pcActions, onBack = { page = Page.CHAT })
                         Page.TERMINAL -> TerminalScreen(open = vm::openTerminal, onBack = { page = Page.CHAT })

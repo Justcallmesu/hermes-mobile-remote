@@ -13,6 +13,8 @@ import io.github.nideta231.hermesremote.data.mergeSessionHead
 import io.github.nideta231.hermesremote.data.BridgeClient
 import io.github.nideta231.hermesremote.data.PcMonitor
 import io.github.nideta231.hermesremote.data.ClaudeUsage
+import io.github.nideta231.hermesremote.data.ContextInfo
+import io.github.nideta231.hermesremote.data.parseContext
 import io.github.nideta231.hermesremote.data.TerminalSession
 import io.github.nideta231.hermesremote.data.BridgeException
 import io.github.nideta231.hermesremote.data.ProjectRef
@@ -366,6 +368,18 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
     /** Claude plan usage for the top-bar ring; null until the bridge (with the monitor feature) answers. */
     private val _claudeUsage = MutableStateFlow<ClaudeUsage?>(null)
     val claudeUsage: StateFlow<ClaudeUsage?> = _claudeUsage.asStateFlow()
+
+    /** The open chat's context window by category (Hermes' /usage breakdown); null without a chat. */
+    suspend fun contextBreakdown(): ContextInfo? {
+        if (_chat.value.sessionId == null) return null
+        return parseContext(rpc("session.context_breakdown", { JSONObject().put("session_id", it) }, 60_000))
+    }
+
+    /** Ask the bridge to check Claude usage upstream now (the ring and popup update). */
+    fun refreshClaudeUsage() {
+        val c = client ?: return
+        viewModelScope.launch { runCatching { c.claudeUsage(refresh = true) }.getOrNull()?.let { if (it.hasNumbers) _claudeUsage.value = it } }
+    }
 
     /** Polls the bridge's cached Claude usage while the app is in front (cheap: the bridge caches upstream). */
     private fun startUsagePolling() {
