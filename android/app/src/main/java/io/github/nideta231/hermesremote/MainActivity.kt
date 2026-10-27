@@ -317,6 +317,7 @@ class MainActivity : ComponentActivity() {
             setView = vm::setSessionView,
             moveGroup = vm::moveSessionGroup,
             resetGroupOrder = vm::resetGroupOrder,
+            moveToProject = vm::moveToProject,
             rename = vm::rename,
             delete = vm::delete,
             setPinned = vm::setPinned,

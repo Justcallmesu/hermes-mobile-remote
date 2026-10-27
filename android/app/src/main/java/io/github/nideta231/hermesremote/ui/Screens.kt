@@ -150,6 +150,8 @@ class SessionActions(
     /** Rename / re-folder / describe / delete projects, from a project group's long-press. */
     val projects: ProjectActions = ProjectActions(),
 )
+    /** Move a stored chat into a project (session id, project id). */
+    val moveToProject: (String, String) -> Unit = { _, _ -> },
 
 /** The session list. On phones it lives in the navigation drawer; on tablets beside the chat. */
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
@@ -175,6 +177,7 @@ fun SessionsPane(
     var renaming by remember { mutableStateOf<SessionSummary?>(null) }
     var deleting by remember { mutableStateOf<SessionSummary?>(null) }
     // Collapsed groups as "GROUPING/key", so collapsing "Today" never hides a project group of the same name.
+    var moving by remember { mutableStateOf<SessionSummary?>(null) }
     // Persisted (ThemePrefs "ui" prefs) so reopening the app keeps folders the way they were left.
     val collapsedKeys = ThemePrefs.collapsedGroups
     fun collapseKey(groupKey: String) = "${view.grouping.name}/$groupKey"
@@ -329,8 +332,13 @@ fun SessionsPane(
             onPin = { actions.setPinned(s.id, !s.pinned); menuFor = null },
             onRename = { renaming = s; menuFor = null },
             onDelete = { deleting = s; menuFor = null })
+            onMove = if (state.projects.any { it.path != null }) ({ moving = s; menuFor = null }) else null,
     }
     renaming?.let { s ->
+    moving?.let { s ->
+        MoveToProjectSheet(s, state.projects, onDismiss = { moving = null },
+            onPick = { pid -> actions.moveToProject(s.id, pid); moving = null })
+    }
         var title by remember { mutableStateOf(s.title ?: "") }
         AlertDialog(onDismissRequest = { renaming = null }, title = { Text("Rename chat") },
             text = { OutlinedTextField(title, { title = it }, singleLine = true, shape = RoundedCornerShape(14.dp)) },
@@ -611,7 +619,8 @@ private fun sourceLabel(source: String?) = when (source) {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun SessionActionsSheet(s: SessionSummary, onDismiss: () -> Unit, onPin: () -> Unit, onRename: () -> Unit, onDelete: () -> Unit) {
+private fun SessionActionsSheet(s: SessionSummary, onDismiss: () -> Unit, onPin: () -> Unit, onRename: () -> Unit,
+                                onMove: (() -> Unit)?, onDelete: () -> Unit) {
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
         containerColor = MaterialTheme.colorScheme.surfaceContainer) {
         Column(Modifier.fillMaxWidth().padding(bottom = 24.dp)) {
@@ -624,11 +633,31 @@ private fun SessionActionsSheet(s: SessionSummary, onDismiss: () -> Unit, onPin:
             PanelRow(if (s.pinned) "Unpin" else "Pin", icon = Glyphs.Pin, iconTint = Gold, onClick = onPin)
             PanelRow("Rename", icon = Glyphs.Edit, onClick = onRename)
             PanelRow("Delete", icon = Glyphs.Trash, iconTint = Bad, titleColor = Bad, onClick = onDelete)
+            if (onMove != null) PanelRow("Move to project", icon = Glyphs.Folder, iconTint = Gold, onClick = onMove)
         }
     }
 }
 
 /** Group by / sort by / status / project, mirroring the desktop sidebar's filter menu. Changes apply live. */
+/** Pick the project a chat moves into; only projects with a folder can take it (the move re-homes its cwd). */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun MoveToProjectSheet(s: SessionSummary, projects: List<ProjectRef>, onDismiss: () -> Unit, onPick: (String) -> Unit) {
+    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+        containerColor = MaterialTheme.colorScheme.surfaceContainer) {
+        Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(bottom = 24.dp)) {
+            Text("Move \"${s.displayTitle}\"", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold,
+                maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(horizontal = 20.dp))
+            Spacer(Modifier.size(8.dp))
+            projects.filter { it.path != null && it.id != SessionView.NO_PROJECT }.forEach { p ->
+                val here = s.id in p.sessionIds
+                PanelRow(p.label, icon = if (here) Glyphs.Check else Glyphs.Folder, iconTint = Gold,
+                    onClick = { if (here) onDismiss() else onPick(p.id) })
+            }
+        }
+    }
+}
+
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 private fun SessionViewSheet(view: SessionView, projects: List<ProjectRef>, onChange: (SessionView) -> Unit,

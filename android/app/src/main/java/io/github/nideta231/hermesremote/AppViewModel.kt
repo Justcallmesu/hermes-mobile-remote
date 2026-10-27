@@ -1519,6 +1519,26 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
     fun send(text: String) {
         val trimmed = text.trim()
         if ((_chat.value.attachments.isNotEmpty() || _chat.value.files.isNotEmpty()) && !trimmed.startsWith("/")) return sendMessage(trimmed, trimmed)
+    /** Re-home a stored chat into a project's folder, like desktop's "Move to project". */
+    fun moveToProject(id: String, projectId: String) {
+        val g = gateway ?: return
+        val project = _sessions.value.projects.firstOrNull { it.id == projectId && it.path != null } ?: return
+        viewModelScope.launch {
+            try {
+                g.call("session.workspace.move", scoped(JSONObject().put("session_key", id).put("cwd", project.path)))
+                _sessions.update { s ->
+                    s.copy(projects = s.projects.map {
+                        if (it.id == projectId) it.copy(sessionIds = it.sessionIds + id) else it.copy(sessionIds = it.sessionIds - id)
+                    })
+                }
+                refreshProjects()
+            } catch (t: Throwable) {
+                if (t is CancellationException) throw t
+                say(t)
+            }
+        }
+    }
+
         if (trimmed.isEmpty()) return
         if (trimmed.startsWith("/") && !trimmed.startsWith("//")) return runSlash(trimmed)
         sendMessage(trimmed.removePrefix("/"), trimmed.removePrefix("/"))
