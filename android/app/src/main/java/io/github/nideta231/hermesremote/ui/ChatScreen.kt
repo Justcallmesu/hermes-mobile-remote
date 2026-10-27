@@ -727,7 +727,7 @@ private fun ToolRow(item: ChatItem.Tool) {
     }, label = "tool-status")
     Surface(color = MaterialTheme.colorScheme.surfaceContainer, shape = RoundedCornerShape(14.dp),
         modifier = Modifier.fillMaxWidth().animateContentSize(spring(dampingRatio = 0.82f, stiffness = Spring.StiffnessMediumLow))) {
-        Column(Modifier.shimmer(item.status == ToolStatus.RUNNING).clickable(enabled = item.result != null) { open = !open }
+        Column(Modifier.shimmer(item.status == ToolStatus.RUNNING).clickable(enabled = item.result != null || item.images.isNotEmpty()) { open = !open }
             .padding(horizontal = 12.dp, vertical = 9.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 StatusDot(color, pulse = item.status == ToolStatus.RUNNING, size = 8)
@@ -741,12 +741,14 @@ private fun ToolRow(item: ChatItem.Tool) {
                 item.durationSec?.let {
                     Text(" %.1fs".format(it), fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
-                if (item.result != null) {
+                if (item.result != null || item.images.isNotEmpty()) {
                     val rot by animateFloatAsState(if (open) 180f else 0f, label = "chev")
                     Icon(Glyphs.Chevron, null, tint = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.size(16.dp).rotate(rot))
                 }
             }
+            // Pictures a tool returned show without opening the row, like the desktop.
+            if (item.images.isNotEmpty()) ImageStrip(item.images, Modifier.padding(top = 8.dp))
             if (open && item.result != null) {
                 Text(readableToolResult(item.result).take(4000), fontFamily = FontFamily.Monospace, fontSize = 11.5.sp, lineHeight = 15.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -760,6 +762,7 @@ private fun ToolRow(item: ChatItem.Tool) {
 
 /** Tools return JSON like {"output": "...", "exit_code": 0}; show the text, plus the exit code if it failed. */
 internal fun readableToolResult(raw: String): String {
+    io.github.nideta231.hermesremote.data.multimodal(raw)?.let { return it.first.ifBlank { "[picture]" } }
     val o = runCatching { org.json.JSONObject(raw.trim()) }.getOrNull() ?: return raw
     val body = listOf("output", "content", "result", "text").firstNotNullOfOrNull { k -> o.optString(k).takeIf { it.isNotEmpty() } }
         ?: return o.toString(2)
