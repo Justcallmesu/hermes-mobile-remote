@@ -1,5 +1,7 @@
 package io.github.nideta231.hermesremote
 
+import io.github.nideta231.hermesremote.data.ConnectionPlan
+import io.github.nideta231.hermesremote.data.viaLabel
 import io.github.nideta231.hermesremote.data.GatewayCredentialStore
 import io.github.nideta231.hermesremote.data.GatewayCredentials
 import io.github.nideta231.hermesremote.data.GatewayState
@@ -32,6 +34,32 @@ class HostConnectionTest {
         assertEquals(HostConnection.BridgePairing, decideConnection(HostKind.BRIDGE, null))
         assertEquals(HostConnection.GatewayLogin(creds), decideConnection(HostKind.GATEWAY, creds))
         assertEquals(HostConnection.NeedsSignIn, decideConnection(HostKind.GATEWAY, null))
+    }
+
+    @Test fun linkedHostPrefersBridgeAndFallsBackToGateway() {
+        val gw = HostConnection.GatewayLogin(creds)
+        val up = decideConnection(HostKind.BRIDGE, creds, linked = true, bridgeReachable = true)
+        assertEquals(ConnectionPlan(HostConnection.BridgePairing, gw), up)
+        val down = decideConnection(HostKind.BRIDGE, creds, linked = true, bridgeReachable = false)
+        assertEquals(ConnectionPlan(gw, HostConnection.BridgePairing), down)
+        assertEquals(ConnectionPlan(HostConnection.NeedsSignIn, null), decideConnection(HostKind.BRIDGE, null, linked = true, bridgeReachable = false))
+        // unlinked hosts keep the old rule
+        assertEquals(ConnectionPlan(HostConnection.BridgePairing, null), decideConnection(HostKind.BRIDGE, null, linked = false, bridgeReachable = false))
+        assertEquals(ConnectionPlan(HostConnection.NeedsSignIn, null), decideConnection(HostKind.GATEWAY, null, linked = false, bridgeReachable = true))
+    }
+
+    @Test fun bridgeComingBackIsPickedAgainButNeverFlapsWithin30s() {
+        val gw = HostConnection.GatewayLogin(creds)
+        fun back(since: Long) = decideConnection(HostKind.BRIDGE, creds, linked = true, bridgeReachable = true, current = gw, sinceSwitchMs = since).connection
+        assertEquals(gw, back(5_000))
+        assertEquals(gw, back(29_999))
+        assertEquals(HostConnection.BridgePairing, back(30_000))
+    }
+
+    @Test fun connectionRowNamesTheLiveWay() {
+        assertEquals("via Bridge", viaLabel(HostConnection.BridgePairing))
+        assertEquals("via Gateway", viaLabel(HostConnection.GatewayLogin(creds)))
+        assertEquals(null, viaLabel(HostConnection.NeedsSignIn))
     }
 
     @Test fun rootShowsAppForGatewayHostAndSignInWhenSignedOut() {

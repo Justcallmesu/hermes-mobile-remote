@@ -19,6 +19,41 @@ fun decideConnection(kind: HostKind, credentials: GatewayCredentials?): HostConn
     else -> HostConnection.NeedsSignIn
 }
 
+/** What to connect with now, and the other way it may switch to (null when there is none). */
+data class ConnectionPlan(val connection: HostConnection, val fallback: HostConnection?)
+
+/** The least time between two switches of a linked host, so a flaky bridge cannot make the app flap. */
+const val SWITCH_MIN_MS = 30_000L
+
+/**
+ * A linked host uses the bridge when it answers, else the gateway sign-in; neither gives sign-in. An unlinked host
+ * keeps the rule of the two-argument [decideConnection]. [current] and [sinceSwitchMs] hold the way in use and how
+ * long ago it was chosen: going back to a returned bridge waits until [SWITCH_MIN_MS] have passed.
+ */
+fun decideConnection(
+    kind: HostKind,
+    credentials: GatewayCredentials?,
+    linked: Boolean,
+    bridgeReachable: Boolean,
+    current: HostConnection? = null,
+    sinceSwitchMs: Long = Long.MAX_VALUE,
+): ConnectionPlan {
+    if (!linked) return ConnectionPlan(decideConnection(kind, credentials), null)
+    val gateway = credentials?.let { HostConnection.GatewayLogin(it) }
+    val bridge = HostConnection.BridgePairing
+    val holdGateway = current is HostConnection.GatewayLogin && sinceSwitchMs < SWITCH_MIN_MS
+    return if (bridgeReachable && !(holdGateway && gateway != null)) ConnectionPlan(bridge, gateway)
+    else if (gateway != null) ConnectionPlan(gateway, bridge)
+    else ConnectionPlan(HostConnection.NeedsSignIn, null)
+}
+
+/** What the connection row says is live; null when nothing is. */
+fun viaLabel(c: HostConnection): String? = when (c) {
+    HostConnection.BridgePairing -> "via Bridge"
+    is HostConnection.GatewayLogin -> "via Gateway"
+    HostConnection.NeedsSignIn -> null
+}
+
 /** What the root of the app shows. */
 enum class Root { PAIR, APP, SIGN_IN }
 

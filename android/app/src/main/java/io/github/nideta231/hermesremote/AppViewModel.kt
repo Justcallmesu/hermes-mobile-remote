@@ -61,6 +61,7 @@ import io.github.nideta231.hermesremote.data.GatewayCredentialStore
 import io.github.nideta231.hermesremote.data.GatewayCredentials
 import io.github.nideta231.hermesremote.data.GatewayUrl
 import io.github.nideta231.hermesremote.data.HostConnection
+import io.github.nideta231.hermesremote.data.viaLabel
 import io.github.nideta231.hermesremote.data.HostKind
 import io.github.nideta231.hermesremote.data.HostLink
 import io.github.nideta231.hermesremote.data.HostLinking
@@ -198,6 +199,8 @@ data class ConnectionState(
     /** The live socket to Hermes is up. */
     val live: Boolean = false,
     val liveError: String? = null,
+    /** "via Bridge" or "via Gateway" for a linked PC; null for any other host. */
+    val via: String? = null,
 )
 
 class AppViewModel(private val app: Application) : AndroidViewModel(app) {
@@ -597,6 +600,9 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
     /** Make the active host (bridge or gateway) go live: [decideConnection] picks how, from its kind and tokens. */
     private fun enterActiveHost() {
         val pr = profiles.active()
+        linkJob?.cancel()
+        _conn.update { it.copy(via = null) }
+        if (pr.kind == HostKind.BRIDGE) profiles.links().firstOrNull { it.bridgeId == pr.id }?.let { watchLink(it) }
         val creds = if (pr.kind == HostKind.GATEWAY) GatewayCredentialStore(app, pr.id).load() else null
         _pairing.value = if (pr.kind == HostKind.BRIDGE) store.load() else null
         when (val how = decideConnection(pr.kind, creds)) {
@@ -622,6 +628,46 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
             HostConnection.NeedsSignIn -> {
                 _gatewayHost.value = GatewayHostState(pr.id, pr.name.ifBlank { "Gateway" }, null, signedOut = true)
                 refreshPcs()
+            }
+        }
+    }
+
+    private var linkJob: Job? = null
+
+    /**
+     * A linked PC: the bridge is used while it answers; when its socket is down and a probe gets no answer the app
+     * moves to the gateway sign-in, and back to the bridge on a later check once it answers (not within [SWITCH_MIN_MS]).
+     */
+    private fun watchLink(l: HostLink) {
+        linkJob = viewModelScope.launch {
+            var on: HostConnection = HostConnection.BridgePairing
+            var since = System.currentTimeMillis()
+            _conn.update { it.copy(via = viaLabel(on)) }
+            while (true) {
+                delay(if (on is HostConnection.GatewayLogin) 10_000L else 5_000L)
+                val pairing = CredentialStore(app, ProfileStore.pairingFile(l.bridgeId)).load() ?: continue
+                val bridgeUp = (on is HostConnection.BridgePairing && gateway?.state?.value == GatewayState.OPEN) ||
+                    HostLinking.probe(pairing.url) != BridgeClient.Probe.UNREACHABLE
+                val gwStore = GatewayCredentialStore(app, l.gatewayId)
+                val next = decideConnection(HostKind.BRIDGE, gwStore.load(), true, bridgeUp, on, System.currentTimeMillis() - since).connection
+                if (next == on || next == HostConnection.NeedsSignIn || next::class == on::class) continue
+                on = next
+                since = System.currentTimeMillis()
+                when (next) {
+                    is HostConnection.GatewayLogin -> {
+                        val c = next.credentials
+                        val auth = gatewayAuthFor(c, gwStore, OkHttpTransport())
+                        _gatewayHost.value = GatewayHostState(l.gatewayId, profiles.active().name.ifBlank { GatewayUrl.hostName(c.baseUrl) }, c.baseUrl, signedOut = false)
+                        _conn.update { it.copy(activeUrl = c.baseUrl) }
+                        source = GatewayRestClient(c.baseUrl, auth, OkHttpTransport()) { _gatewayHost.update { it?.copy(signedOut = true) } }
+                        attach(LiveLink.connectGateway(app, c, auth))
+                    }
+                    else -> {
+                        _gatewayHost.value = null
+                        start(pairing)
+                    }
+                }
+                _conn.update { it.copy(via = viaLabel(on)) }
             }
         }
     }

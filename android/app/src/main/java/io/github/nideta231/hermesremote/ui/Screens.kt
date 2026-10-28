@@ -999,7 +999,7 @@ private fun ConnectionPanel(conn: ConnectionState, error: String?, actions: Sett
             conn.transport == Transport.TAILNET -> "Through your tailnet"
             else -> null
         }
-        PanelRow(title, sub, icon, iconTint = tint) { if (conn.searching) TypingDots(Warn) }
+        PanelRow(title, listOfNotNull(sub, conn.via).joinToString(" · ").ifEmpty { null }, icon, iconTint = tint) { if (conn.searching) TypingDots(Warn) }
         conn.activeUrl?.let {
             Text(it, fontFamily = FontFamily.Monospace, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(start = 52.dp, end = 16.dp, bottom = 8.dp))

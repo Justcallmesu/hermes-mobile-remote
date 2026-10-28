@@ -82,7 +82,10 @@ object LiveLink {
         gateway?.let { g ->
             if (g.url == fresh.url && g.state.value != GatewayState.CLOSED && g.state.value != GatewayState.UNAUTHORIZED) return g
         }
+        // A switch to the other way of a linked host: the new socket's first Open resumes every watched session.
+        val switched = gateway != null
         close()
+        if (switched) toResume += watched.keys
         gateway = fresh
         fresh.start()
         val app = context.applicationContext

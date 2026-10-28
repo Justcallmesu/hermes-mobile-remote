@@ -37,6 +37,10 @@ object ReattachPolicy {
         return moved
     }
 
+    /** The app moved to the other way of a linked host: every watched session is resumed through the new socket. */
+    suspend fun resumeAfterSwitch(link: ReattachLink, watched: Map<String, LiveLink.Watched>): Map<String, String> =
+        resumeWatched(link, watched, watched.keys)
+
     /** Ping; one that gets no answer in 5 s drops the socket so the reconnect starts before the grace ends. Background only. */
     suspend fun ping(link: ReattachLink, background: Boolean) {
         if (!background || !link.isOpen) return
