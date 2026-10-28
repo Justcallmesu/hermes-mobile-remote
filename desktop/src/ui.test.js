@@ -327,3 +327,17 @@ describe("Settings", () => {
     expect(w.find('[data-test="run-mode"]').element.value).toBe("app-only");
   });
 });
+
+describe("tray navigation", () => {
+  it("switches to the tab the tray asks for and stops listening after unmount", async () => {
+    const w = await open();
+    expect(w.find('[data-test="pair-go"]').exists()).toBe(false);
+    window.dispatchEvent(new CustomEvent("navigate", { detail: "pair" }));
+    await flushPromises();
+    expect(w.find('[data-test="pair-go"]').exists()).toBe(true);
+    const spy = vi.spyOn(window, "removeEventListener");
+    w.unmount();
+    expect(spy).toHaveBeenCalledWith("navigate", expect.any(Function));
+    spy.mockRestore();
+  });
+});

@@ -1,5 +1,5 @@
 <script setup>
-import { ref, onMounted } from "vue";
+import { ref, onMounted, onUnmounted } from "vue";
 import { appVersion, setupState, setupRun } from "./api.js";
 import Setup from "./Setup.vue";
 import UpdateBanner from "./UpdateBanner.vue";
@@ -17,11 +17,13 @@ const tabs = [
   ["settings", "Settings"],
 ];
 const showSetup = ref(false);
+// The tray menu (Rust) dispatches this DOM event: `new CustomEvent("navigate", { detail: "pair" })`.
+function onNavigate(e) {
+  if (tabs.some(([id]) => id === e.detail)) tab.value = e.detail;
+}
+onUnmounted(() => window.removeEventListener("navigate", onNavigate));
 onMounted(async () => {
-  // The tray menu (Rust) dispatches this DOM event: `new CustomEvent("navigate", { detail: "pair" })`.
-  window.addEventListener("navigate", (e) => {
-    if (tabs.some(([id]) => id === e.detail)) tab.value = e.detail;
-  });
+  window.addEventListener("navigate", onNavigate);
   version.value = await appVersion();
   try {
     const st = await setupState();

@@ -238,9 +238,11 @@ static FLYOUT_OPEN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBoo
 pub fn show_main(app: &tauri::AppHandle) {
     use tauri::Manager;
     if let Some(w) = app.get_webview_window("main") {
+        // Always back to a normal window: the flyout flag is already cleared by a focus-loss or
+        // toggle hide, so it cannot tell whether the flyout style is still applied.
         #[cfg(windows)]
-        if FLYOUT_OPEN.swap(false, std::sync::atomic::Ordering::SeqCst) {
-            // Back from flyout to a normal window.
+        {
+            FLYOUT_OPEN.store(false, std::sync::atomic::Ordering::SeqCst);
             let _ = w.set_always_on_top(false);
             let _ = w.set_skip_taskbar(false);
             let _ = w.set_decorations(true);
