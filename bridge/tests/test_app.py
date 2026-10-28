@@ -266,6 +266,14 @@ def test_frame_filter():
         ok, err = check_frame(json.dumps({"jsonrpc": "2.0", "id": 11, "method": method,
                                           "params": {"session_id": "a", "subagent_id": "s"}}), 1000)
         assert ok and err is None
+    # Background processes of the open chat: see them and stop one. Killing every process stays on the PC.
+    for method in ("process.list", "process.kill"):
+        ok, err = check_frame(json.dumps({"jsonrpc": "2.0", "id": 12, "method": method,
+                                          "params": {"session_id": "a", "process_id": "p"}}), 1000)
+        assert ok and err is None
+    for method in ("process.stop", "agents.list"):
+        ok, err = check_frame(json.dumps({"jsonrpc": "2.0", "id": 13, "method": method}), 1000)
+        assert ok is None and json.loads(err)["error"]["code"] == -32601
     for method in ("subagent.steer", "subagent.tail"):
         ok, err = check_frame(json.dumps({"jsonrpc": "2.0", "id": 10, "method": method}), 1000)
         assert ok is None and json.loads(err)["error"]["code"] == -32601

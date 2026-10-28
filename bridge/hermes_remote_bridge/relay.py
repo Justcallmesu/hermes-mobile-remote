@@ -45,6 +45,9 @@ ALLOWED_METHODS = frozenset({
     # subagents the open chat delegated to: the roster (to catch up mid-run) and stopping one. Hermes
     # only answers for sessions this socket is attached to.
     "subagent.list", "subagent.interrupt",
+    # background processes the open chat started (terminal background=true): list with output tail,
+    # and stop one. Scoped by Hermes to the caller's session; the registry-wide kill stays on the PC.
+    "process.list", "process.kill",
     # slash commands, models, settings
     "slash.exec", "command.dispatch", "command.resolve", "commands.catalog", "complete.slash",
     "config.get", "config.set", "model.options",

@@ -93,6 +93,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.defaultMinSize
 import io.github.nideta231.hermesremote.ConnectionState
 import io.github.nideta231.hermesremote.PairedPc
 import io.github.nideta231.hermesremote.ProfilesState
@@ -167,6 +168,8 @@ fun SessionsPane(
     update: UpdateState? = null,
     onOpenUpdate: () -> Unit = {},
     groupOrder: List<String> = emptyList(),
+    /** Active (not paused) scheduled jobs; shown as a count on the Scheduled icon. */
+    scheduledCount: Int = 0,
 ) {
     var query by remember { mutableStateOf("") }
     var filterSheet by remember { mutableStateOf(false) }
@@ -225,7 +228,17 @@ fun SessionsPane(
             }
             actions.openPc?.let { IconButton(modifier = Modifier.size(40.dp), onClick = it) { Icon(Glyphs.Chip, "PC", modifier = Modifier.size(20.dp)) } }
             actions.openTerminal?.let { IconButton(modifier = Modifier.size(40.dp), onClick = it) { Icon(Glyphs.Terminal, "Terminal", modifier = Modifier.size(20.dp)) } }
-            IconButton(modifier = Modifier.size(40.dp), onClick = actions.openScheduled) { Icon(Glyphs.Clock, "Scheduled", modifier = Modifier.size(20.dp)) }
+            IconButton(modifier = Modifier.size(40.dp), onClick = actions.openScheduled) {
+                Box {
+                    Icon(Glyphs.Clock, "Scheduled", modifier = Modifier.size(20.dp))
+                    if (scheduledCount > 0) Box(Modifier.align(Alignment.TopEnd).offset(x = 7.dp, y = (-6).dp)
+                        .defaultMinSize(minWidth = 15.dp, minHeight = 15.dp).background(Gold, CircleShape).padding(horizontal = 3.dp),
+                        contentAlignment = Alignment.Center) {
+                        Text(if (scheduledCount > 99) "99+" else "$scheduledCount", color = MaterialTheme.colorScheme.surface,
+                            fontSize = 9.sp, fontWeight = FontWeight.Bold, lineHeight = 9.sp, maxLines = 1)
+                    }
+                }
+            }
             IconButton(modifier = Modifier.size(40.dp), onClick = actions.openSettings) { Icon(Glyphs.Settings, "Settings", modifier = Modifier.size(20.dp)) }
         }
         if (pcSheet) PcSheet(pcs, actions, onDismiss = { pcSheet = false })

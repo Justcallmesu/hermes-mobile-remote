@@ -158,6 +158,16 @@ object ThemePrefs {
             ?: Accent.entries.firstOrNull { it.name == legacy } ?: Accent.GOLD
         collapsedGroups = p.getStringSet("collapsed_groups", null)?.toSet() ?: emptySet()
         sessionsPerGroup = p.getInt("sessions_per_group", SESSION_FIRST_PAGE)
+        queueWhileBusy = p.getBoolean("queue_while_busy", false)
+    }
+
+    /** A message typed while the agent works: false steers the running turn, true queues it as the next turn. */
+    var queueWhileBusy by mutableStateOf(false)
+        private set
+
+    fun pickQueueWhileBusy(value: Boolean) {
+        queueWhileBusy = value
+        ctx?.let { prefs(it).edit().putBoolean("queue_while_busy", value).apply() }
     }
 
     /** Chats each drawer group shows before "Show more"; 0 shows all of them. */

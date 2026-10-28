@@ -26,6 +26,8 @@ sealed interface ChatItem {
         val status: ToolStatus = ToolStatus.OK,
         val durationSec: Double? = null,
         val callId: String? = null,
+        /** Pictures the tool returned (e.g. vision_analyze, screenshots), as `data:` urls. */
+        val images: List<String> = emptyList(),
     ) : ChatItem
     /** [decided]: the choice made (here or on another screen), null while it waits. */
     data class Approval(override val key: String, val request: ApprovalRequest, val decided: String? = null) : ChatItem
@@ -165,12 +167,36 @@ fun toolFailed(result: Any?): Boolean {
 
 private fun resultPreview(p: JSONObject): String? {
     p.str("summary")?.takeIf { it.isNotBlank() }?.let { return it }
-    p.str("result_text")?.takeIf { it.isNotBlank() }?.let { return it }
+    p.str("result_text")?.takeIf { it.isNotBlank() }?.let { return multimodal(it)?.first ?: it.take(4000) }
     return when (val r = p.opt("result")) {
         null, JSONObject.NULL -> null
-        is JSONObject -> r.str("output")?.takeIf { it.isNotBlank() } ?: r.toString()
-        else -> r.toString()
+        is JSONObject -> multimodal(r)?.first ?: r.str("output")?.takeIf { it.isNotBlank() } ?: r.toString()
+        else -> multimodal(r.toString())?.first ?: r.toString()
     }?.take(4000)
+}
+
+/** Pictures in a tool.complete event's result. */
+private fun resultImages(p: JSONObject): List<String> =
+    (multimodal(p.opt("result")) ?: multimodal(p.str("result_text")))?.second.orEmpty()
+
+/**
+ * A multimodal tool result (`{"_multimodal": true, "content": [{"type": "text"}, {"type": "image_url"}]}`,
+ * as a JSON object or its text) split into its text and its `data:` image urls; null for anything else.
+ */
+fun multimodal(raw: Any?): Pair<String, List<String>>? {
+    val o = when (raw) {
+        is JSONObject -> raw
+        is String -> raw.trim().takeIf { it.startsWith("{") && "_multimodal" in it }?.let { runCatching { JSONObject(it) }.getOrNull() }
+        else -> null
+    } ?: return null
+    if (!o.optBoolean("_multimodal")) return null
+    val parts = o.optJSONArray("content").objects()
+    val text = o.str("text_summary")?.takeIf { it.isNotBlank() }
+        ?: parts.filter { it.optString("type") == "text" }.joinToString("\n") { it.optString("text") }.trim()
+    val images = parts.filter { it.optString("type") == "image_url" }.mapNotNull { part ->
+        (part.optJSONObject("image_url")?.str("url") ?: part.str("image_url"))?.takeIf { it.startsWith("data:image/") }
+    }
+    return text to images
 }
 
 /** What a synthetic user row (written by Hermes, not typed by the user) shows as. */
@@ -257,8 +283,11 @@ object HistoryMapper {
  * uses the event's seq), so a list diff never confuses two items.
  */
 object LiveReducer {
-    fun apply(items: List<ChatItem>, type: String, p: JSONObject, key: String): List<ChatItem> {
+    fun apply(items: List<ChatItem>, type: String, p: JSONObject, seqKey: String): List<ChatItem> {
         val out = items.toMutableList()
+        // Event seqs restart (new run, reconnect replay), so "live-38" can already be on screen;
+        // a repeated LazyColumn key crashes the app. Suffix until every derived key is free.
+        val key = uniqueLiveKey(items, seqKey)
         fun seal() {
             for (i in out.indices.reversed()) {
                 when (val it = out[i]) {
@@ -319,10 +348,11 @@ object LiveReducer {
                 if (idx >= 0) {
                     val t = out[idx] as ChatItem.Tool
                     out[idx] = t.copy(status = if (failed) ToolStatus.FAILED else ToolStatus.OK,
-                        result = resultPreview(p) ?: t.result, durationSec = p.dbl("duration_s"))
+                        result = resultPreview(p) ?: t.result, durationSec = p.dbl("duration_s"),
+                        images = resultImages(p).ifEmpty { t.images })
                 } else {
                     out += ChatItem.Tool("live-$key", name ?: "tool", summarizeArgs(p.optJSONObject("args")), resultPreview(p),
-                        if (failed) ToolStatus.FAILED else ToolStatus.OK, p.dbl("duration_s"), callId)
+                        if (failed) ToolStatus.FAILED else ToolStatus.OK, p.dbl("duration_s"), callId, resultImages(p))
                 }
             }
             "message.complete" -> {
@@ -351,6 +381,16 @@ object LiveReducer {
             else -> return items
         }
         return out
+    }
+
+    /** [seqKey], or [seqKey].2, .3… when "live-<key>" (or its -n/-w notices) is already taken. */
+    internal fun uniqueLiveKey(items: List<ChatItem>, seqKey: String): String {
+        val used = items.mapTo(HashSet()) { it.key }
+        fun free(k: String) = "live-$k" !in used && "live-$k-n" !in used && "live-$k-w" !in used
+        if (free(seqKey)) return seqKey
+        var i = 2
+        while (!free("$seqKey.$i")) i++
+        return "$seqKey.$i"
     }
 
     /** A question Hermes asked arrived (or was replayed on resume): add it once. */
@@ -523,6 +563,7 @@ fun reuseKeys(old: List<ChatItem>, fresh: List<ChatItem>): List<ChatItem> {
             is ChatItem.Thinking -> take { it is ChatItem.Thinking }?.let { n.copy(key = it.key) } ?: n
             is ChatItem.Tool -> (take { it is ChatItem.Tool && (n.callId != null && it.callId == n.callId || it.name == n.name) } as ChatItem.Tool?)
                 ?.let { old -> n.copy(key = old.key, result = n.result ?: old.result, durationSec = n.durationSec ?: old.durationSec,
+                    images = n.images.ifEmpty { old.images },
                     status = if (old.status == ToolStatus.FAILED) ToolStatus.FAILED else n.status) } ?: n
             else -> n
         }

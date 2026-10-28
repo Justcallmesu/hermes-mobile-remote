@@ -47,6 +47,9 @@ object ImageAttachments {
     /** Bytes for [ref]: a phone `content://` uri, or a PC path that [fetch] gets over the bridge. */
     suspend fun load(context: Context, ref: String, fetch: suspend (String) -> ByteArray?): ByteArray? {
         cache.get(ref)?.let { return it }
+        if (ref.startsWith("data:")) return runCatching {
+            android.util.Base64.decode(ref.substringAfter(','), android.util.Base64.DEFAULT)
+        }.getOrNull()
         val bytes = runCatching {
             if (ref.startsWith("content://") || ref.startsWith("file://")) withContext(Dispatchers.IO) {
                 context.contentResolver.openInputStream(Uri.parse(ref))?.use { it.readBytes() }

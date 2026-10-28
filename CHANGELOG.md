@@ -20,7 +20,32 @@ authoritative history — this file only summarises what is worth knowing before
 - Updates: AppImage and Windows installer builds update from inside the app ("Restart to update" banner). `.deb` and dev builds show "New version X available" with a link to the release page. Desktop releases are tagged `desktop-v<version>`; the Android APK keeps `v<version>`.
 - Bridge: new `/v1/local/*` control API for the desktop app. It answers only a loopback peer that sends the local secret; the phone's API is unchanged.
 - Bridge: `hermes-remote-bridge supervise` restarts the bridge after a network change, backs off after crashes and stops instead of retrying when the port is already in use. Its log is `bridge.log` in the state directory, rotated at 2 MB.
-- Known limits: on Linux the app's and the bridge's "Trust this network?" prompts can both appear until the bridge's own prompt is removed. On Linux a click on the notification cannot be detected; the window opens when the notification appears.
+- Known limit: on Linux a click on the "Trust this network?" notification cannot be detected; the window opens when the notification appears.
+- Bridge: when no Hermes is running, it now starts Hermes through the `hermes` launcher if Hermes' venv is not under `hermes-agent/venv` (current Hermes installers). Before, the phone got "Hermes is not installed" and the chat socket was refused.
+- Windows: the phone's Terminal works (it closed itself as soon as it opened).
+- Windows: the phone's PC screen loads in well under a second (it took 9-16 s, so the app gave up), and "System Idle Process" is no longer listed as the top CPU user.
+
+## v1.25.1
+
+- Fixed a crash (app force closing) while a chat was streaming: a new run could reuse an
+  item id already on screen.
+- The Scheduled (clock) icon in the chat list now shows how many scheduled jobs are active.
+  Paused jobs are not counted.
+
+## v1.25.0
+
+- Pictures returned by tools (vision_analyze, screenshots, browser captures) now show as images
+  in the tool row instead of a wall of base64 text. Tap to open full screen.
+- While the agent works, a *Steer / Queue* switch sits beside Send. Steer folds your message into
+  the running reply (as before); Queue sends it as the next turn, run once the current reply ends.
+  The choice is remembered.
+
+## v1.24.0
+
+- Background processes: a chat's background jobs (dev servers, builds, watchers the agent started
+  in the background) now show under the transcript, like the subagent panel: the command, how long
+  it has run, exit code once it ends. Tap one to read its latest output; *Stop* kills it on the PC.
+  Updates every few seconds. Needs the updated bridge.
 
 ## v1.23.1
 

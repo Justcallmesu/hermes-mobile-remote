@@ -21,6 +21,8 @@ import io.github.nideta231.hermesremote.data.ProjectRef
 import io.github.nideta231.hermesremote.data.ProjectDetails
 import io.github.nideta231.hermesremote.data.SessionView
 import io.github.nideta231.hermesremote.data.Target
+import io.github.nideta231.hermesremote.data.BackgroundProcess
+import io.github.nideta231.hermesremote.data.BackgroundProcesses
 import io.github.nideta231.hermesremote.data.Subagent
 import io.github.nideta231.hermesremote.data.SubagentReducer
 import io.github.nideta231.hermesremote.data.SessionViewStore
@@ -134,6 +136,8 @@ data class ChatState(
     val files: List<Pair<String, String>> = emptyList(),
     /** Child agents this chat delegated to: running ones, and the ones that ended this turn. */
     val subagents: List<Subagent> = emptyList(),
+    /** Background processes this chat started (dev servers, builds): running ones and recent ends. */
+    val processes: List<BackgroundProcess> = emptyList(),
 ) {
     val busy: Boolean get() = status != "idle"
     val waiting: Boolean get() = status == "waiting" || LiveReducer.openApproval(items) != null ||
@@ -427,6 +431,7 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
             var tick = 0
             while (true) {
                 refreshActive()
+                refreshProcesses()
                 // Every ~30 s also re-sync the drawer (newest page + projects), in case a change event was missed.
                 if (++tick % 8 == 0) refreshSessionsHead()
                 delay(4_000)
@@ -510,6 +515,7 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
         refreshProfiles()
         refreshSessions()
         settings.refresh()
+        cron.refresh()
         discoverEndpoints()
     }
 
@@ -543,6 +549,7 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
                 refreshProfiles()
                 refreshSessions()
                 settings.refresh()
+                cron.refresh()
             }
             HostConnection.NeedsSignIn -> {
                 _gatewayHost.value = GatewayHostState(pr.id, pr.name.ifBlank { "Gateway" }, null, signedOut = true)
@@ -678,6 +685,7 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
                         refreshProfiles()
                         refreshSessions()
                         settings.refresh()
+                        cron.refresh()
                         discoverEndpoints()
                         return true
                     } catch (t: Throwable) {
@@ -939,6 +947,7 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
         refreshProfiles()
         refreshSessions()
         settings.refresh()
+        cron.refresh()
         val g = gateway ?: return
         if (g.state.value != GatewayState.OPEN) return // the reopen emits Incoming.Open, which resumes
         viewModelScope.launch {
@@ -1082,6 +1091,31 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
         }
     }
 
+    /** Re-read the open chat's background processes (polled with [startActivePolling], and on [resume]). */
+    private suspend fun refreshProcesses() {
+        val g = gateway ?: return
+        if (g.state.value != GatewayState.OPEN) return
+        val rid = _chat.value.runtimeId ?: return
+        val list = try {
+            BackgroundProcesses.parse(g.call("process.list", JSONObject().put("session_id", rid), 15_000))
+        } catch (t: Throwable) {
+            if (t is CancellationException) throw t
+            return  // an older bridge or Hermes, or the chat isn't live: keep what is shown
+        }
+        _chat.update { if (it.runtimeId != rid || it.processes == list) it else it.copy(processes = list) }
+    }
+
+    /** Kill one background process of the open chat. */
+    fun stopProcess(id: String) {
+        viewModelScope.launch {
+            try {
+                val r = rpc("process.kill", { JSONObject().put("session_id", it).put("process_id", id) })
+                if (r.optString("status") == "already_exited") _toast.value = "That process had already ended."
+            } catch (t: Throwable) { say(t) }
+            refreshProcesses()
+        }
+    }
+
     /** Stop one child agent; the chat's own turn goes on. */
     fun stopSubagent(id: String) {
         viewModelScope.launch {
@@ -1191,6 +1225,7 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
             }
             _chat.value.reasoning?.let { _reasoning.value = it }
             refreshSubagents()  // delegations run in the background, so also when the turn is over
+            viewModelScope.launch { refreshProcesses() }
             true
         } catch (t: Throwable) {
             if (t is CancellationException) throw t
@@ -1294,6 +1329,7 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
         vault.clear()
         refreshSessions()
         settings.refresh()
+        cron.refresh()
     }
 
     /** The paired PC and the Hermes profile on it that requests are for right now. */
@@ -1602,7 +1638,15 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
     }
 
     /** Submits [text]; the chat shows [display] (what the user typed) for it. */
-    private fun sendMessage(text: String, display: String) {
+    /** Queue [text] as the next turn while one runs (Hermes runs it once the current reply ends). */
+    fun queue(text: String) {
+        val trimmed = text.trim()
+        if (trimmed.isEmpty() && _chat.value.attachments.isEmpty() && _chat.value.files.isEmpty()) return
+        if (!_chat.value.busy || trimmed.startsWith("/")) return send(text)
+        sendMessage(trimmed, trimmed, queued = true)
+    }
+
+    private fun sendMessage(text: String, display: String, queued: Boolean = false) {
         val trimmed = text.trim()
         val pictures = _chat.value.attachments
         val files = _chat.value.files
@@ -1645,7 +1689,8 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
                 if (sent.isNotEmpty()) _chat.update { st -> st.copy(items = st.items.map {
                     if (it is ChatItem.User && it.key == key) it.copy(images = sent) else it }) }
                 val res = rpc("prompt.submit", { rid -> JSONObject().put("session_id", rid)
-                    .put("text", withFileRefs(trimmed.ifEmpty { if (pictures.isNotEmpty()) "What do you see in this image?" else "" }, refs)) }, 30_000)
+                    .put("text", withFileRefs(trimmed.ifEmpty { if (pictures.isNotEmpty()) "What do you see in this image?" else "" }, refs))
+                    .apply { if (queued) put("queued", true) } }, 30_000)
                 val status = res.str("status")
                 _chat.update { st ->
                     st.copy(sending = false, status = if (st.status == "idle") "working" else st.status,
