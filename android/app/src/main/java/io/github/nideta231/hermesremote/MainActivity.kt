@@ -85,6 +85,8 @@ import io.github.nideta231.hermesremote.ui.SignInAgainScreen
 import io.github.nideta231.hermesremote.ui.SessionActions
 import io.github.nideta231.hermesremote.ui.SessionsPane
 import io.github.nideta231.hermesremote.ui.UpdateSheet
+import io.github.nideta231.hermesremote.ui.ShareTargetSheet
+import io.github.nideta231.hermesremote.data.SharedFiles
 import io.github.nideta231.hermesremote.ui.UpdateStrip
 import io.github.nideta231.hermesremote.ui.NotesSheet
 import io.github.nideta231.hermesremote.data.fullChangelog
@@ -147,7 +149,8 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
-        handleIntent(intent)
+        // A recreated activity gets the launch intent again; its share was already offered.
+        handleIntent(intent, restored = savedInstanceState != null)
         Notifier.ensureChannels(this)
         // Upgrades never pass through pairing, so ask here too. Android stops prompting after two declines.
         if (vm.pairing.value != null) askForNotifications()
@@ -175,7 +178,8 @@ class MainActivity : ComponentActivity() {
         handleIntent(intent)
     }
 
-    private fun handleIntent(intent: Intent?) {
+    private fun handleIntent(intent: Intent?, restored: Boolean = false) {
+        if (intent != null && !restored && takeShare(intent)) return
         // Tapped a notification: go straight to the chat it is about.
         intent?.getStringExtra(Notifier.EXTRA_OPEN_SESSION)?.let { sid ->
             intent.removeExtra(Notifier.EXTRA_OPEN_SESSION)
@@ -194,6 +198,18 @@ class MainActivity : ComponentActivity() {
             if (vm.pairing.value != null || vm.gatewayHost.value != null) vm.startAddingPc()
             pairUri.value = data.toString()
         }
+    }
+
+    /** A share from another app (text, link, pictures, files). True when [intent] was one. */
+    private fun takeShare(intent: Intent): Boolean {
+        val shared = SharedFiles.fromIntent(this, intent) ?: return false
+        when {
+            vm.pairing.value == null && vm.gatewayHost.value?.signedOut != false ->
+                android.widget.Toast.makeText(this, "Pair Hermes Remote with your PC first, then share again.", android.widget.Toast.LENGTH_LONG).show()
+            shared.isEmpty -> android.widget.Toast.makeText(this, "Nothing Hermes Remote can use was shared.", android.widget.Toast.LENGTH_LONG).show()
+            else -> { vm.offerShare(shared); showChat.value = true }
+        }
+        return true
     }
 
     private fun scan() {
@@ -283,6 +299,7 @@ class MainActivity : ComponentActivity() {
         val pcState by vm.monitor.state.collectAsState()
         val features by vm.features.collectAsState()
         val unauthorized by vm.unauthorized.collectAsState()
+        val pendingShare by vm.pendingShare.collectAsState()
         var updateSheet by rememberSaveable { mutableStateOf(false) }
         var changelogSheet by rememberSaveable { mutableStateOf(false) }
 
@@ -410,6 +427,10 @@ class MainActivity : ComponentActivity() {
                     dismissButton = { TextButton(onClick = { vm.dismissUnauthorized(); page = Page.SETTINGS }) { Text("Later") } })
             }
             if (updateSheet && update.available != null) UpdateSheet(update, onInstall = vm.updates::installUpdate, onDismiss = { updateSheet = false })
+            pendingShare?.let { shared ->
+                ShareTargetSheet(shared, openChat = chat.title.takeIf { chat.sessionId != null },
+                    onPick = { toNew -> vm.acceptShare(toNew); page = Page.CHAT }, onDismiss = vm::cancelShare)
+            }
             if (changelogSheet) NotesSheet("Changelog", "You have ${update.installed}", remember { fullChangelog(vm.updates.changelog) },
                 onDismiss = { changelogSheet = false })
             update.whatsNew?.let { notes ->

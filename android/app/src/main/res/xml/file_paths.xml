@@ -2,4 +2,6 @@
 <!-- Chat files downloaded from the PC, handed to another app to open (read-only grant). -->
 <paths>
     <cache-path name="chat_files" path="chat-files/" />
+    <!-- Copies of what other apps shared, read when the message is sent. -->
+    <cache-path name="shared" path="shared/" />
 </paths>

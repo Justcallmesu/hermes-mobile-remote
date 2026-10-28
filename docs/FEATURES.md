@@ -24,6 +24,14 @@ task…", and the send button turns into a stop button. You can add instructions
 
 **Drafts.** An unsent message survives switching tabs, rotating the screen and restarting the app.
 
+**Share to Hermes.** Hermes Remote is in Android's share menu. Text and links (Chrome passes the
+page title and URL) go into the composer, pictures and files are attached as if picked in the app.
+A sheet asks whether it goes to a *New chat* or the chat on screen; nothing is sent until you tap
+Send. Shared files are copied into the app's cache straight away (the sending app's permission is
+short-lived) and deleted once sent or removed; leftovers are cleared on the next launch. Same
+limits as picking: 6 pictures and 6 files of up to 10 MB each, the rest is left out with a note.
+Sharing before the phone is paired only shows a hint.
+
 **Sessions.** Swipe in the drawer from the left edge to search, pin, rename and delete chats.
 Long-press a session for those actions; deleting asks for confirmation. A session that is working
 right now — on any screen — shimmers in the list, like the desktop sidebar.

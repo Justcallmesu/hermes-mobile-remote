@@ -36,6 +36,9 @@ import io.github.nideta231.hermesremote.data.CredentialStore
 import io.github.nideta231.hermesremote.data.CronJobs
 import io.github.nideta231.hermesremote.data.FileAttachments
 import io.github.nideta231.hermesremote.data.withFileRefs
+import io.github.nideta231.hermesremote.data.Share
+import io.github.nideta231.hermesremote.data.SharedContent
+import io.github.nideta231.hermesremote.data.SharedFiles
 import io.github.nideta231.hermesremote.data.ModelConfirm
 import io.github.nideta231.hermesremote.data.SystemSettings
 import io.github.nideta231.hermesremote.data.Dispatch
@@ -317,6 +320,11 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
     private val _toast = MutableStateFlow<String?>(null)
     val toast: StateFlow<String?> = _toast.asStateFlow()
 
+    /** Something another app shared, copied and waiting for the user to pick a chat for it. */
+    private val _pendingShare = MutableStateFlow<SharedContent?>(null)
+    val pendingShare: StateFlow<SharedContent?> = _pendingShare.asStateFlow()
+    private var shareJob: Job? = null
+
     /** The Scheduled page: cron jobs of the profile in use. */
     val cron = CronJobs(viewModelScope, source = { source as? io.github.nideta231.hermesremote.data.CronSource }, target = ::target,
         describe = ::describe, say = { _toast.value = it })
@@ -484,6 +492,8 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
     }
 
     init {
+        // Composer attachments don't outlive the process, so no copy from an earlier run is in use.
+        SharedFiles.clearAll(app)
         enterActiveHost()
         updates.showWhatsNew()
         ProcessLifecycleOwner.get().lifecycle.addObserver(foregroundObserver)
@@ -1697,6 +1707,7 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
                     .put("text", withFileRefs(trimmed.ifEmpty { if (pictures.isNotEmpty()) "What do you see in this image?" else "" }, refs))
                     .apply { if (queued) put("queued", true) } }, 30_000)
                 val status = res.str("status")
+                SharedFiles.delete(app, pictures + files.map { it.first })
                 _chat.update { st ->
                     st.copy(sending = false, status = if (st.status == "idle") "working" else st.status,
                         items = st.items.map { if (it is ChatItem.User && it.key == key) it.copy(pending = false) else it }.let { items ->
@@ -1821,7 +1832,10 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
         _chat.update { it.copy(attachments = (it.attachments + uris.take(room)).distinct()) }
     }
 
-    fun removeAttachment(uri: String) = _chat.update { it.copy(attachments = it.attachments - uri) }
+    fun removeAttachment(uri: String) {
+        _chat.update { it.copy(attachments = it.attachments - uri) }
+        SharedFiles.delete(app, listOf(uri))
+    }
 
     /** Files picked in the composer (any type); they go with the next message. */
     fun addFiles(uris: List<String>) {
@@ -1833,7 +1847,38 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
         _chat.update { st -> st.copy(files = (st.files + picked).distinctBy { it.first }) }
     }
 
-    fun removeFile(uri: String) = _chat.update { st -> st.copy(files = st.files.filterNot { it.first == uri }) }
+    fun removeFile(uri: String) {
+        _chat.update { st -> st.copy(files = st.files.filterNot { it.first == uri }) }
+        SharedFiles.delete(app, listOf(uri))
+    }
+
+    /** A share from another app: its streams are copied now, while the sender's grant still holds. */
+    fun offerShare(shared: SharedContent) {
+        cancelShare()
+        shareJob = viewModelScope.launch { _pendingShare.value = SharedFiles.copy(app, shared) }
+    }
+
+    /** Puts the pending share in the composer of a new chat, or of the chat on screen. Nothing is sent. */
+    fun acceptShare(toNewChat: Boolean) {
+        val shared = _pendingShare.value ?: return
+        _pendingShare.value = null
+        if (toNewChat) newChat()
+        if (shared.text.isNotEmpty()) setDraft(Share.mergeDraft(_chat.value.draft, shared.text))
+        addAttachments(shared.images)
+        addFiles(shared.files)
+        val kept = _chat.value.attachments + _chat.value.files.map { it.first }
+        val left = shared.uris - kept.toSet()
+        SharedFiles.delete(app, left)
+        val dropped = shared.dropped + left.size
+        if (dropped > 0) _toast.value = "Left out $dropped shared item${if (dropped == 1) "" else "s"}: " +
+            "too many, over ${FileAttachments.MAX_BYTES / (1024 * 1024)} MB, or unreadable."
+    }
+
+    fun cancelShare() {
+        shareJob?.cancel()
+        _pendingShare.value?.let { SharedFiles.delete(app, it.uris) }
+        _pendingShare.value = null
+    }
 
     /** The bubble text for a message with files: what was typed, then one line per file. */
     private fun fileLabel(display: String, files: List<Pair<String, String>>): String =
