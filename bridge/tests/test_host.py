@@ -74,28 +74,66 @@ def test_encoded_command_is_utf16le_base64():
     assert base64.b64decode(windows.encode_script("Get-Date")).decode("utf-16-le") == "Get-Date"
 
 
-def test_windows_network_identity(monkeypatch):
-    h = WindowsHost()
-    monkeypatch.setattr(windows, "ps_json", lambda s: [{"Name": "HomeWiFi", "InstanceID": "{GUID-1}"}])
-    assert h.network_profile("Wi-Fi") == ("{GUID-1}", "HomeWiFi")
-    monkeypatch.setattr(windows, "ps_json", lambda s: [])
-    assert h.network_profile("Wi-Fi") is None
+class FakeWinapi:
+    """Recorded fixture data standing in for the Win32/COM calls."""
+    def default_routes(self):
+        return [{"Alias": "Ethernet", "Gateway": "192.168.1.1", "Metric": 35},
+                {"Alias": "Wi-Fi", "Gateway": "192.168.1.1", "Metric": 55},
+                {"Alias": "VPN", "Gateway": "0.0.0.0", "Metric": 1}]
+
+    def neighbor_mac(self, ip):
+        return "AA-BB-CC-DD-EE-FF" if ip == "192.168.1.1" else ""
+
+    def network_profile(self, alias):
+        return ("{3F2A9C1E-0000-4B1B-9C11-AABBCCDDEEFF}", "HomeWiFi") if alias == "Wi-Fi" else None
+
+    def firewall_profiles_enabled(self):
+        return True
+
+    def firewall_rules(self):
+        return [{"Name": "Hermes Mobile Remote", "Enabled": True, "Inbound": True, "LocalPorts": "8650"},
+                {"Name": "Other", "Enabled": True, "Inbound": True, "LocalPorts": "9999"}]
+
+    def bridge_reachable(self):
+        return True
 
 
-def test_gateway_lookup_refuses_anything_but_an_ipv4_literal(monkeypatch):
-    called = []
-    monkeypatch.setattr(windows, "ps", lambda s, timeout=15.0: called.append(s) or "AA-BB-CC-DD-EE-FF")
+@pytest.fixture
+def fake_winapi(monkeypatch):
+    """Swap in the fake winapi and fail loudly if anything spawns a process."""
+    def spawned(*a, **k):
+        raise AssertionError("no subprocess/powershell allowed")
+    monkeypatch.setattr(windows.subprocess, "run", spawned)
+    monkeypatch.setattr(windows.subprocess, "Popen", spawned)
+    fake = FakeWinapi()
+    monkeypatch.setattr(windows, "winapi", fake)
+    return fake
+
+
+def test_windows_methods_return_the_old_shapes_from_fixture_data(fake_winapi):
     h = WindowsHost()
-    assert h.gateway_mac("1.1.1.1'; Remove-Item x #") is None and not called
+    assert h.default_route() == ("Ethernet", "192.168.1.1")
     assert h.gateway_mac("192.168.1.1") == "aa:bb:cc:dd:ee:ff"
-
-
-def test_service_state_maps_task_states(monkeypatch):
-    h = WindowsHost()
-    for ps_out, want in (("Running\r\n", "active"), ("Ready", "ready"), ("", "unknown")):
-        monkeypatch.setattr(windows, "ps", lambda s, timeout=15.0, out=ps_out: out)
-        assert h.service_state("hermes-remote-bridge") == want
+    assert h.gateway_mac("10.0.0.1") is None
+    assert h.gateway_mac("not an ip") is None
+    assert h.firewall_active() is True
+    assert h.firewall_rule_present(8650) is True and h.firewall_rule_present(9999) is False
+    assert h.service_state("hermes-remote-bridge") == "active"
     assert h.service_state("some.other.service") == "unknown"
+
+
+def test_windows_service_state_unknown_when_bridge_unreachable(fake_winapi, monkeypatch):
+    monkeypatch.setattr(fake_winapi, "bridge_reachable", lambda: False)
+    assert WindowsHost().service_state("hermes-remote-bridge") == "unknown"
+
+
+def test_connection_profile_id_keeps_the_instance_id_format(fake_winapi):
+    h = WindowsHost()
+    assert h.network_profile("Wi-Fi") == ("{3F2A9C1E-0000-4B1B-9C11-AABBCCDDEEFF}", "HomeWiFi")
+    assert h.network_profile("Nowhere") is None
+    from hermes_remote_bridge.host import winapi
+    assert winapi.instance_id("3f2a9c1e-0000-4b1b-9c11-aabbccddeeff") == "{3F2A9C1E-0000-4B1B-9C11-AABBCCDDEEFF}"
+    assert winapi.instance_id("{3f2a9c1e-0000-4b1b-9c11-aabbccddeeff}") == "{3F2A9C1E-0000-4B1B-9C11-AABBCCDDEEFF}"
 
 
 def test_same_ssid_different_router_is_a_different_network_on_windows(monkeypatch):

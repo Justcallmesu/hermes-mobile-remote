@@ -13,6 +13,7 @@ import shutil
 import subprocess
 from pathlib import Path
 
+from . import winapi
 from .base import Host
 
 TASK_NAME = "Hermes Mobile Remote"
@@ -100,29 +101,16 @@ class WindowsHost(Host):
         return _local_appdata() / "hermes"
 
     def default_route(self) -> tuple[str, str] | None:
-        rows = ps_json(
-            "Get-NetRoute -DestinationPrefix '0.0.0.0/0' -AddressFamily IPv4 | ForEach-Object { "
-            "$i = Get-NetIPInterface -InterfaceIndex $_.InterfaceIndex -AddressFamily IPv4; "
-            "[pscustomobject]@{Alias=$_.InterfaceAlias; Gateway=$_.NextHop; "
-            "Metric=([int]$_.RouteMetric + [int]$i.InterfaceMetric)} } | ConvertTo-Json -Compress")
-        return parse_default_routes(rows)
+        return parse_default_routes(winapi.default_routes())
 
     def gateway_mac(self, gateway: str) -> str | None:
         if not all(c.isdigit() or c == "." for c in gateway):
-            return None  # the value is interpolated into a script; only ever an IPv4 literal
-        out = ps(f"(Get-NetNeighbor -IPAddress '{gateway}' -AddressFamily IPv4 -ErrorAction SilentlyContinue | "
-                 "Where-Object { $_.State -notin 'Unreachable','Incomplete' } | "
-                 "Select-Object -First 1).LinkLayerAddress")
-        return normalise_mac(out)
+            return None  # only ever an IPv4 literal
+        return normalise_mac(winapi.neighbor_mac(gateway))
 
     def network_profile(self, interface: str) -> tuple[str, str] | None:
-        """(connection profile GUID, name) from Get-NetConnectionProfile; the name is the SSID on Wi-Fi."""
-        safe = interface.replace("'", "''")
-        rows = ps_json(f"Get-NetConnectionProfile -InterfaceAlias '{safe}' -ErrorAction SilentlyContinue | "
-                       "Select-Object Name, InstanceID | ConvertTo-Json -Compress")
-        if not rows or not rows[0].get("InstanceID"):
-            return None
-        return str(rows[0]["InstanceID"]), str(rows[0].get("Name") or interface)
+        """(connection profile GUID, name) from the Network List Manager; the name is the SSID on Wi-Fi."""
+        return winapi.network_profile(interface)
 
     def tailscale_cli(self) -> str | None:
         found = shutil.which("tailscale")
@@ -132,12 +120,10 @@ class WindowsHost(Host):
         return str(default) if default.exists() else None
 
     def service_state(self, name: str) -> str:
-        """State of the Scheduled Task that runs the bridge ("active" when running). Other service
-        names are not tracked on Windows: callers fall back to probing the port."""
+        """"active" when the bridge answers; other service names are not tracked on Windows."""
         if name != "hermes-remote-bridge":
             return "unknown"
-        state = ps(f"(Get-ScheduledTask -TaskName '{TASK_NAME}' -ErrorAction SilentlyContinue).State").strip()
-        return {"Running": "active", "": "unknown"}.get(state, state.lower())
+        return "active" if winapi.bridge_reachable() else "unknown"
 
     # ------------------------------------------------------------------ interactive use
 
@@ -164,13 +150,12 @@ class WindowsHost(Host):
     # ------------------------------------------------------------------ firewall
 
     def firewall_active(self) -> bool:
-        return ps("(Get-NetFirewallProfile | Where-Object { $_.Enabled -eq 'True' }).Count").strip() not in ("", "0")
+        return winapi.firewall_profiles_enabled()
 
     def firewall_rule_present(self, port: int) -> bool:
-        out = ps(f"Get-NetFirewallRule -DisplayName '{FIREWALL_RULE}' -ErrorAction SilentlyContinue | "
-                 "Where-Object { $_.Enabled -eq 'True' -and $_.Direction -eq 'Inbound' } | "
-                 "Get-NetFirewallPortFilter | Select-Object -ExpandProperty LocalPort")
-        return str(port) in out.split()
+        return any(r["Name"] == FIREWALL_RULE and r["Enabled"] and r["Inbound"]
+                   and str(port) in str(r["LocalPorts"]).replace(" ", "").split(",")
+                   for r in winapi.firewall_rules())
 
     def run_elevated(self, script: str) -> bool:
         """Run ``script`` in an elevated PowerShell (one UAC prompt); True when it exits 0."""
