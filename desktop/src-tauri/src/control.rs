@@ -85,6 +85,12 @@ pub fn installed_list_in(config_dir: &Path) -> Option<String> {
     std::fs::read_to_string(config_dir.join("INSTALLED.txt")).ok()
 }
 
+#[cfg(target_os = "linux")]
+fn backend() -> impl Control {
+    crate::linux_service::LinuxControl(crate::linux_service::Systemd::from_env())
+}
+
+#[cfg(not(target_os = "linux"))]
 fn backend() -> impl Control {
     Unsupported
 }

@@ -3,6 +3,7 @@
 
 pub mod bridge;
 pub mod control;
+pub mod linux_service;
 pub mod setup;
 pub mod version;
 
@@ -38,6 +39,8 @@ pub fn run() {
             control::open_logs,
             control::set_terminal_shell,
             control::get_installed_list,
+            linux_service::get_linger,
+            linux_service::set_linger,
             setup::setup_state,
             setup::setup_run
         ])

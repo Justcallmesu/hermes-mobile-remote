@@ -329,6 +329,10 @@ pub fn resource_bridge(resource_dir: Option<PathBuf>) -> PathBuf {
 fn with_real<R>(resource: PathBuf, report: &dyn Fn(Progress), f: impl FnOnce(&Setup) -> R) -> R {
     let paths = BridgePaths::from_env();
     let bridge = LocalHttp::from_paths(&paths);
+    #[cfg(target_os = "linux")]
+    let os_step = crate::linux_service::real_os_step();
+    #[cfg(not(target_os = "linux"))]
+    let os_step = NoOsStep;
     let s = Setup {
         os: Os::current(),
         arch: std::env::consts::ARCH.to_string(),
@@ -337,7 +341,7 @@ fn with_real<R>(resource: PathBuf, report: &dyn Fn(Progress), f: impl FnOnce(&Se
         downloader: &UreqDownloader,
         runner: &SystemRunner,
         fs: &RealFs,
-        os_step: &NoOsStep,
+        os_step: &os_step,
         bridge: &bridge,
         report,
         wait: BRIDGE_WAIT,

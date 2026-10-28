@@ -21,6 +21,8 @@ export const bridgeStart = () => invoke("bridge_start");
 export const bridgeStop = () => invoke("bridge_stop");
 export const getSettings = () => invoke("get_settings");
 export const setStartAtLogon = (on) => invoke("set_start_at_logon", { on });
+export const getLinger = () => invoke("get_linger");
+export const setLinger = (on) => invoke("set_linger", { on });
 export const firewallFix = () => invoke("firewall_fix");
 export const openLogs = () => invoke("open_logs");
 export const setTerminalShell = (value) => invoke("set_terminal_shell", { value });

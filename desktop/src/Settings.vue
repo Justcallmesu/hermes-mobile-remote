@@ -9,10 +9,13 @@ import {
   firewallFix,
   openLogs,
   getInstalledList,
+  getLinger,
+  setLinger,
 } from "./api.js";
 
 defineEmits(["setup"]);
 const settings = ref({ start_at_logon: false, terminal_shell: "" });
+const linger = ref(false);
 const installed = ref(null);
 const checks = ref([]);
 const pending = ref(false);
@@ -49,6 +52,7 @@ onMounted(async () => {
   await guard(async () => {
     settings.value = { ...settings.value, ...(await getSettings()) };
     installed.value = await getInstalledList();
+    linger.value = (await getLinger()) === true;
   });
 });
 </script>
@@ -76,9 +80,35 @@ onMounted(async () => {
         type="checkbox"
         data-test="logon"
         :checked="settings.start_at_logon"
-        @change="guard(() => setStartAtLogon($event.target.checked))"
+        @change="
+          guard(async () => {
+            const on = $event.target.checked;
+            await setStartAtLogon(on);
+            settings.start_at_logon = on;
+          })
+        "
       />
       Start at logon
+    </label>
+    <label v-if="settings.start_at_logon">
+      <input
+        type="checkbox"
+        data-test="linger"
+        :checked="linger"
+        @change="
+          guard(async () => {
+            const on = $event.target.checked;
+            try {
+              await setLinger(on);
+              linger = on;
+            } catch (e) {
+              $event.target.checked = linger;
+              throw e;
+            }
+          })
+        "
+      />
+      Keep running after logout
     </label>
     <label>
       Terminal shell

@@ -236,4 +236,22 @@ describe("Settings", () => {
     expect(invoke).toHaveBeenCalledWith("set_terminal_shell", { value: "zsh" });
     expect(w.find('[data-test="error"]').text()).toContain("not available yet");
   });
+
+  it("keep running after logout shows only with start at login, and a refusal is explained", async () => {
+    answers.get_settings = { start_at_logon: false, terminal_shell: null };
+    answers.get_linger = false;
+    const w = await open("settings");
+    expect(w.find('[data-test="linger"]').exists()).toBe(false);
+    await w.find('[data-test="logon"]').setValue(true);
+    await flushPromises();
+    expect(w.find('[data-test="linger"]').exists()).toBe(true);
+    answers.set_linger = new Error("needs your password: run `loginctl enable-linger` in a terminal");
+    await w.find('[data-test="linger"]').setValue(true);
+    await flushPromises();
+    expect(invoke).toHaveBeenCalledWith("set_linger", { on: true });
+    expect(w.find('[data-test="error"]').text()).toContain("needs your password: run `loginctl enable-linger`");
+    await w.find('[data-test="logon"]').setValue(false);
+    await flushPromises();
+    expect(w.find('[data-test="linger"]').exists()).toBe(false);
+  });
 });
