@@ -1,6 +1,6 @@
 <script setup>
 import { ref, onMounted } from "vue";
-import { updateCheck, updateInstall } from "./api.js";
+import { updateCheck, updateInstall, openUrl } from "./api.js";
 
 const info = ref(null);
 const error = ref("");
@@ -29,7 +29,7 @@ async function restart() {
 <template>
   <aside v-if="info" class="update-banner" data-test="update-banner">
     <span>New version {{ info.version }} available</span>
-    <a v-if="info.kind === 'link'" :href="info.url" target="_blank" rel="noopener" data-test="update-link"
+    <a v-if="info.kind === 'link'" :href="info.url" data-test="update-link" @click.prevent="openUrl(info.url)"
       >View release</a
     >
     <button v-else :disabled="busy" data-test="update-restart" @click="restart">Restart to update</button>

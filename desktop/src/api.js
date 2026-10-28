@@ -36,6 +36,8 @@ export const setupRun = (update = false) => invoke("setup_run", { update });
 // Updates: check answers null or {version, kind: "link"|"restart", url}; install restarts the app.
 export const updateCheck = () => invoke("update_check");
 export const updateInstall = () => invoke("update_install");
+// Opens a URL in the system browser (a target=_blank link does nothing inside the webview).
+export const openUrl = (url) => invoke("plugin:shell|open", { path: url });
 export async function onSetupProgress(cb) {
   const { listen } = await import("@tauri-apps/api/event");
   return listen("setup-progress", (e) => cb(e.payload));

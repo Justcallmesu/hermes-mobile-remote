@@ -203,6 +203,8 @@ describe("UpdateBanner", () => {
     w = await open();
     expect(w.find('[data-test="update-banner"]').text()).toContain("New version 0.2.0 available");
     expect(w.find('[data-test="update-link"]').attributes("href")).toBe("https://example.test/desktop-v0.2.0");
+    await w.find('[data-test="update-link"]').trigger("click");
+    expect(invoke).toHaveBeenCalledWith("plugin:shell|open", { path: "https://example.test/desktop-v0.2.0" });
     expect(w.find('[data-test="update-restart"]').exists()).toBe(false);
 
     answers.update_check = { version: "0.3.0", kind: "restart", url: null };
