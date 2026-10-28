@@ -77,9 +77,22 @@ impl RunModeSwitcher<'_> {
                 if self.service.status()? {
                     return Err("the systemd service is still running; not starting a second bridge".into());
                 }
-                self.child.spawn()?;
-                if self.child.exit_code() == Some(PORT_CONFLICT_CODE) {
-                    return Err(PORT_CONFLICT.into());
+                let failure = match self.child.spawn() {
+                    Err(e) => Some(e),
+                    Ok(()) => self.child.exit_code().map(|code| {
+                        if code == PORT_CONFLICT_CODE {
+                            PORT_CONFLICT.to_string()
+                        } else {
+                            format!("the bridge exited early with code {code}")
+                        }
+                    }),
+                };
+                if let Some(err) = failure {
+                    // Put the old owner back; the saved mode stays always-on.
+                    let _ = self.child.stop();
+                    let _ = self.service.enable_now();
+                    let _ = write_mode(self.config_dir, RunMode::AlwaysOn);
+                    return Err(err);
                 }
             }
             RunMode::AlwaysOn => {
@@ -400,6 +413,47 @@ mod tests {
         assert_eq!(calls, ["child.stop", "service.enable_now"]);
         assert_eq!(read_mode(dir.path()), RunMode::AlwaysOn);
         assert_eq!(read_mode(tempfile::tempdir().unwrap().path()), RunMode::AlwaysOn);
+    }
+
+    #[test]
+    fn a_port_conflict_restores_the_service_and_keeps_always_on() {
+        let (r, calls, dir) = switch(RunMode::AppOnly, Some(PORT_CONFLICT_CODE));
+        assert_eq!(r.unwrap_err(), PORT_CONFLICT);
+        assert_eq!(calls[calls.len() - 2..], ["child.stop", "service.enable_now"]);
+        assert_eq!(read_mode(dir.path()), RunMode::AlwaysOn);
+    }
+
+    struct SpawnFails(Log);
+    impl ChildSupervisor for SpawnFails {
+        fn spawn(&self) -> Result<(), String> {
+            Err("could not start the bridge: boom".into())
+        }
+        fn stop(&self) -> Result<(), String> {
+            self.0.lock().unwrap().push("child.stop".into());
+            Ok(())
+        }
+        fn exit_code(&self) -> Option<i32> {
+            None
+        }
+    }
+
+    #[test]
+    fn another_early_exit_or_a_spawn_error_also_restores_the_service() {
+        let (r, calls, dir) = switch(RunMode::AppOnly, Some(1));
+        let err = r.unwrap_err();
+        assert!(err.contains("exited") && err.contains('1') && err != PORT_CONFLICT, "{err}");
+        assert_eq!(calls[calls.len() - 2..], ["child.stop", "service.enable_now"]);
+        assert_eq!(read_mode(dir.path()), RunMode::AlwaysOn);
+
+        let log: Log = Arc::default();
+        let dir = tempfile::tempdir().unwrap();
+        let service = FakeService { log: log.clone(), active: false };
+        let child = SpawnFails(log.clone());
+        let err = RunModeSwitcher { service: &service, child: &child, config_dir: dir.path() }.set(RunMode::AppOnly).unwrap_err();
+        assert!(err.contains("boom"), "{err}");
+        let calls = log.lock().unwrap().clone();
+        assert_eq!(calls[calls.len() - 2..], ["child.stop", "service.enable_now"]);
+        assert_eq!(read_mode(dir.path()), RunMode::AlwaysOn);
     }
 
     struct FakeProc;
