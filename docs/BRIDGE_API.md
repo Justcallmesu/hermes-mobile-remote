@@ -239,10 +239,15 @@ same one the desktop app uses. The bridge adds only:
 6. **Sidebar:** `session.active_list` gives what is working right now; `sessions.changed` events say
    when to re-fetch `/v1/sessions`.
 7. **Subagents:** `subagent.list {session_id}` returns the chat's live children (`subagents[]`:
-   `subagent_id, goal, model, status, tool_count, last_tool, depth, started_at`) and recently failed
-   background delegations. `subagent.interrupt {session_id, subagent_id}` stops one (`{found}`); the
-   chat's own turn goes on. Hermes answers both only for sessions this socket is attached to.
-   Steering a child (`subagent.steer`) and reading its transcript (`subagent.tail`) stay on the PC.
+   `subagent_id, goal, model, status, tool_count, last_tool, depth, started_at, accepting_steer`) and
+   recently failed background delegations. `subagent.interrupt {session_id, subagent_id}` stops one
+   (`{found}`); the chat's own turn goes on. `subagent.tail {session_id, subagent_id}` reads the end
+   of a running child's live transcript (`{available, text, truncated}`, the last 16 KB; `available`
+   is false before it starts writing and once it ended). `subagent.steer {session_id, subagent_id,
+   text}` queues an instruction the child reads after its current tool call (`{status: "queued" |
+   "rejected"}`; queued is not a delivery receipt). The bridge refuses steer text that is not a
+   non-blank string of at most 4000 characters (`-32602`). Hermes answers all four only for sessions
+   this socket is attached to.
 
 ### Events the app renders
 

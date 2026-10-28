@@ -17,7 +17,9 @@ with their arguments, result and duration; a running card shimmers, a failed one
 **Subagents.** When the agent hands work to subagents (`delegate_task`), a card under the chat
 lists them: each one's task, the tool it is using, its tool count, model and running time. Ones
 that finish turn green (tap for their answer) or red. *Stop* ends one subagent and leaves the chat
-running. Opening a chat while subagents run shows them straight away.
+running. *Output* opens a running subagent's live transcript, refreshed every couple of seconds
+while it is open. *Steer* sends it an instruction it reads after its current step (hidden when
+Hermes says it no longer takes any). Opening a chat while subagents run shows them straight away.
 
 **Steering and stopping.** While a turn is in flight the composer becomes "Steer the running
 task…", and the send button turns into a stop button. You can add instructions mid-turn or cancel.

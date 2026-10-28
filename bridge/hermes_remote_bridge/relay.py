@@ -43,9 +43,10 @@ ALLOWED_METHODS = frozenset({
     "projects.add_folder", "projects.remove_folder", "projects.set_primary",
     # turns
     "prompt.submit", "prompt.btw", "prompt.background", "session.interrupt", "session.steer", "session.redirect",
-    # subagents the open chat delegated to: the roster (to catch up mid-run) and stopping one. Hermes
-    # only answers for sessions this socket is attached to.
-    "subagent.list", "subagent.interrupt",
+    # subagents the open chat delegated to: the roster (to catch up mid-run), stopping one, steering
+    # one and reading its live transcript tail. Hermes only answers for sessions this socket is
+    # attached to.
+    "subagent.list", "subagent.interrupt", "subagent.steer", "subagent.tail",
     # background processes the open chat started (terminal background=true): list with output tail,
     # and stop one. Scoped by Hermes to the caller's session; the registry-wide kill stays on the PC.
     "process.list", "process.kill",
@@ -63,6 +64,9 @@ ALLOWED_METHODS = frozenset({
 
 # config.set keys the phone may change: the chat's model, reasoning and fast mode.
 ALLOWED_CONFIG_KEYS = frozenset({"model", "reasoning", "fast", "yolo"})
+# Steering text is an instruction folded into a child's next tool round, not a document: a cap well
+# under the frame limit keeps a pasted log from bloating the child's context.
+MAX_STEER_CHARS = 4000
 _SERVER_REQUEST_ID = re.compile(r"^srq-[0-9a-f]{6,32}$")
 
 CLOSE_UNAVAILABLE = 1013  # try again later: Hermes is starting or gone
@@ -111,6 +115,8 @@ def inspect_frame(raw: str, max_bytes: int, allowed_profiles: Iterable[str] = ()
         key = (params or {}).get("key") if isinstance(params, dict) else None
         if key not in ALLOWED_CONFIG_KEYS:
             return Verdict(None, _error(rid, -32602, f"config key not available from the phone: {key}"), "config_key")
+    if method == "subagent.steer" and (problem := _steer_text_problem(params)):
+        return Verdict(None, _error(rid, -32602, problem), "steer_text")
     return Verdict(raw, None, frame=frame)
 
 
@@ -118,6 +124,15 @@ def check_frame(raw: str, max_bytes: int, allowed_profiles: Iterable[str] = ()) 
     """(frame to forward, error reply to send back) for one phone→Hermes frame."""
     verdict = inspect_frame(raw, max_bytes, allowed_profiles)
     return verdict.forward, verdict.reply
+
+
+def _steer_text_problem(params: Any) -> str | None:
+    text = params.get("text") if isinstance(params, dict) else None
+    if not isinstance(text, str) or not text.strip():
+        return "subagent.steer needs text"
+    if len(text) > MAX_STEER_CHARS:
+        return f"steer text longer than {MAX_STEER_CHARS} characters"
+    return None
 
 
 class Relay:

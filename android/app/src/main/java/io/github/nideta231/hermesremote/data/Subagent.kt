@@ -20,7 +20,12 @@ data class Subagent(
     val durationSec: Double? = null,
     /** The child's final answer, cut short, once it ended. */
     val summary: String? = null,
+    /** Hermes takes steering text for it; null when unknown (only `subagent.list` says). */
+    val acceptingSteer: Boolean? = null,
 ) {
+    /** Offer *Steer* unless Hermes said it won't take it. */
+    val steerable: Boolean get() = running && acceptingSteer != false
+
     val running: Boolean get() = status == "running" || status == "queued"
     val failed: Boolean get() = status in FAILED
 
@@ -68,7 +73,9 @@ object SubagentReducer {
             Subagent(id, r.str("goal") ?: prev?.goal.orEmpty(), r.str("status") ?: "running",
                 r.str("model") ?: prev?.model, r.optInt("tool_count", prev?.toolCount ?: 0),
                 r.str("last_tool") ?: prev?.lastTool, r.optInt("depth", prev?.depth ?: 0),
-                r.dbl("started_at")?.let { (it * 1000).toLong() } ?: prev?.startedAt)
+                r.dbl("started_at")?.let { (it * 1000).toLong() } ?: prev?.startedAt,
+                acceptingSteer = if (r.has("accepting_steer") && !r.isNull("accepting_steer")) r.optBoolean("accepting_steer")
+                    else prev?.acceptingSteer)
         }
         val liveIds = live.map { it.id }.toSet()
         return known.filter { it.id !in liveIds && !it.running } + live

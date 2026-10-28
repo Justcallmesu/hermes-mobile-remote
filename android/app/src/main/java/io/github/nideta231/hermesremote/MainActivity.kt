@@ -362,6 +362,7 @@ class MainActivity : ComponentActivity() {
         )
         val chatActions = ChatActions(
             send = vm::send, stop = vm::stop, steer = vm::steer, queue = vm::queue, approve = vm::answerApproval, stopSubagent = vm::stopSubagent, stopProcess = vm::stopProcess,
+            followSubagent = vm.subagentOutput::follow, steerSubagent = vm.subagentOutput::steer,
             answerClarify = vm::answerClarify, draft = vm::setDraft,
             togglePin = vm::togglePin, newChat = { vm.newChat() },
             openDrawer = { vm.refreshSessions(); scope.launch { drawer.open() } },

@@ -24,6 +24,7 @@ import io.github.nideta231.hermesremote.data.Target
 import io.github.nideta231.hermesremote.data.BackgroundProcess
 import io.github.nideta231.hermesremote.data.BackgroundProcesses
 import io.github.nideta231.hermesremote.data.Subagent
+import io.github.nideta231.hermesremote.data.SubagentOutput
 import io.github.nideta231.hermesremote.data.SubagentReducer
 import io.github.nideta231.hermesremote.data.SessionViewStore
 import io.github.nideta231.hermesremote.data.DrawerCache
@@ -340,6 +341,12 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
         describe = ::describe, say = { _toast.value = it },
         onDefaultModel = { option -> _models.update { cat -> cat?.copy(options = cat.options.map { o ->
             o.copy(current = o.id == option.id && o.provider == option.provider) }) } })
+
+    /** Reading and steering the open chat's running subagents. */
+    val subagentOutput = SubagentOutput(viewModelScope, rpc = { method, params -> rpc(method, params) },
+        chatId = { _chat.value.sessionId },
+        live = { gateway?.state?.value == GatewayState.OPEN && _chat.value.runtimeId != null },
+        describe = ::describe, say = { _toast.value = it })
 
     /** The PC page: live stats, history, processes and Claude usage (bridge 1.18+). */
     val monitor = PcMonitor(viewModelScope, client = { client }, describe = ::describe, say = { _toast.value = it })
