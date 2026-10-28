@@ -71,10 +71,17 @@ impl RunModeSwitcher<'_> {
     pub fn set(&self, mode: RunMode) -> Result<(), String> {
         match mode {
             RunMode::AppOnly => {
-                self.service.stop()?;
-                self.service.disable()?;
-                if self.service.status()? {
-                    return Err("the systemd service is still running; not starting a second bridge".into());
+                // Any failure before the child is up puts the service back as it was.
+                let handover = (|| {
+                    self.service.stop()?;
+                    self.service.disable()?;
+                    if self.service.status()? {
+                        return Err("the systemd service is still running; not starting a second bridge".into());
+                    }
+                    Ok(())
+                })();
+                if let Err(err) = handover {
+                    return Err(self.restore_always_on(err));
                 }
                 let failure = match self.child.spawn() {
                     Err(e) => Some(e),
@@ -87,11 +94,8 @@ impl RunModeSwitcher<'_> {
                     }),
                 };
                 if let Some(err) = failure {
-                    // Put the old owner back; the saved mode stays always-on.
                     let _ = self.child.stop();
-                    let _ = self.service.enable_now();
-                    let _ = write_mode(self.config_dir, RunMode::AlwaysOn);
-                    return Err(err);
+                    return Err(self.restore_always_on(err));
                 }
             }
             RunMode::AlwaysOn => {
@@ -100,6 +104,16 @@ impl RunModeSwitcher<'_> {
             }
         }
         write_mode(self.config_dir, mode)
+    }
+
+    /// Put the systemd service back (enabled and running); the saved mode stays always-on.
+    /// A failed restore is added to the error so the user sees it.
+    fn restore_always_on(&self, err: String) -> String {
+        let _ = write_mode(self.config_dir, RunMode::AlwaysOn);
+        match self.service.enable_now() {
+            Ok(()) => err,
+            Err(e) => format!("{err}; restarting the systemd service also failed: {e}"),
+        }
     }
 }
 
@@ -412,6 +426,21 @@ mod tests {
         assert_eq!(calls, ["child.stop", "service.enable_now"]);
         assert_eq!(read_mode(dir.path()), RunMode::AlwaysOn);
         assert_eq!(read_mode(tempfile::tempdir().unwrap().path()), RunMode::AlwaysOn);
+    }
+
+    #[test]
+    fn a_service_still_running_after_stop_is_restored_and_no_child_starts() {
+        let log: Log = Default::default();
+        let service = FakeService { log: log.clone(), active: true };
+        let child = FakeChild { log: log.clone(), code: None };
+        let dir = tempfile::tempdir().unwrap();
+        let sw = RunModeSwitcher { service: &service, child: &child, config_dir: dir.path() };
+        let err = sw.set(RunMode::AppOnly).unwrap_err();
+        assert!(err.contains("still running"), "{err}");
+        let calls = log.lock().unwrap().clone();
+        assert!(!calls.contains(&"child.spawn".to_string()), "{calls:?}");
+        assert_eq!(calls.last().unwrap(), "service.enable_now");
+        assert_eq!(read_mode(dir.path()), RunMode::AlwaysOn);
     }
 
     #[test]
