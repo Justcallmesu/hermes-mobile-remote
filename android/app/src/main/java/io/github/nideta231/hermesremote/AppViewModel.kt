@@ -10,6 +10,7 @@ import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.ProcessLifecycleOwner
 import androidx.lifecycle.viewModelScope
 import io.github.nideta231.hermesremote.data.mergeSessionHead
+import io.github.nideta231.hermesremote.data.sessionParams
 import io.github.nideta231.hermesremote.data.BridgeClient
 import io.github.nideta231.hermesremote.data.PcMonitor
 import io.github.nideta231.hermesremote.data.ClaudeUsage
@@ -1186,7 +1187,7 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
     private suspend fun resume(storedId: String, quiet: Boolean = false): Boolean {
         val g = gateway ?: return false
         return try {
-            val r = g.call("session.resume", scoped(JSONObject().put("session_id", storedId).put("cols", 96)), 60_000)
+            val r = g.call("session.resume", sessionParams(profile).put("session_id", storedId), 60_000)
             if (_chat.value.sessionId != storedId) return false
             val rid = r.getString("session_id")
             val info = r.optJSONObject("info") ?: JSONObject()
@@ -1251,7 +1252,7 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
             throw IOException("Couldn't open this chat on the PC")
         }
         val choice = _modelChoice.value
-        val params = scoped(JSONObject().put("source", "desktop").put("cols", 96)).apply {
+        val params = sessionParams(profile).apply {
             choice?.let { put("model", it.id).put("provider", it.provider) }
             _reasoning.value?.let { put("reasoning_effort", it) }
             _chat.value.project?.path?.let { put("cwd", it) }
