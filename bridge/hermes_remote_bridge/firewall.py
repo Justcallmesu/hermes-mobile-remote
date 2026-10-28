@@ -2,7 +2,7 @@
 
 The bridge binds the Wi-Fi address only on trusted networks, so allowing the port from private
 ranges does not expose it elsewhere. Changes go through pkexec on Linux (one polkit password
-prompt) or an elevated PowerShell on Windows (one UAC prompt), and are never made silently.
+prompt) or the bridge CLI relaunched through UAC on Windows (one prompt), and are never made silently.
 """
 from __future__ import annotations
 
@@ -92,9 +92,7 @@ def open_commands(kind: str, port: int) -> list[list[str]]:
                 for r in PRIVATE_RANGES]
         return cmds + [["firewall-cmd", "--reload"]]
     if kind == "windows":
-        return [["New-NetFirewallRule", "-DisplayName", f"'{COMMENT}'", "-Direction", "Inbound", "-Action", "Allow",
-                 "-Protocol", "TCP", "-LocalPort", str(port), "-Profile", "Private",
-                 "-RemoteAddress", ",".join(PRIVATE_RANGES)]]
+        return [["hermes-remote-bridge", "firewall", "add", "--port", str(port), "--elevated"]]
     return []
 
 
@@ -102,7 +100,7 @@ def open_port(kind: str, port: int) -> bool:
     """Run :func:`open_commands` with elevated rights (pkexec / UAC). Returns True on success."""
     cmds = open_commands(kind, port)
     if kind == "windows":
-        return bool(cmds) and host().run_elevated("\n".join(" ".join(c) for c in cmds))
+        return bool(cmds) and host().elevate_cli(cmds[0][1:])
     if not cmds or not shutil.which("pkexec"):
         return False
     script = " && ".join(" ".join(_quote(a) for a in c) for c in cmds)

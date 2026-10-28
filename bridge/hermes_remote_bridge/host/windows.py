@@ -12,6 +12,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 from . import winapi
@@ -159,6 +160,21 @@ class WindowsHost(Host):
         return any(r["Name"] == FIREWALL_RULE and r["Enabled"] and r["Inbound"]
                    and str(port) in str(r["LocalPorts"]).replace(" ", "").split(",")
                    for r in winapi.firewall_rules())
+
+    def firewall_add(self, port: int) -> bool:
+        """Create our rule (Private profile, private ranges). Only works in an elevated process."""
+        from ..firewall import COMMENT, PRIVATE_RANGES  # firewall imports this package
+        return winapi.firewall_add_rule(FIREWALL_RULE, COMMENT, port, ",".join(PRIVATE_RANGES))
+
+    def firewall_remove(self) -> bool:
+        return winapi.firewall_remove_rules(FIREWALL_RULE)
+
+    def elevate_cli(self, args: list[str]) -> bool:
+        """Relaunch this venv's bridge exe with ``args`` through the UAC prompt (one prompt, no
+        PowerShell); True when it exits 0, False when cancelled or failed."""
+        own = Path(sys.executable).with_name("hermes-remote-bridge.exe")
+        exe = str(own) if own.exists() else sys.argv[0]
+        return winapi.run_elevated(exe, subprocess.list2cmdline(args)) == 0
 
     def run_elevated(self, script: str) -> bool:
         """Run ``script`` in an elevated PowerShell (one UAC prompt); True when it exits 0."""

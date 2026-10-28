@@ -18,6 +18,10 @@ AF_INET = 2
 NETWORK_LIST_MANAGER_CLSID = "{DCB00C01-570F-4A9B-8D69-199FDBA5723B}"
 FW_PROFILES = (1, 2, 4)  # NET_FW_PROFILE2_DOMAIN, PRIVATE, PUBLIC
 FW_DIRECTION_IN = 1
+FW_PROTOCOL_TCP = 6
+FW_ACTION_ALLOW = 1
+FW_PROFILE_PRIVATE = 2
+SEE_MASK_NOCLOSEPROCESS = 0x40
 BRIDGE_PORT = 8650
 _NEIGHBOR_BAD_STATES = (0, 1)  # NlnsUnreachable, NlnsIncomplete
 
@@ -215,6 +219,66 @@ def firewall_rules() -> list[dict]:
     with _com():
         return [{"Name": str(r.Name), "Enabled": bool(r.Enabled), "Inbound": r.Direction == FW_DIRECTION_IN,
                  "LocalPorts": str(r.LocalPorts or "")} for r in map(_wrap, _policy().Rules)]
+
+
+@_safe(False)
+def firewall_add_rule(name: str, description: str, port: int, remote_addresses: str) -> bool:
+    """Inbound TCP allow rule on the Private profile only. Needs an elevated process."""
+    import comtypes.client
+    with _com():
+        rule = comtypes.client.CreateObject("HNetCfg.FWRule")
+        rule.Name, rule.Description = name, description
+        rule.Protocol, rule.LocalPorts = FW_PROTOCOL_TCP, str(port)
+        rule.Direction, rule.Action = FW_DIRECTION_IN, FW_ACTION_ALLOW
+        rule.Profiles, rule.RemoteAddresses, rule.Enabled = FW_PROFILE_PRIVATE, remote_addresses, True
+        _policy().Rules.Add(rule)
+        return True
+
+
+@_safe(False)
+def firewall_remove_rules(name: str) -> bool:
+    """Delete every rule called ``name`` (and nothing else). Needs an elevated process."""
+    with _com():
+        rules = _policy().Rules
+        while any(str(r.Name) == name for r in map(_wrap, rules)):
+            rules.Remove(name)
+        return True
+
+
+def _shell():
+    import ctypes as c
+    return c.WinDLL("shell32", use_last_error=True), c.WinDLL("kernel32", use_last_error=True)
+
+
+@_safe(None)
+def run_elevated(exe: str, params: str) -> int | None:
+    """Run ``exe params`` through the UAC prompt (ShellExecuteExW "runas"), wait, return its exit
+    code; None when the prompt was cancelled or it could not start."""
+    import ctypes as c
+    shell32, kernel32 = _shell()
+
+    class ExecInfo(c.Structure):
+        _fields_ = [("cbSize", c.c_uint32), ("fMask", c.c_ulong), ("hwnd", c.c_void_p),
+                    ("lpVerb", c.c_wchar_p), ("lpFile", c.c_wchar_p), ("lpParameters", c.c_wchar_p),
+                    ("lpDirectory", c.c_wchar_p), ("nShow", c.c_int), ("hInstApp", c.c_void_p),
+                    ("lpIDList", c.c_void_p), ("lpClass", c.c_wchar_p), ("hkeyClass", c.c_void_p),
+                    ("dwHotKey", c.c_uint32), ("hIcon", c.c_void_p), ("hProcess", c.c_void_p)]
+
+    info = ExecInfo()
+    info.cbSize, info.fMask = c.sizeof(ExecInfo), SEE_MASK_NOCLOSEPROCESS
+    info.lpVerb, info.lpFile, info.lpParameters, info.nShow = "runas", exe, params, 0
+    if not shell32.ShellExecuteExW(c.byref(info)):
+        return None  # ERROR_CANCELLED (1223) when the user declines, anything else: not started
+    if not info.hProcess:
+        return None
+    try:
+        kernel32.WaitForSingleObject(c.c_void_p(info.hProcess), 0xFFFFFFFF)
+        code = c.c_uint32()
+        if not kernel32.GetExitCodeProcess(c.c_void_p(info.hProcess), c.byref(code)):
+            return None
+        return code.value
+    finally:
+        kernel32.CloseHandle(c.c_void_p(info.hProcess))
 
 
 @_safe(False)

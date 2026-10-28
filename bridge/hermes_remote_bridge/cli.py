@@ -450,6 +450,15 @@ def cmd_doctor(cfg: Config, args: argparse.Namespace) -> None:
 
 def cmd_firewall(cfg: Config, args: argparse.Namespace) -> None:
     from . import firewall
+    port = args.port or cfg.port
+    if args.elevated:  # the UAC-relaunched process: write (or delete) the rule, report by exit code
+        h = host()
+        ok = h.firewall_remove() if args.action == "remove" else h.firewall_add(port)
+        sys.exit(0 if ok else 1)
+    if args.action == "remove":
+        print("Removed." if host().elevate_cli(["firewall", "remove", "--port", str(port), "--elevated"])
+              else "Not removed (cancelled or failed).")
+        return
     s = firewall.state(cfg.port)
     if s.kind == "none" or not s.active:
         print(f"No active firewall; port {cfg.port} is reachable.")
@@ -519,6 +528,10 @@ def main(argv: list[str] | None = None) -> None:
     doc = sub.add_parser("doctor", help="Check why the phone can't connect")
     doc.add_argument("--json", action="store_true", help="Machine-readable checks (for the tray app)")
     f = sub.add_parser("firewall", help="Allow the bridge port from the local network (asks first)")
+    f.add_argument("action", nargs="?", choices=("add", "remove"), default="add",
+                   help="add (default) or remove the Windows rule")
+    f.add_argument("--port", type=int, help="Port (default: the configured one)")
+    f.add_argument("--elevated", action="store_true", help=argparse.SUPPRESS)
     f.add_argument("--yes", action="store_true", help="Don't ask for confirmation")
     f.add_argument("--if-needed", action="store_true", help=argparse.SUPPRESS)
     if not (argv if argv is not None else sys.argv[1:]):

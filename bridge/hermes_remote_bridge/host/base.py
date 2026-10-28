@@ -145,6 +145,18 @@ class Host:
         """Open ``path`` with the OS's default viewer; False when that isn't possible."""
         return False
 
+    # ------------------------------------------------------------------ firewall (Windows only)
+
+    def firewall_add(self, port: int) -> bool:
+        return False
+
+    def firewall_remove(self) -> bool:
+        return False
+
+    def elevate_cli(self, args: list[str]) -> bool:
+        """Relaunch the bridge CLI with ``args`` after a UAC prompt; False where that doesn't exist."""
+        return False
+
     # ------------------------------------------------------------------ helpers
 
     @staticmethod

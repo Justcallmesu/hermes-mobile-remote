@@ -140,3 +140,56 @@ def test_firewall_rules_wrap_items_inside_com(fake_comtypes):
     assert winapi.firewall_rules() == [{"Name": "Hermes Mobile Remote", "Enabled": True, "Inbound": True,
                                         "LocalPorts": "8650"}]
     assert rule.wrapped and log == ["init", "create", "uninit"]
+
+
+class _Rules:
+    def __init__(self, names=()):
+        self.items = [_Obj(Name=n) for n in names]
+        self.removed = []
+
+    def Add(self, rule):
+        self.items.append(rule)
+
+    def Remove(self, name):
+        self.removed.append(name)
+        for r in self.items:
+            if r.Name == name:
+                self.items.remove(r)
+                return
+
+    def __iter__(self):
+        return iter(list(self.items))
+
+
+def test_firewall_add_rule_sets_exact_properties(fake_comtypes):
+    client, _ = fake_comtypes
+    rules = _Rules()
+    client.objects["HNetCfg.FwPolicy2"] = _Obj(Rules=rules)
+    rule = _Obj()
+    client.objects["HNetCfg.FWRule"] = rule
+    assert winapi.firewall_add_rule("Hermes Mobile Remote", "desc", 8650, "192.168.0.0/16,10.0.0.0/8") is True
+    assert rules.items == [rule]
+    assert (rule.Name, rule.Description, rule.Protocol, rule.LocalPorts) == ("Hermes Mobile Remote", "desc", 6, "8650")
+    assert (rule.Direction, rule.Action, rule.Profiles, rule.Enabled) == (1, 1, 2, True)
+    assert rule.RemoteAddresses == "192.168.0.0/16,10.0.0.0/8"
+
+
+def test_firewall_remove_rules_deletes_only_the_named_rule(fake_comtypes):
+    client, _ = fake_comtypes
+    rules = _Rules(["Hermes Mobile Remote", "Other", "Hermes Mobile Remote"])
+    client.objects["HNetCfg.FwPolicy2"] = _Obj(Rules=rules)
+    assert winapi.firewall_remove_rules("Hermes Mobile Remote") is True
+    assert [r.Name for r in rules.items] == ["Other"]
+    assert rules.removed == ["Hermes Mobile Remote"] * 2
+
+
+def test_run_elevated_returns_none_when_uac_is_cancelled(monkeypatch):
+    class Shell32:
+        def ShellExecuteExW(self, ref):
+            return 0
+
+    class Kernel32:
+        def GetLastError(self):
+            return 1223
+    monkeypatch.setattr(winapi, "_shell", lambda: (Shell32(), Kernel32()))
+    assert winapi.run_elevated("bridge.exe", "firewall add") is None

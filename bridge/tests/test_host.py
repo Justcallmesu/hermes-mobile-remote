@@ -160,12 +160,55 @@ def test_same_ssid_different_router_is_a_different_network_on_windows(monkeypatc
 
 # ------------------------------------------------------------------ firewall
 
-def test_windows_firewall_rule_is_private_profile_and_private_ranges_only():
-    (cmd,) = firewall.open_commands("windows", 8650)
-    joined = " ".join(cmd)
-    assert cmd[0] == "New-NetFirewallRule" and "-Profile Private" in joined and "-LocalPort 8650" in joined
-    assert all(r in joined for r in firewall.PRIVATE_RANGES)
-    assert "Any" not in cmd and "0.0.0.0/0" not in joined
+def test_windows_elevation_argv_is_exact_and_uses_no_powershell(monkeypatch, tmp_path):
+    (tmp_path / "hermes-remote-bridge.exe").write_text("")
+    calls = []
+
+    class Fw:
+        def run_elevated(self, exe, params):
+            calls.append((exe, params))
+            return 0
+    monkeypatch.setattr(windows, "winapi", Fw())
+    monkeypatch.setattr(windows.sys, "executable", str(tmp_path / "python.exe"))
+    monkeypatch.setattr(windows.sys, "argv", ["fallback.exe"])
+    assert WindowsHost().elevate_cli(["firewall", "add", "--port", "8650", "--elevated"]) is True
+    assert calls == [(str(tmp_path / "hermes-remote-bridge.exe"), "firewall add --port 8650 --elevated")]
+    assert "powershell" not in " ".join(calls[0]).lower()
+    Fw.run_elevated = lambda self, exe, params: None  # UAC cancelled
+    assert WindowsHost().elevate_cli(["firewall", "add"]) is False
+
+
+def test_windows_firewall_open_port_elevates_the_cli_add(monkeypatch):
+    seen = []
+    monkeypatch.setattr(firewall, "host", lambda: type("H", (), {
+        "name": "windows", "elevate_cli": lambda s, a: seen.append(a) or True})())
+    assert firewall.open_commands("windows", 8650) == [
+        ["hermes-remote-bridge", "firewall", "add", "--port", "8650", "--elevated"]]
+    assert firewall.open_port("windows", 8650) is True
+    assert seen == [["firewall", "add", "--port", "8650", "--elevated"]]
+
+
+def test_elevated_firewall_cli_writes_the_rule_through_the_host(monkeypatch):
+    from hermes_remote_bridge import cli
+    seen = []
+    monkeypatch.setattr(cli, "host", lambda: type("H", (), {
+        "name": "windows", "firewall_add": lambda s, p: seen.append(("add", p)) or True,
+        "firewall_remove": lambda s: seen.append(("remove",)) or True})())
+    for action in ("add", "remove"):
+        with pytest.raises(SystemExit) as e:
+            cli.main(["firewall", action, "--port", "8650", "--elevated"])
+        assert e.value.code == 0
+    assert seen == [("add", 8650), ("remove",)]
+
+
+def test_windows_host_firewall_add_and_remove_use_rule_name_and_private_ranges(fake_winapi):
+    rec = []
+    fake_winapi.firewall_add_rule = lambda *a: rec.append(("add",) + a) or True
+    fake_winapi.firewall_remove_rules = lambda n: rec.append(("remove", n)) or True
+    h = WindowsHost()
+    assert h.firewall_add(8650) and h.firewall_remove()
+    assert rec == [("add", "Hermes Mobile Remote", "Hermes Mobile Remote", 8650, ",".join(firewall.PRIVATE_RANGES)),
+                   ("remove", "Hermes Mobile Remote")]
 
 
 def test_windows_firewall_state(monkeypatch):
