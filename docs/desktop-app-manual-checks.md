@@ -8,11 +8,11 @@ Date: ______   Windows PC: ______   Linux PC (desktop): ______
 
 ## Windows
 
-- [ ] Flyout looks right and sits at the taskbar corner on a **bottom** taskbar.
+- [x] Flyout looks right and sits at the taskbar corner on a **bottom** taskbar. *Windows 11, 2026-10-28: checked by the maintainer.*
 - [ ] Flyout looks right and sits at the taskbar corner on a **top** taskbar.
 - [ ] Flyout looks right and sits at the taskbar corner on a **side** taskbar (left or right).
-- [ ] Clicking anywhere else hides the flyout (focus loss).
-- [ ] Right click menu: Open, Start/Stop bridge, Pair a device, Quit each do what they say.
+- [x] Clicking anywhere else hides the flyout (focus loss). *Windows 11, 2026-10-28: checked by the maintainer.*
+- [x] Right click menu: Open, Start/Stop bridge, Pair a device, Quit each do what they say. *Windows 11, 2026-10-28: checked by the maintainer.*
 - [ ] Firewall fix shows one UAC prompt; approving it adds the rule; cancelling shows "Not applied".
 - [x] Pair a real phone: "Pair a device" shows the QR inline, the phone scans it and connects. *Windows 11, 2026-10-28: Galaxy Tab S8 paired over Tailscale and chatting (no firewall rule needed over Tailscale).*
 - [ ] Upgrade from a script install: after setup the old PowerShell tray and the "Hermes Mobile Remote"
@@ -48,8 +48,8 @@ Date: ______   Windows PC: ______   Linux PC (desktop): ______
       saved data" (D21).
 - [x] First run: the change list is shown before anything is installed, and `INSTALLED.txt` is saved
       in the config directory (D11, D16). *Windows 11, 2026-10-28: list shown before Continue; INSTALLED.txt written; Run key set.*
-- [ ] Phone's Terminal opens the expected shell (Windows: `pwsh`, else `powershell`, else `cmd`;
-      `terminal_shell` overrides it).
+- [x] Phone's Terminal opens the expected shell (Windows: `pwsh`, else `powershell`, else `cmd`;
+      `terminal_shell` overrides it). *Windows 11, 2026-10-28: PowerShell on a Galaxy Tab after the read1 fix, checked by the maintainer.*
 
 ## Result
 

@@ -167,6 +167,9 @@ jobs:
           node-version: 24
           cache: npm
           cache-dependency-path: desktop/package-lock.json
+      # The Windows install check below makes the bridge venv with uv (first-run setup would download it).
+      - uses: astral-sh/setup-uv@v10.2.0
+        if: runner.os == 'Windows'
       - run: npm ci --no-audit --no-fund
       - run: bash test.sh
       - name: Bundles build (unsigned, no updater artifacts)
