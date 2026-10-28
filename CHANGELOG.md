@@ -3,6 +3,28 @@
 Releases are git tags; the version in the app comes from the tag. `git log v0.9.0..vX.Y.Z` is the
 authoritative history — this file only summarises what is worth knowing before upgrading.
 
+## Unreleased
+
+- Keep connected in the background (Settings, on by default): after you swipe the app away, the
+  phone stays connected while Hermes works on the PC: a running turn, a subagent, a background
+  process, or an active `/loop` or `/heartbeat`. It keeps going for 5 minutes after the last of
+  them ends (1 or 15 minutes can be chosen). Turn it off to stop the connection as soon as the
+  reply is done.
+- A dropped connection (Wi-Fi change, airplane mode, a sleeping screen) reconnects at once and
+  resumes every running or waiting chat, not only the open one.
+- Bridge: when the phone drops, the bridge keeps its connection to Hermes open for the device for
+  `park_seconds` (default 300; 0 turns this off), so a quick return picks the same session back
+  up. Needs the updated bridge.
+- Bridge: the phone may call the read-only `session.control.read`, which shows `/loop` and
+  `/heartbeat` state. Needs the updated bridge.
+- A PC that has both a bridge and a gateway sign-in can be linked into one entry tagged
+  "Gateway + Bridge". The app uses the bridge and falls back to the gateway when the bridge cannot
+  be reached, then returns to the bridge when it answers again. The connection row says "via
+  Bridge" or "via Gateway". After a gateway sign-in the app offers to pair the PC's bridge too;
+  the host menu has *Link with...* and *Unlink*.
+- Chats resumed from the phone are recorded by Hermes as desktop chats, as new ones already were
+  (they were recorded as `tui` before).
+
 ## v1.25.1
 
 - Fixed a crash (app force closing) while a chat was streaming: a new run could reuse an
