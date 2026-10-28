@@ -7,6 +7,7 @@ pub mod linux_service;
 pub mod run_mode;
 pub mod setup;
 pub mod tray;
+pub mod updates;
 pub mod version;
 
 #[tauri::command]
@@ -60,7 +61,9 @@ pub fn run() {
             run_mode::get_run_mode,
             run_mode::set_run_mode,
             setup::setup_state,
-            setup::setup_run
+            setup::setup_run,
+            updates::update_check,
+            updates::update_install
         ])
         .run(tauri::generate_context!())
         .expect("error while running Hermes Remote");

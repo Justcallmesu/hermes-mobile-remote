@@ -33,6 +33,9 @@ export const getInstalledList = () => invoke("get_installed_list");
 // First-run setup: state {needed, change_list}; run emits "setup-progress" {step, state, message}.
 export const setupState = () => invoke("setup_state");
 export const setupRun = (update = false) => invoke("setup_run", { update });
+// Updates: check answers null or {version, kind: "link"|"restart", url}; install restarts the app.
+export const updateCheck = () => invoke("update_check");
+export const updateInstall = () => invoke("update_install");
 export async function onSetupProgress(cb) {
   const { listen } = await import("@tauri-apps/api/event");
   return listen("setup-progress", (e) => cb(e.payload));

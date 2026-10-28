@@ -1,7 +1,8 @@
 <script setup>
 import { ref, onMounted } from "vue";
-import { appVersion, setupState } from "./api.js";
+import { appVersion, setupState, setupRun } from "./api.js";
 import Setup from "./Setup.vue";
+import UpdateBanner from "./UpdateBanner.vue";
 import Home from "./Home.vue";
 import Devices from "./Devices.vue";
 import Pair from "./Pair.vue";
@@ -19,7 +20,10 @@ const showSetup = ref(false);
 onMounted(async () => {
   version.value = await appVersion();
   try {
-    showSetup.value = !!(await setupState())?.needed;
+    const st = await setupState();
+    showSetup.value = !!st?.needed;
+    // An app update left the marker: re-sync the venv (the command removes the marker).
+    if (!st?.needed && st?.resync) await setupRun(true);
   } catch {
     showSetup.value = false;
   }
@@ -32,6 +36,7 @@ onMounted(async () => {
       <h1>Hermes Remote</h1>
       <p class="version">{{ version }}</p>
     </header>
+    <UpdateBanner v-if="!showSetup" />
     <Setup v-if="showSetup" @done="showSetup = false" />
     <nav v-else>
       <button

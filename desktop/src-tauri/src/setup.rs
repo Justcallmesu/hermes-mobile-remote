@@ -354,7 +354,11 @@ fn with_real<R>(resource: PathBuf, report: &dyn Fn(Progress), f: impl FnOnce(&Se
 #[tauri::command]
 pub async fn setup_state() -> Result<Value, String> {
     Ok(with_real(PathBuf::new(), &|_| {}, |s| {
-        json!({"needed": !s.paths.exe.exists(), "change_list": s.change_list()})
+        json!({
+            "needed": !s.paths.exe.exists(),
+            "change_list": s.change_list(),
+            "resync": crate::updates::needs_resync(&s.paths.config_dir),
+        })
     }))
 }
 
@@ -366,7 +370,13 @@ pub async fn setup_run(app: tauri::AppHandle, update: Option<bool>) -> Result<()
         let emit = |p: Progress| {
             let _ = app.emit("setup-progress", p);
         };
-        with_real(resource, &emit, |s| s.run(update.unwrap_or(false)))
+        with_real(resource, &emit, |s| {
+            let r = s.run(update.unwrap_or(false));
+            if r.is_ok() {
+                crate::updates::clear_resync(&s.paths.config_dir);
+            }
+            r
+        })
     })
     .await
     .map_err(|e| e.to_string())?

@@ -194,6 +194,35 @@ describe("Setup", () => {
   });
 });
 
+describe("UpdateBanner", () => {
+  it("shows a link on a release check, a restart button on updater builds, and nothing without an update", async () => {
+    let w = await open();
+    expect(w.find('[data-test="update-banner"]').exists()).toBe(false);
+
+    answers.update_check = { version: "0.2.0", kind: "link", url: "https://example.test/desktop-v0.2.0" };
+    w = await open();
+    expect(w.find('[data-test="update-banner"]').text()).toContain("New version 0.2.0 available");
+    expect(w.find('[data-test="update-link"]').attributes("href")).toBe("https://example.test/desktop-v0.2.0");
+    expect(w.find('[data-test="update-restart"]').exists()).toBe(false);
+
+    answers.update_check = { version: "0.3.0", kind: "restart", url: null };
+    answers.update_install = new Error("download failed");
+    w = await open();
+    expect(w.find('[data-test="update-link"]').exists()).toBe(false);
+    await w.find('[data-test="update-restart"]').trigger("click");
+    await flushPromises();
+    expect(w.find('[data-test="update-restart"]').text()).toBe("Restart to update");
+    expect(invoke).toHaveBeenCalledWith("update_install");
+    expect(w.find('[data-test="update-error"]').text()).toContain("download failed");
+  });
+
+  it("re-syncs the venv on start when an update left the marker", async () => {
+    answers.setup_state = { needed: false, change_list: [], resync: true };
+    await open();
+    expect(invoke).toHaveBeenCalledWith("setup_run", { update: true });
+  });
+});
+
 describe("Settings", () => {
   it("shows pending while doctor runs, then the coloured results", async () => {
     let release;
