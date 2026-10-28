@@ -11,6 +11,21 @@ import javax.net.ssl.X509TrustManager
 /** A bridge host and a gateway host the user said are one PC. Each keeps its own token, drafts and chat. */
 data class HostLink(val bridgeId: String, val gatewayId: String)
 
+/** What `start()` reads from the bridge host's own saved data. */
+data class BridgeStart(
+    val lastSessionId: String?,
+    val bridgeAddresses: Map<String, List<String>>?,
+    val transportMode: String,
+    val bridgeFeatures: Set<String>,
+)
+
+/** The credential file of the bridge side: the linked bridge host's own, whichever entry is active. */
+fun bridgeStoreFor(link: HostLink?, activeId: String): String = ProfileStore.pairingFile(link?.bridgeId ?: activeId)
+
+/** The saved values the bridge side starts from, read with [open] from [bridgeStoreFor]'s file. */
+fun bridgeStartState(link: HostLink?, activeId: String, open: (String) -> BridgeStart): BridgeStart =
+    open(bridgeStoreFor(link, activeId))
+
 /** Finding out that a gateway host and a bridge host are the same PC. Pure apart from the probe the caller passes. */
 object HostLinking {
     const val BRIDGE_PORT = 8650

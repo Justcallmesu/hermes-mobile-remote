@@ -12,6 +12,9 @@ import androidx.lifecycle.viewModelScope
 import io.github.nideta231.hermesremote.data.mergeSessionHead
 import io.github.nideta231.hermesremote.data.sessionParams
 import io.github.nideta231.hermesremote.data.BridgeClient
+import io.github.nideta231.hermesremote.data.BridgeStart
+import io.github.nideta231.hermesremote.data.bridgeStartState
+import io.github.nideta231.hermesremote.data.bridgeStoreFor
 import io.github.nideta231.hermesremote.data.PcMonitor
 import io.github.nideta231.hermesremote.data.ClaudeUsage
 import io.github.nideta231.hermesremote.data.ContextInfo
@@ -575,14 +578,20 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
     }
 
     private fun start(p: Pairing, linkedSwitch: Boolean = false) {
-        bridgeAddresses = store.bridgeAddresses
-        val savedMode = runCatching { TransportMode.valueOf(store.transportMode.uppercase()) }.getOrDefault(TransportMode.AUTO)
+        // The bridge side reads and writes the bridge host's own file, even when the gateway entry is the active one.
+        val link = HostLinking.linkOf(profiles.links(), profiles.activeId)
+        store = CredentialStore(app, bridgeStoreFor(link, profiles.activeId))
+        val saved = bridgeStartState(link, profiles.activeId) {
+            CredentialStore(app, it).let { s -> BridgeStart(s.lastSessionId, s.bridgeAddresses, s.transportMode, s.bridgeFeatures) }
+        }
+        bridgeAddresses = saved.bridgeAddresses
+        val savedMode = runCatching { TransportMode.valueOf(saved.transportMode.uppercase()) }.getOrDefault(TransportMode.AUTO)
         _conn.update { it.copy(activeUrl = p.url, mode = savedMode, needsRepairForLan = p.pin == null,
             transport = EndpointResolver.transportOf(EndpointResolver.hostOf(p.url).orEmpty())) }
         useClient(BridgeClient(p), linkedSwitch)
-        _features.value = store.bridgeFeatures
+        _features.value = saved.bridgeFeatures
         loadCachedDrawer()
-        store.lastSessionId?.let { openSession(it) }
+        saved.lastSessionId?.let { openSession(it) }
         refreshProfiles()
         refreshSessions()
         settings.refresh()
@@ -661,6 +670,7 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
                 when (next) {
                     is HostConnection.GatewayLogin -> {
                         val c = next.credentials
+                        store = CredentialStore(app, ProfileStore.pairingFile(profiles.activeId)) // back to the active entry's own file
                         val auth = gatewayAuthFor(c, gwStore, OkHttpTransport())
                         _gatewayHost.value = GatewayHostState(l.gatewayId, profiles.active().name.ifBlank { GatewayUrl.hostName(c.baseUrl) }, c.baseUrl, signedOut = false)
                         _conn.update { it.copy(activeUrl = c.baseUrl) }
