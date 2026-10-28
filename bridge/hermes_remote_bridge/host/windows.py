@@ -1,6 +1,7 @@
-"""Windows 10/11: PowerShell NetTCPIP cmdlets, Scheduled Task, Windows Defender Firewall.
+"""Windows 10/11: routes, neighbours, network profile and firewall through ctypes/COM (winapi.py);
+PowerShell only in run_elevated (until ticket 31). Scheduled Task, Windows Defender Firewall.
 
-Written against Microsoft's documented cmdlets and unit-tested with their output replaced, and
+Written against Microsoft's documented APIs and unit-tested with their output replaced, and
 exercised for real on a Windows 11 machine (tray start, bridge up, tray quit). See
 docs/PLATFORMS.md#what-is-verified-on-windows for what that does and does not prove.
 """
@@ -120,10 +121,12 @@ class WindowsHost(Host):
         return str(default) if default.exists() else None
 
     def service_state(self, name: str) -> str:
-        """"active" when the bridge answers; other service names are not tracked on Windows."""
+        """"active" or "inactive" by whether the bridge answers on its configured port; other
+        service names are not tracked on Windows."""
         if name != "hermes-remote-bridge":
             return "unknown"
-        return "active" if winapi.bridge_reachable() else "unknown"
+        from ..config import Config  # config imports this package
+        return "active" if winapi.bridge_reachable(Config.load().port) else "inactive"
 
     # ------------------------------------------------------------------ interactive use
 

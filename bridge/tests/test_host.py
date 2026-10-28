@@ -94,7 +94,10 @@ class FakeWinapi:
         return [{"Name": "Hermes Mobile Remote", "Enabled": True, "Inbound": True, "LocalPorts": "8650"},
                 {"Name": "Other", "Enabled": True, "Inbound": True, "LocalPorts": "9999"}]
 
-    def bridge_reachable(self):
+    ports = []
+
+    def bridge_reachable(self, port):
+        self.ports.append(port)
         return True
 
 
@@ -122,9 +125,13 @@ def test_windows_methods_return_the_old_shapes_from_fixture_data(fake_winapi):
     assert h.service_state("some.other.service") == "unknown"
 
 
-def test_windows_service_state_unknown_when_bridge_unreachable(fake_winapi, monkeypatch):
-    monkeypatch.setattr(fake_winapi, "bridge_reachable", lambda: False)
-    assert WindowsHost().service_state("hermes-remote-bridge") == "unknown"
+def test_windows_service_state_inactive_when_bridge_unreachable(fake_winapi, monkeypatch):
+    seen = []
+    monkeypatch.setattr(fake_winapi, "bridge_reachable", lambda port: seen.append(port) or False)
+    from hermes_remote_bridge import config
+    monkeypatch.setattr(config.Config, "load", classmethod(lambda cls, path=None: cls(port=9123)))
+    assert WindowsHost().service_state("hermes-remote-bridge") == "inactive"
+    assert seen == [9123]
 
 
 def test_connection_profile_id_keeps_the_instance_id_format(fake_winapi):

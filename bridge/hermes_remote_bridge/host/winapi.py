@@ -6,7 +6,13 @@ off Windows: see the planner's side-by-side Verify against the old PowerShell an
 """
 from __future__ import annotations
 
+import contextlib
+import functools
+import gc
+import logging
 import socket
+
+log = logging.getLogger(__name__)
 
 AF_INET = 2
 NETWORK_LIST_MANAGER_CLSID = "{DCB00C01-570F-4A9B-8D69-199FDBA5723B}"
@@ -14,6 +20,20 @@ FW_PROFILES = (1, 2, 4)  # NET_FW_PROFILE2_DOMAIN, PRIVATE, PUBLIC
 FW_DIRECTION_IN = 1
 BRIDGE_PORT = 8650
 _NEIGHBOR_BAD_STATES = (0, 1)  # NlnsUnreachable, NlnsIncomplete
+
+
+def _safe(default):
+    """Public calls never raise (no Windows, no comtypes, COM errors): they return ``default``."""
+    def deco(fn):
+        @functools.wraps(fn)
+        def wrapper(*a, **k):
+            try:
+                return fn(*a, **k)
+            except Exception as e:  # noqa: BLE001 - includes ImportError and OSError
+                log.debug("winapi.%s failed: %r", fn.__name__, e)
+                return list(default) if isinstance(default, list) else default
+        return wrapper
+    return deco
 
 
 def instance_id(guid: str) -> str:
@@ -92,11 +112,12 @@ def _alias(luid: int) -> str:
     import ctypes as c
     _, lib = _ip_helper()
     buf = c.create_unicode_buffer(257)
-    if lib.ConvertInterfaceLuidToAlias(c.byref(c.c_uint64(luid)), buf, 257) != 0:
+    if lib.ConvertInterfaceLuidToAlias(c.byref(c.c_uint64(luid)), buf, c.c_size_t(257)) != 0:
         return ""
     return buf.value
 
 
+@_safe([])
 def default_routes() -> list[dict]:
     """IPv4 0.0.0.0/0 routes as {Alias, Gateway, Metric (route + interface metric)}."""
     import ctypes as c
@@ -109,19 +130,21 @@ def default_routes() -> list[dict]:
         iface = IfRow()
         iface.Family = AF_INET
         iface.InterfaceLuid = row.InterfaceLuid
-        if lib.GetIpInterfaceEntry(c.byref(iface)) != 0:
-            continue
+        if_metric = iface.Metric if lib.GetIpInterfaceEntry(c.byref(iface)) == 0 else 0
         out.append({"Alias": _alias(row.InterfaceLuid), "Gateway": _ipv4(row.NextHop),
-                    "Metric": row.Metric + iface.Metric})
+                    "Metric": row.Metric + if_metric})
     return out
 
 
+@_safe("")
 def neighbor_mac(ip: str) -> str:
     """"AA-BB-CC-DD-EE-FF" for a reachable neighbour, "" if none."""
     _, _, NetRow, _ = _structs()
     for row in _table_rows("GetIpNetTable2", NetRow):
         if _ipv4(row.Address) == ip and row.State not in _NEIGHBOR_BAD_STATES and row.PhysicalAddressLength == 6:
-            return "-".join(f"{b:02X}" for b in row.PhysicalAddress[:6])
+            mac = bytes(row.PhysicalAddress[:6])
+            if any(mac):
+                return "-".join(f"{b:02X}" for b in mac)
     return ""
 
 
@@ -138,18 +161,41 @@ def _adapter_guid(alias: str) -> str | None:
     return str(uuid.UUID(bytes_le=bytes(guid)))
 
 
+@contextlib.contextmanager
+def _com():
+    """COM initialised for this thread (the bridge calls from to_thread workers); no COM object may
+    outlive the block, so callers return plain values."""
+    import comtypes
+    comtypes.CoInitializeEx(0)
+    try:
+        yield
+    finally:
+        gc.collect()
+        comtypes.CoUninitialize()
+
+
+def _wrap(item):
+    """Enumerated items arrive as bare IDispatch pointers; get the typed interface."""
+    import comtypes.client
+    return comtypes.client.GetBestInterface(item)
+
+
+@_safe(None)
 def network_profile(alias: str) -> tuple[str, str] | None:
     """(InstanceID-style network GUID, name) of the network the interface is connected to."""
     guid = _adapter_guid(alias)
     if not guid:
         return None
-    import comtypes.client
-    nlm = comtypes.client.CreateObject(NETWORK_LIST_MANAGER_CLSID)
-    for conn in nlm.GetNetworkConnections():
-        if str(conn.GetAdapterId()).strip("{}").lower() == guid.lower():
-            net = conn.GetNetwork()
-            return instance_id(str(net.GetNetworkId())), str(net.GetName() or alias)
-    return None
+    with _com():
+        import comtypes.client
+        nlm = comtypes.client.CreateObject(NETWORK_LIST_MANAGER_CLSID)
+        matches = [conn for conn in map(_wrap, nlm.GetNetworkConnections())
+                   if str(conn.GetAdapterId()).strip("{}").lower() == guid.lower()]
+        if not matches:
+            return None
+        conn = next((m for m in matches if m.GetConnectivity() != 0), matches[0])
+        net = _wrap(conn.GetNetwork())
+        return instance_id(str(net.GetNetworkId())), str(net.GetName() or alias)
 
 
 def _policy():
@@ -157,20 +203,22 @@ def _policy():
     return comtypes.client.CreateObject("HNetCfg.FwPolicy2")
 
 
+@_safe(False)
 def firewall_profiles_enabled() -> bool:
-    policy = _policy()
-    return any(policy.FirewallEnabled(p) for p in FW_PROFILES)
+    with _com():
+        policy = _policy()
+        return any(bool(policy.FirewallEnabled(p)) for p in FW_PROFILES)
 
 
+@_safe([])
 def firewall_rules() -> list[dict]:
-    return [{"Name": r.Name, "Enabled": bool(r.Enabled), "Inbound": r.Direction == FW_DIRECTION_IN,
-             "LocalPorts": r.LocalPorts or ""} for r in _policy().Rules]
+    with _com():
+        return [{"Name": str(r.Name), "Enabled": bool(r.Enabled), "Inbound": r.Direction == FW_DIRECTION_IN,
+                 "LocalPorts": str(r.LocalPorts or "")} for r in map(_wrap, _policy().Rules)]
 
 
-def bridge_reachable() -> bool:
+@_safe(False)
+def bridge_reachable(port: int = BRIDGE_PORT) -> bool:
     """The bridge answers on its loopback port: that is what the supervisor/app reports as running."""
-    try:
-        with socket.create_connection(("127.0.0.1", BRIDGE_PORT), timeout=1.0):
-            return True
-    except OSError:
-        return False
+    with socket.create_connection(("127.0.0.1", port), timeout=1.0):
+        return True
