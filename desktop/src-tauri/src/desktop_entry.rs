@@ -52,6 +52,44 @@ pub fn install(data_home: &Path, appimage: &Path) -> std::io::Result<PathBuf> {
     Ok(entry)
 }
 
+/// Set on the detached copy so it does not detach again.
+pub const DETACHED_ENV: &str = "HERMES_REMOTE_DETACHED";
+
+/// Started from a terminal as an AppImage: run a detached copy and give the terminal back.
+/// `--foreground` keeps it attached (for logs).
+pub fn should_detach(appimage: bool, stdin_tty: bool, already: bool, args: &[String]) -> bool {
+    appimage && stdin_tty && !already && !args.iter().any(|a| a == "--foreground")
+}
+
+/// Re-launch `$APPIMAGE` in its own session with no terminal, then exit this process.
+pub fn detach_if_in_terminal(args: &[String]) {
+    use std::os::unix::process::CommandExt;
+    use std::process::{Command, Stdio};
+    let Some(appimage) = std::env::var_os("APPIMAGE") else { return };
+    // SAFETY: isatty only reads the descriptor's state.
+    let tty = unsafe { libc::isatty(0) } == 1;
+    if !should_detach(true, tty, std::env::var_os(DETACHED_ENV).is_some(), args) {
+        return;
+    }
+    let mut cmd = Command::new(&appimage);
+    crate::bridge::scrub_appimage_env(&mut cmd, true);
+    for k in ["APPDIR", "APPIMAGE", "ARGV0", "OWD"] {
+        cmd.env_remove(k);
+    }
+    cmd.args(&args[1..]).env(DETACHED_ENV, "1").stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
+    // SAFETY: setsid is async-signal-safe; it only leaves the terminal's session.
+    unsafe {
+        cmd.pre_exec(|| {
+            libc::setsid();
+            Ok(())
+        });
+    }
+    if cmd.spawn().is_ok() {
+        println!("Hermes Remote is running; find it in the app menu or the tray.");
+        std::process::exit(0);
+    }
+}
+
 /// Called at app start: only does something when running from an AppImage.
 pub fn on_app_start() {
     let Some(appimage) = std::env::var_os("APPIMAGE") else { return };
@@ -93,5 +131,15 @@ mod tests {
         let t = std::fs::read_to_string(&e).unwrap();
         assert!(t.contains("/b/two.AppImage") && !t.contains("/a/one"));
         std::fs::remove_dir_all(&d).unwrap();
+    }
+
+    #[test]
+    fn detaches_only_an_appimage_started_from_a_terminal() {
+        let a = |x: &[&str]| x.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert!(should_detach(true, true, false, &a(&["app"])));
+        assert!(!should_detach(false, true, false, &a(&["app"])), "deb/dev build");
+        assert!(!should_detach(true, false, false, &a(&["app"])), "launched from the menu");
+        assert!(!should_detach(true, true, true, &a(&["app"])), "the detached copy");
+        assert!(!should_detach(true, true, false, &a(&["app", "--foreground"])));
     }
 }

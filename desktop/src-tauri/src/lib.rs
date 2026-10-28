@@ -21,6 +21,8 @@ fn app_version() -> String {
 
 pub fn run() {
     let args: Vec<String> = std::env::args().collect();
+    #[cfg(target_os = "linux")]
+    desktop_entry::detach_if_in_terminal(&args);
     if let Some(remove_data) = migration::uninstall_flags(&args) {
         let paths = bridge::BridgePaths::from_env();
         let code = match (migration::Uninstall {
