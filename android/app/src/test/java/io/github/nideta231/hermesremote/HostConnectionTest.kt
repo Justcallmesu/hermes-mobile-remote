@@ -1,7 +1,6 @@
 package io.github.nideta231.hermesremote
 
 import io.github.nideta231.hermesremote.data.ConnectionPlan
-import io.github.nideta231.hermesremote.data.viaLabel
 import io.github.nideta231.hermesremote.data.GatewayCredentialStore
 import io.github.nideta231.hermesremote.data.GatewayCredentials
 import io.github.nideta231.hermesremote.data.GatewayState
@@ -14,6 +13,7 @@ import io.github.nideta231.hermesremote.data.buildGateway
 import io.github.nideta231.hermesremote.data.decideConnection
 import io.github.nideta231.hermesremote.data.gatewayAuthFor
 import io.github.nideta231.hermesremote.data.rootScreen
+import io.github.nideta231.hermesremote.data.viaLabel
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout

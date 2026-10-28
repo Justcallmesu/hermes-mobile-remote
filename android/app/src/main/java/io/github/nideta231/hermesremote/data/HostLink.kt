@@ -43,7 +43,8 @@ object HostLinking {
     fun probeRequest(bridgeUrl: String): Request = Request.Builder().url("${bridgeUrl.trimEnd('/')}/v1/me").build()
 
     /**
-     * The real probe. It carries no token, so a LAN bridge's self-signed certificate is accepted here (nothing secret is
+     * The real probe, only for unpaired candidate hosts found after a gateway sign-in (a paired bridge is probed with
+     * `BridgeClient.probe`, which pins its certificate). It carries no token, so a LAN bridge's self-signed certificate is accepted here (nothing secret is
      * sent); pairing it later pins the certificate from the QR code.
      */
     suspend fun probe(bridgeUrl: String): Probe = runInterruptible(Dispatchers.IO) {

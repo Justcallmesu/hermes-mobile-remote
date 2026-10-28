@@ -61,12 +61,12 @@ import io.github.nideta231.hermesremote.data.GatewayCredentialStore
 import io.github.nideta231.hermesremote.data.GatewayCredentials
 import io.github.nideta231.hermesremote.data.GatewayUrl
 import io.github.nideta231.hermesremote.data.HostConnection
-import io.github.nideta231.hermesremote.data.viaLabel
 import io.github.nideta231.hermesremote.data.HostKind
 import io.github.nideta231.hermesremote.data.HostLink
 import io.github.nideta231.hermesremote.data.HostLinking
 import io.github.nideta231.hermesremote.data.decideConnection
 import io.github.nideta231.hermesremote.data.gatewayAuthFor
+import io.github.nideta231.hermesremote.data.viaLabel
 import io.github.nideta231.hermesremote.data.LoopbackListener
 import io.github.nideta231.hermesremote.data.GatewayRestClient
 import io.github.nideta231.hermesremote.data.OkHttpTransport
@@ -647,7 +647,7 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
                 delay(if (on is HostConnection.GatewayLogin) 10_000L else 5_000L)
                 val pairing = CredentialStore(app, ProfileStore.pairingFile(l.bridgeId)).load() ?: continue
                 val bridgeUp = (on is HostConnection.BridgePairing && gateway?.state?.value == GatewayState.OPEN) ||
-                    HostLinking.probe(pairing.url) != BridgeClient.Probe.UNREACHABLE
+                    BridgeClient(pairing).probe() != BridgeClient.Probe.UNREACHABLE
                 val gwStore = GatewayCredentialStore(app, l.gatewayId)
                 val next = decideConnection(HostKind.BRIDGE, gwStore.load(), true, bridgeUp, on, System.currentTimeMillis() - since).connection
                 if (next == on || next == HostConnection.NeedsSignIn || next::class == on::class) continue
