@@ -259,7 +259,7 @@ static FOCUS_HIDE_AT: std::sync::Mutex<Option<std::time::Instant>> = std::sync::
 static LAST_TRAY_POS: std::sync::Mutex<Option<(f64, f64)>> = std::sync::Mutex::new(None);
 
 #[cfg(windows)]
-fn monitor_work(m: &tauri::monitor::Monitor) -> crate::flyout::Rect {
+fn monitor_work(m: &tauri::Monitor) -> crate::flyout::Rect {
     let a = m.work_area();
     crate::flyout::Rect { x: a.position.x, y: a.position.y, w: a.size.width as i32, h: a.size.height as i32 }
 }
