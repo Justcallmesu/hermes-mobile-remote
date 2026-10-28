@@ -68,6 +68,7 @@ pub trait Autostart {
 pub struct WindowsControl<'a> {
     pub autostart: &'a dyn Autostart,
     pub child: &'a dyn ChildSupervisor,
+    pub runner: &'a dyn crate::bridge::ProcessRunner,
 }
 
 impl Control for WindowsControl<'_> {
@@ -87,11 +88,24 @@ impl Control for WindowsControl<'_> {
             self.autostart.disable()
         }
     }
+    /// `hermes-remote-bridge firewall --yes`: the bridge shows the one UAC prompt (ticket 31).
     fn firewall_fix(&self) -> Result<(), String> {
-        Err(crate::control::UNSUPPORTED.into())
+        firewall_fix_with(self.runner, &crate::bridge::BridgePaths::from_env().exe)
     }
     fn open_logs(&self) -> Result<(), String> {
         Err(crate::control::UNSUPPORTED.into())
+    }
+}
+
+/// Run the bridge CLI's firewall fix; a non-zero exit (cancelled UAC, failure) is an error.
+pub fn firewall_fix_with(runner: &dyn crate::bridge::ProcessRunner, exe: &std::path::Path) -> Result<(), String> {
+    let out = runner
+        .run(exe, &["firewall".to_string(), "--yes".to_string()])
+        .map_err(|e| format!("could not start the bridge CLI: {e}"))?;
+    if out.code == Some(0) {
+        Ok(())
+    } else {
+        Err(format!("firewall fix not applied (cancelled or failed): {}", out.stdout.trim()))
     }
 }
 
@@ -324,7 +338,7 @@ mod tests {
     fn start_at_logon_on_and_off_map_to_the_autostart_plugin() {
         let log: Log = Arc::default();
         let (auto, child) = (FakeAutostart(log.clone()), FakeChild(log.clone()));
-        let c = WindowsControl { autostart: &auto, child: &child };
+        let c = WindowsControl { autostart: &auto, child: &child, runner: &crate::bridge::SystemRunner };
         c.set_start_at_logon(true).unwrap();
         c.set_start_at_logon(false).unwrap();
         assert!(c.start_at_logon());
@@ -338,5 +352,29 @@ mod tests {
         step.apply().unwrap();
         assert_eq!(*log.lock().unwrap(), ["autostart.enable", "child.spawn"]);
         assert_eq!(step.describe(), ["Start at logon: HKCU Run key 'Hermes Remote'"]);
+    }
+
+    struct FirewallRunner(Log, Option<i32>);
+    impl crate::bridge::ProcessRunner for FirewallRunner {
+        fn run_with(
+            &self,
+            exe: &std::path::Path,
+            args: &[String],
+            _env: &[(String, String)],
+            _cwd: Option<&std::path::Path>,
+        ) -> std::io::Result<crate::bridge::CliOutput> {
+            self.0.lock().unwrap().push(format!("{} {}", exe.display(), args.join(" ")));
+            Ok(crate::bridge::CliOutput { code: self.1, stdout: "Not applied".into(), stderr: String::new() })
+        }
+    }
+
+    #[test]
+    fn firewall_fix_runs_the_bridge_cli_and_reports_a_cancel() {
+        let log: Log = Default::default();
+        let exe = std::path::Path::new("bridge.exe");
+        firewall_fix_with(&FirewallRunner(log.clone(), Some(0)), exe).unwrap();
+        assert_eq!(*log.lock().unwrap(), ["bridge.exe firewall --yes"]);
+        let err = firewall_fix_with(&FirewallRunner(log.clone(), Some(1)), exe).unwrap_err();
+        assert!(err.contains("cancelled or failed"), "{err}");
     }
 }

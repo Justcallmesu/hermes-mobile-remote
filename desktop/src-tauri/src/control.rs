@@ -96,7 +96,11 @@ pub fn backend() -> impl Control {
 
 #[cfg(windows)]
 pub fn backend() -> impl Control {
-    crate::win_child::WindowsControl { autostart: &crate::win_child::TauriAutostart, child: crate::run_mode::app_child() }
+    crate::win_child::WindowsControl {
+        autostart: &crate::win_child::TauriAutostart,
+        child: crate::run_mode::app_child(),
+        runner: &crate::bridge::SystemRunner,
+    }
 }
 
 #[cfg(not(any(target_os = "linux", windows)))]
