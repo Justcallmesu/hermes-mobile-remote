@@ -251,28 +251,66 @@ pub fn show_main(app: &tauri::AppHandle) {
     }
 }
 
+/// When the flyout was last hidden because it lost focus; a tray click right after is the click that closed it.
+#[cfg(windows)]
+static FOCUS_HIDE_AT: std::sync::Mutex<Option<std::time::Instant>> = std::sync::Mutex::new(None);
+/// The tray icon's last clicked position, used when a notification opens the flyout.
+#[cfg(windows)]
+static LAST_TRAY_POS: std::sync::Mutex<Option<(f64, f64)>> = std::sync::Mutex::new(None);
+
+#[cfg(windows)]
+fn monitor_work(m: &tauri::monitor::Monitor) -> crate::flyout::Rect {
+    let a = m.work_area();
+    crate::flyout::Rect { x: a.position.x, y: a.position.y, w: a.size.width as i32, h: a.size.height as i32 }
+}
+
 /// Left click on the Windows tray icon: hide the flyout when it is open, else show it at the taskbar corner.
 #[cfg(windows)]
 fn toggle_flyout(app: &tauri::AppHandle, click: tauri::PhysicalPosition<f64>) {
-    use crate::flyout::{place, Rect, Taskbar, WinTaskbar, FLYOUT_HEIGHT, FLYOUT_WIDTH};
+    use tauri::Manager;
+    *LAST_TRAY_POS.lock().unwrap() = Some((click.x, click.y));
+    let since = FOCUS_HIDE_AT.lock().unwrap().map(|t| t.elapsed());
+    if crate::flyout::ignore_tray_click(since) {
+        return;
+    }
+    if let Some(w) = app.get_webview_window("main") {
+        if FLYOUT_OPEN.load(std::sync::atomic::Ordering::SeqCst) && w.is_visible().unwrap_or(false) {
+            FLYOUT_OPEN.store(false, std::sync::atomic::Ordering::SeqCst);
+            let _ = w.hide();
+            return;
+        }
+    }
+    open_flyout(app, (click.x, click.y));
+}
+
+/// The "Trust this network?" notification: the flyout on Windows (at the tray icon's last position, else the
+/// primary work area's corner), the normal window elsewhere.
+fn show_for_trust(app: &tauri::AppHandle) {
+    #[cfg(windows)]
+    if crate::flyout::trust_target(true) == crate::flyout::TrustTarget::Flyout {
+        let pos = LAST_TRAY_POS.lock().unwrap().unwrap_or_else(|| {
+            let w = crate::flyout::work_area(None, app.primary_monitor().ok().flatten().map(|m| monitor_work(&m)));
+            ((w.x + w.w) as f64, (w.y + w.h) as f64)
+        });
+        open_flyout(app, pos);
+        return;
+    }
+    show_main(app);
+}
+
+/// Show the main window as the flyout near `click`.
+#[cfg(windows)]
+fn open_flyout(app: &tauri::AppHandle, click: (f64, f64)) {
+    use crate::flyout::{place, Taskbar, WinTaskbar, FLYOUT_HEIGHT, FLYOUT_WIDTH};
     use std::sync::atomic::Ordering;
     use tauri::Manager;
     let Some(w) = app.get_webview_window("main") else { return };
-    if FLYOUT_OPEN.load(Ordering::SeqCst) && w.is_visible().unwrap_or(false) {
-        FLYOUT_OPEN.store(false, Ordering::SeqCst);
-        let _ = w.hide();
-        return;
-    }
     let scale = w.scale_factor().unwrap_or(1.0);
     let size = ((FLYOUT_WIDTH * scale) as i32, (FLYOUT_HEIGHT * scale) as i32);
-    let work = match app.monitor_from_point(click.x, click.y) {
-        Ok(Some(m)) => {
-            let a = m.work_area();
-            Rect { x: a.position.x, y: a.position.y, w: a.size.width as i32, h: a.size.height as i32 }
-        }
-        _ => Rect { x: 0, y: 0, w: i32::MAX / 2, h: i32::MAX / 2 },
-    };
-    let r = place(WinTaskbar.edge(), work, (click.x as i32, click.y as i32), size);
+    let at_click = app.monitor_from_point(click.0, click.1).ok().flatten().map(|m| monitor_work(&m));
+    let primary = app.primary_monitor().ok().flatten().map(|m| monitor_work(&m));
+    let work = crate::flyout::work_area(at_click, primary);
+    let r = place(WinTaskbar.edge(), work, (click.0 as i32, click.1 as i32), size);
     let _ = w.set_decorations(false);
     let _ = w.set_always_on_top(true);
     let _ = w.set_skip_taskbar(true);
@@ -296,6 +334,7 @@ pub fn on_window_event(window: &tauri::Window, event: &tauri::WindowEvent) {
         #[cfg(windows)]
         tauri::WindowEvent::Focused(false) => {
             if FLYOUT_OPEN.swap(false, std::sync::atomic::Ordering::SeqCst) {
+                *FOCUS_HIDE_AT.lock().unwrap() = Some(std::time::Instant::now());
                 let _ = window.hide();
             }
         }
@@ -379,7 +418,7 @@ pub fn install(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
         };
         poll_with_icon(&crate::bridge::Fallback::real(), &dir, &|name| {
             let _ = handle.notification().builder().title("Trust this network?").body(name).show();
-            show_main(&handle);
+            show_for_trust(&handle);
         }, &set_icon);
         std::thread::sleep(std::time::Duration::from_secs(30));
     });

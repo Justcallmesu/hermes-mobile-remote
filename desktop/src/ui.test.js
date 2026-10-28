@@ -298,6 +298,16 @@ describe("Settings", () => {
     expect(l.find('[data-test="crash-note"]').exists()).toBe(false);
   });
 
+  it("on Windows there is no run mode select", async () => {
+    answers.get_settings = { start_at_logon: false, terminal_shell: null, platform: "windows" };
+    const w = await open("settings");
+    expect(w.find('[data-test="run-mode"]').exists()).toBe(false);
+    expect(w.text()).not.toContain("Run mode");
+    answers.get_settings = { start_at_logon: false, terminal_shell: null, platform: "linux" };
+    const l = await open("settings");
+    expect(l.find('[data-test="run-mode"]').exists()).toBe(true);
+  });
+
   it("run mode control shows the no-sandbox note and disables login and linger in app-only mode", async () => {
     answers.get_settings = { start_at_logon: true, terminal_shell: null };
     answers.get_run_mode = "always-on";

@@ -92,14 +92,14 @@ async function changeRunMode(event) {
 
     <h2>General</h2>
     <button data-test="open-logs" @click="guard(openLogs)">Open log folder</button>
-    <label>
+    <label v-if="settings.platform !== 'windows'">
       Run mode
       <select data-test="run-mode" :value="runMode" @change="changeRunMode">
         <option value="always-on">Always on (systemd service)</option>
         <option value="app-only">Only while the app is open</option>
       </select>
     </label>
-    <p v-if="runMode === 'app-only'" data-test="no-sandbox">
+    <p v-if="settings.platform !== 'windows' && runMode === 'app-only'" data-test="no-sandbox">
       In this mode the bridge runs without systemd sandboxing.
     </p>
     <label>

@@ -46,6 +46,39 @@ pub fn place(edge: Edge, work: Rect, click: (i32, i32), size: (i32, i32)) -> Rec
     Rect { x, y, w, h }
 }
 
+/// Used when neither the click's monitor nor the primary monitor is known: a common screen minus a taskbar.
+pub const DEFAULT_WORK: Rect = Rect { x: 0, y: 0, w: 1920, h: 1040 };
+
+/// The work area to place the flyout in: the click's monitor, else the primary monitor, else a sane default.
+/// Never a huge sentinel, so the flyout stays on screen.
+pub fn work_area(at_click: Option<Rect>, primary: Option<Rect>) -> Rect {
+    at_click.or(primary).unwrap_or(DEFAULT_WORK)
+}
+
+/// Where the "Trust this network?" notification sends the user.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum TrustTarget {
+    Flyout,
+    MainWindow,
+}
+
+/// On Windows the app lives in the tray, so the notification opens the flyout; elsewhere the normal window.
+pub fn trust_target(is_windows: bool) -> TrustTarget {
+    if is_windows {
+        TrustTarget::Flyout
+    } else {
+        TrustTarget::MainWindow
+    }
+}
+
+/// A tray click this soon after a focus-loss hide is the same click that closed the flyout.
+pub const TRAY_CLICK_GRACE_MS: u64 = 300;
+
+/// Should a tray click be ignored, given the time since the last focus-loss hide (None: never hidden)?
+pub fn ignore_tray_click(since_focus_hide: Option<std::time::Duration>) -> bool {
+    matches!(since_focus_hide, Some(d) if d.as_millis() < TRAY_CLICK_GRACE_MS as u128)
+}
+
 #[cfg(windows)]
 pub struct WinTaskbar;
 
@@ -116,6 +149,33 @@ mod tests {
         let work = Rect { x: -1920, y: 0, w: 1920, h: 1040 };
         assert_eq!(at(Edge::Bottom, work, (-10, 1060)), Rect { x: -360, y: 520, w: 360, h: 520 });
         assert_eq!(at(Edge::Bottom, work, (-1915, 1060)).x, -1920);
+    }
+
+    #[test]
+    fn windows_trust_notification_routes_to_the_flyout() {
+        assert_eq!(trust_target(true), TrustTarget::Flyout);
+        assert_eq!(trust_target(false), TrustTarget::MainWindow);
+    }
+
+    #[test]
+    fn a_missing_monitor_falls_back_to_the_primary_work_area() {
+        let click = Rect { x: 1920, y: 0, w: 1280, h: 984 };
+        let primary = Rect { x: 0, y: 0, w: 1920, h: 1040 };
+        assert_eq!(work_area(Some(click), Some(primary)), click);
+        assert_eq!(work_area(None, Some(primary)), primary);
+        let w = work_area(None, None);
+        assert!(w.w <= 10_000 && w.h <= 10_000);
+        let r = place(Edge::Bottom, w, (5000, 5000), SIZE);
+        assert!(r.x >= w.x && r.y >= w.y && r.x + r.w <= w.x + w.w && r.y + r.h <= w.y + w.h);
+    }
+
+    #[test]
+    fn a_tray_click_right_after_a_focus_loss_hide_is_ignored() {
+        use std::time::Duration;
+        assert!(ignore_tray_click(Some(Duration::from_millis(50))));
+        assert!(!ignore_tray_click(Some(Duration::from_millis(TRAY_CLICK_GRACE_MS))));
+        assert!(!ignore_tray_click(Some(Duration::from_secs(5))));
+        assert!(!ignore_tray_click(None));
     }
 
     #[test]
