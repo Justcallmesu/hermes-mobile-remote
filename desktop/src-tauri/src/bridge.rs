@@ -121,14 +121,17 @@ impl BridgePaths {
     pub fn port(&self) -> u16 {
         std::fs::read_to_string(self.config_dir.join("config.toml"))
             .ok()
-            .and_then(|t| {
-                t.lines().find_map(|l| {
-                    let (k, v) = l.split_once('=')?;
-                    (k.trim() == "port").then(|| v.split('#').next()?.trim().parse().ok())?
-                })
-            })
+            .and_then(|t| config_value(&t, "port")?.parse().ok())
             .unwrap_or(DEFAULT_PORT)
     }
+}
+
+/// The value of the `key = value` line in a bridge `config.toml` text: comment stripped, trimmed, unquoted.
+pub fn config_value(config_text: &str, key: &str) -> Option<String> {
+    config_text.lines().find_map(|l| {
+        let (k, v) = l.split_once('=')?;
+        (k.trim() == key).then(|| v.split('#').next().unwrap_or("").trim().trim_matches('"').to_string())
+    })
 }
 
 // ------------------------------------------------------------------ LocalHttp

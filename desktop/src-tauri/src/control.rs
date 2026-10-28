@@ -1,7 +1,7 @@
 //! Controls whose OS backend arrives in later tickets (bridge start/stop, start at logon, firewall fix,
 //! open log folder). Commands call a `Control`; later tickets replace the implementation, not the commands.
 
-use crate::bridge::BridgePaths;
+use crate::bridge::{config_value, BridgePaths};
 use serde_json::{json, Value};
 use std::path::Path;
 
@@ -10,6 +10,7 @@ pub const UNSUPPORTED: &str = "not available yet on this platform";
 pub trait Control {
     fn start(&self) -> Result<(), String>;
     fn stop(&self) -> Result<(), String>;
+    fn start_at_logon(&self) -> bool;
     fn set_start_at_logon(&self, on: bool) -> Result<(), String>;
     fn firewall_fix(&self) -> Result<(), String>;
     fn open_logs(&self) -> Result<(), String>;
@@ -23,6 +24,9 @@ impl Control for Unsupported {
     }
     fn stop(&self) -> Result<(), String> {
         Err(UNSUPPORTED.into())
+    }
+    fn start_at_logon(&self) -> bool {
+        false
     }
     fn set_start_at_logon(&self, _on: bool) -> Result<(), String> {
         Err(UNSUPPORTED.into())
@@ -57,10 +61,7 @@ pub fn with_terminal_shell(config_text: &str, value: &str) -> String {
 }
 
 pub fn read_terminal_shell(config_text: &str) -> Option<String> {
-    config_text.lines().find_map(|l| {
-        let (k, v) = l.split_once('=')?;
-        (k.trim() == "terminal_shell").then(|| v.split('#').next().unwrap_or("").trim().trim_matches('"').to_string())
-    })
+    config_value(config_text, "terminal_shell")
 }
 
 /// Write the `terminal_shell` line through `writer(path, text)`.
@@ -74,9 +75,9 @@ pub fn set_terminal_shell_in(
     writer(&path, &with_terminal_shell(&old, value)).map_err(|e| e.to_string())
 }
 
-pub fn settings_in(config_dir: &Path) -> Value {
+pub fn settings_in(config_dir: &Path, control: &dyn Control) -> Value {
     let text = std::fs::read_to_string(config_dir.join("config.toml")).unwrap_or_default();
-    json!({"start_at_logon": false, "terminal_shell": read_terminal_shell(&text)})
+    json!({"start_at_logon": control.start_at_logon(),"terminal_shell": read_terminal_shell(&text)})
 }
 
 /// `<config_dir>/INSTALLED.txt`, or None when setup has not run.
@@ -98,7 +99,7 @@ pub async fn bridge_stop() -> Result<(), String> {
 }
 #[tauri::command]
 pub async fn get_settings() -> Result<Value, String> {
-    Ok(settings_in(&BridgePaths::from_env().config_dir))
+    Ok(settings_in(&BridgePaths::from_env().config_dir, &backend()))
 }
 #[tauri::command]
 pub async fn set_start_at_logon(on: bool) -> Result<(), String> {
