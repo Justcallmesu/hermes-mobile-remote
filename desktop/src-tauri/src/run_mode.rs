@@ -426,6 +426,64 @@ mod tests {
         assert_eq!(*log.lock().unwrap(), ["/v/bin/hermes-remote-bridge supervise pdeathsig=true"]);
     }
 
+    #[test]
+    fn a_second_spawn_with_a_live_child_returns_ok_without_a_second_bridge() {
+        let log: Log = Arc::default();
+        let sup = Arc::new(ProcessSupervisor::new("x".into(), FakeSpawner(log.clone()), Duration::ZERO, Duration::ZERO));
+        let (tx, rx) = std::sync::mpsc::channel();
+        let s = sup.clone();
+        std::thread::spawn(move || {
+            let _ = tx.send((s.spawn(), s.spawn()));
+        });
+        let (a, b) = rx.recv_timeout(Duration::from_secs(5)).expect("second spawn hung");
+        assert!(a.is_ok() && b.is_ok());
+        assert_eq!(log.lock().unwrap().len(), 1);
+    }
+
+    struct FakeInner(Log);
+    impl Control for FakeInner {
+        fn start(&self) -> Result<(), String> {
+            self.0.lock().unwrap().push("inner.start".into());
+            Ok(())
+        }
+        fn stop(&self) -> Result<(), String> {
+            self.0.lock().unwrap().push("inner.stop".into());
+            Ok(())
+        }
+        fn start_at_logon(&self) -> bool {
+            true
+        }
+        fn set_start_at_logon(&self, on: bool) -> Result<(), String> {
+            self.0.lock().unwrap().push(format!("inner.logon={on}"));
+            Ok(())
+        }
+        fn firewall_fix(&self) -> Result<(), String> {
+            Ok(())
+        }
+        fn open_logs(&self) -> Result<(), String> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn mode_control_routes_start_stop_and_start_at_logon_by_mode() {
+        let log: Log = Arc::default();
+        let child = FakeChild { log: log.clone(), code: None };
+        let app = ModeControl { inner: FakeInner(log.clone()), mode: RunMode::AppOnly, child: &child };
+        app.start().unwrap();
+        app.stop().unwrap();
+        assert!(!app.start_at_logon());
+        assert!(app.set_start_at_logon(true).is_err());
+        assert_eq!(*log.lock().unwrap(), ["child.spawn", "child.stop"]);
+        log.lock().unwrap().clear();
+        let on = ModeControl { inner: FakeInner(log.clone()), mode: RunMode::AlwaysOn, child: &child };
+        on.start().unwrap();
+        on.stop().unwrap();
+        assert!(on.start_at_logon());
+        on.set_start_at_logon(false).unwrap();
+        assert_eq!(*log.lock().unwrap(), ["inner.start", "inner.stop", "inner.logon=false"]);
+    }
+
     #[cfg(unix)]
     #[test]
     fn the_os_spawner_installs_the_hook_and_exit_76_is_reported_as_a_port_conflict() {
