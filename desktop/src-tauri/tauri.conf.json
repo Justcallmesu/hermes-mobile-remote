@@ -25,14 +25,37 @@
   },
   "bundle": {
     "active": true,
-    "targets": "all",
+    "targets": [
+      "appimage",
+      "deb",
+      "nsis"
+    ],
     "createUpdaterArtifacts": true,
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
       "icons/128x128@2x.png",
       "icons/icon.png"
-    ]
+    ],
+    "shortDescription": "Control the Hermes Mobile Remote bridge",
+    "longDescription": "Installs, controls and shows the Hermes Mobile Remote bridge that lets your phone use Hermes Agent on this PC.",
+    "category": "Utility",
+    "publisher": "nideta231",
+    "homepage": "https://github.com/nideta231/hermes-mobile-remote",
+    "license": "MIT",
+    "resources": {
+      "../../bridge/hermes_remote_bridge/": "bridge/hermes_remote_bridge/",
+      "../../bridge/pyproject.toml": "bridge/pyproject.toml",
+      "../../bridge/uv.lock": "bridge/uv.lock"
+    },
+    "linux": {
+      "deb": {
+        "section": "utils"
+      },
+      "appimage": {
+        "bundleMediaFramework": false
+      }
+    }
   },
   "plugins": {
     "updater": {
