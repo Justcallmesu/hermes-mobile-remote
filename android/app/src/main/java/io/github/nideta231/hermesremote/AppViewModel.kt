@@ -320,6 +320,9 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
     /** The Scheduled page: cron jobs of the profile in use. */
     val cron = CronJobs(viewModelScope, source = { source as? io.github.nideta231.hermesremote.data.CronSource }, target = ::target,
         describe = ::describe, say = { _toast.value = it })
+    /** The drawer's "In messages" search: Hermes' message search, beside the local title filter. */
+    val search = io.github.nideta231.hermesremote.data.SessionSearch(viewModelScope,
+        source = { source as? io.github.nideta231.hermesremote.data.SessionSearchSource }, target = ::target)
     /** The Vault page: saved logins, cards and addresses on the PC (metadata; secrets stay there). */
     val vault = io.github.nideta231.hermesremote.data.Vault(viewModelScope,
         call = { method, params -> (gateway ?: throw IOException("Not connected to your PC")).call(method, scoped(params), 30_000) },
@@ -867,6 +870,7 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
         _sessions.value = SessionsState()
         settings.clear()
         cron.clear()
+        search.clear()
         vault.clear()
         monitor.clear()
         _features.value = emptySet()
@@ -1326,6 +1330,7 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
         _modelChoice.value = null
         settings.forgetProfileValues()
         cron.clear()
+        search.clear()
         vault.clear()
         refreshSessions()
         settings.refresh()

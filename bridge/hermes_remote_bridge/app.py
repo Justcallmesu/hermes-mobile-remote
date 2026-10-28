@@ -87,6 +87,46 @@ _CRON_JOB_FIELDS = ("id", "name", "schedule_display", "state", "enabled", "next_
 _CRON_RUN_FIELDS = ("id", "title", "preview", "source", "started_at", "ended_at", "message_count", "model")
 
 
+# Session search: how long a query may be, how many chats one search returns, and how much of the
+# matching message the phone gets (a drawer line, not the message).
+SEARCH_QUERY_MAX = 200
+SEARCH_LIMIT_MAX = 50
+SNIPPET_MAX_CHARS = 160
+# The fields of a search hit the phone gets: a /v1/sessions row plus the matching text.
+_SEARCH_ROW_FIELDS = ("id", "title", "preview", "source", "message_count", "last_active", "model", "pinned")
+# Hermes' FTS5 snippet() wraps the match in these markers for the desktop to highlight.
+_SNIPPET_MARKS = re.compile(r">>>|<<<")
+
+
+def _snippet(text: Any) -> str:
+    """The matching text on one short line: highlight markers dropped, whitespace collapsed."""
+    flat = " ".join(_SNIPPET_MARKS.sub("", text if isinstance(text, str) else "").split())
+    return flat if len(flat) <= SNIPPET_MAX_CHARS else flat[:SNIPPET_MAX_CHARS - 1].rstrip() + "…"
+
+
+def _search_hit(row: dict) -> dict:
+    """One Hermes search result in the shape of a /v1/sessions row (+ `snippet`).
+
+    Hermes names the chat `session_id` (its compression tip) and leaves `last_active` empty for
+    pure text hits; the phone wants `id` and some recency, so fall back to when the chat started.
+    """
+    hit = {k: row.get(k) for k in _SEARCH_ROW_FIELDS}
+    hit["id"] = row.get("session_id") or row.get("id")
+    hit["last_active"] = row.get("last_active") or row.get("started_at") or row.get("session_started")
+    hit["pinned"] = bool(row.get("pinned"))
+    hit["snippet"] = _snippet(row.get("snippet"))
+    return hit
+
+
+def _visible_hits(rows: list, limit: int) -> list[dict]:
+    """The hits the sidebar would show: no archived chats (Hermes' search includes them), no
+    cron runs, at most `limit`."""
+    hits = [_search_hit(r) for r in rows
+            if isinstance(r, dict) and not r.get("archived") and r.get("source") != "cron"
+            and (r.get("session_id") or r.get("id"))]
+    return hits[:limit]
+
+
 def _cron_job(job: dict) -> dict:
     return {k: job.get(k) for k in _CRON_JOB_FIELDS}
 
@@ -547,6 +587,20 @@ def create_app(cfg: Config, *, locator: BackendLocator | None = None, tailnet: T
         data = await hermes_http("GET", "/api/sessions", params=params)
         return {"sessions": data.get("sessions", []), "total": data.get("total"),
                 "limit": data.get("limit"), "offset": data.get("offset")}
+
+    @app.get("/v1/sessions/search")
+    async def search_sessions(q: str = "", limit: int = 20, profile: str | None = Depends(profile_param),
+                              _: Device = Depends(device_auth)):
+        """Chats whose messages (or id) contain `q`: the desktop sidebar's own search
+        (Hermes' FTS5 index, one row per conversation across compressions)."""
+        query = q.strip()
+        if not 1 <= len(query) <= SEARCH_QUERY_MAX:
+            raise ApiError(400, "invalid_query", f"q must be 1..{SEARCH_QUERY_MAX} characters")
+        limit = max(1, min(limit, SEARCH_LIMIT_MAX))
+        # Over-fetch a little: archived chats are dropped here, Hermes cannot leave them out.
+        params = {"q": query, "limit": min(limit + 10, 100), "exclude_sources": "cron", **scoped(profile)}
+        data = await hermes_http("GET", "/api/sessions/search", params=params)
+        return {"sessions": _visible_hits(data.get("results", []), limit)}
 
     @app.patch("/v1/sessions/{session_id}")
     async def patch_session(session_id: str, body: PatchSession, profile: str | None = Depends(profile_param),

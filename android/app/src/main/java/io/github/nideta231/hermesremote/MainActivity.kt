@@ -261,6 +261,7 @@ class MainActivity : ComponentActivity() {
     private fun PairedApp() {
         val pairing by vm.pairing.collectAsState()
         val chat by vm.chat.collectAsState()
+        val sessionSearch by vm.search.state.collectAsState()
         val sessions by vm.sessions.collectAsState()
         val sessionView by vm.sessionView.collectAsState()
         val groupOrder by vm.groupOrder.collectAsState()
@@ -339,6 +340,8 @@ class MainActivity : ComponentActivity() {
             openPc = if (hasMonitor) ({ go(Page.PC) }) else null,
             openTerminal = if (hasTerminal) ({ go(Page.TERMINAL) }) else null,
             repairPc = vm::startRepair,
+            search = vm.search::search,
+            openFound = { id, profile -> vm.openSession(id, profile); go(Page.CHAT) },
         )
         val chatActions = ChatActions(
             send = vm::send, stop = vm::stop, steer = vm::steer, queue = vm::queue, approve = vm::answerApproval, stopSubagent = vm::stopSubagent, stopProcess = vm::stopProcess,
@@ -419,7 +422,7 @@ class MainActivity : ComponentActivity() {
         if (wide) {
             Row(Modifier.fillMaxSize()) {
                 Surface(color = MaterialTheme.colorScheme.surfaceContainerLow, modifier = Modifier.width(320.dp).fillMaxHeight()) {
-                    SessionsPane(sessions, chat.sessionId, sessionActions, pcs = pcs, profiles = hermesProfiles, view = sessionView, update = update, onOpenUpdate = openUpdate, groupOrder = groupOrder, scheduledCount = cron.jobs.count { it.state == "scheduled" })
+                    SessionsPane(sessions, chat.sessionId, sessionActions, pcs = pcs, profiles = hermesProfiles, view = sessionView, update = update, onOpenUpdate = openUpdate, groupOrder = groupOrder, scheduledCount = cron.jobs.count { it.state == "scheduled" }, search = sessionSearch)
                 }
                 VerticalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f))
                 Box(Modifier.weight(1f)) { content() }
@@ -427,7 +430,7 @@ class MainActivity : ComponentActivity() {
         } else {
             ModalNavigationDrawer(drawerState = drawer, gesturesEnabled = page == Page.CHAT || drawer.isOpen, drawerContent = {
                 ModalDrawerSheet(drawerContainerColor = MaterialTheme.colorScheme.surfaceContainerLow, modifier = Modifier.width(320.dp)) {
-                    SessionsPane(sessions, chat.sessionId, sessionActions, pcs = pcs, profiles = hermesProfiles, view = sessionView, update = update, onOpenUpdate = openUpdate, groupOrder = groupOrder, scheduledCount = cron.jobs.count { it.state == "scheduled" })
+                    SessionsPane(sessions, chat.sessionId, sessionActions, pcs = pcs, profiles = hermesProfiles, view = sessionView, update = update, onOpenUpdate = openUpdate, groupOrder = groupOrder, scheduledCount = cron.jobs.count { it.state == "scheduled" }, search = sessionSearch)
                 }
             }) { content() }
         }

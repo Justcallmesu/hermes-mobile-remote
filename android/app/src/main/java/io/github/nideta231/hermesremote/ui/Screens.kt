@@ -113,6 +113,8 @@ import io.github.nideta231.hermesremote.data.SESSION_FIRST_PAGE_CHOICES
 import io.github.nideta231.hermesremote.data.arrangeSessions
 import io.github.nideta231.hermesremote.data.GroupOrder
 import io.github.nideta231.hermesremote.data.pageGroups
+import io.github.nideta231.hermesremote.data.SessionSearchState
+import io.github.nideta231.hermesremote.data.serverOnlyHits
 import io.github.nideta231.hermesremote.data.Transport
 import io.github.nideta231.hermesremote.data.TransportMode
 import kotlinx.coroutines.launch
@@ -152,6 +154,10 @@ class SessionActions(
     val projects: ProjectActions = ProjectActions(),
     /** Move a stored chat into a project (session id, project id). */
     val moveToProject: (String, String) -> Unit = { _, _ -> },
+    /** The search box changed: ask the PC for chats whose messages match (debounced there). */
+    val search: (String) -> Unit = {},
+    /** Open a chat found by search in the profile it was found in (session id, profile). */
+    val openFound: (String, String?) -> Unit = { id, _ -> open(id) },
 )
 
 /** The session list. On phones it lives in the navigation drawer; on tablets beside the chat. */
@@ -170,12 +176,15 @@ fun SessionsPane(
     groupOrder: List<String> = emptyList(),
     /** Active (not paused) scheduled jobs; shown as a count on the Scheduled icon. */
     scheduledCount: Int = 0,
+    search: SessionSearchState = SessionSearchState(),
 ) {
     var query by remember { mutableStateOf("") }
     var filterSheet by remember { mutableStateOf(false) }
     var pcSheet by remember { mutableStateOf(false) }
     var profileSheet by remember { mutableStateOf(false) }
     val activePc = pcs.firstOrNull { it.active }
+    // Ask again when the PC or profile changes too: switching forgets the old hits.
+    LaunchedEffect(query, activePc?.id, profiles.active) { actions.search(query) }
     var menuFor by remember { mutableStateOf<SessionSummary?>(null) }
     var renaming by remember { mutableStateOf<SessionSummary?>(null) }
     var deleting by remember { mutableStateOf<SessionSummary?>(null) }
@@ -196,6 +205,11 @@ fun SessionsPane(
     var shown by remember(query, view, pcs.firstOrNull { it.active }?.id, profiles.active) { mutableStateOf(mapOf<String, Int>()) }
     val perGroup = ThemePrefs.sessionsPerGroup
     val pages = remember(grouped, shown, currentId, perGroup) { pageGroups(grouped, shown, currentId, perGroup) }
+    // Chats only Hermes' message search found; shown while the box still holds the query they answer.
+    val found = remember(grouped, search, query) {
+        if (search.query != query.trim()) emptyList()
+        else serverOnlyHits(search.hits, grouped.flatMapTo(HashSet()) { g -> g.items.map { it.id } })
+    }
 
     val haptics = LocalHapticFeedback.current
     Column(modifier.fillMaxHeight().statusBarsPadding().navigationBarsPadding()) {
@@ -321,6 +335,19 @@ fun SessionsPane(
                         }
                     }
                 }
+                if (found.isNotEmpty()) {
+                    item(key = "found-header") { GroupHeader("In messages", found.size, false, Modifier.animateItem()) {} }
+                    items(found, key = { "found-" + it.session.id }) { hit ->
+                        SessionRow(hit.session, current = hit.session.id == currentId, live = state.live[hit.session.id],
+                            modifier = Modifier.animateItem(), snippet = hit.snippet,
+                            onClick = { actions.openFound(hit.session.id, search.target?.profile) },
+                            onLongClick = { menuFor = hit.session })
+                    }
+                }
+                if (search.loading && search.query == query.trim()) item(key = "found-loading") {
+                    Text("Searching messages…", style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp))
+                }
                 item {
                     when {
                         state.hasMore && query.isBlank() -> {
@@ -334,7 +361,7 @@ fun SessionsPane(
                             TextButton(onClick = { actions.setView(view.copy(statuses = emptySet(), projects = emptySet())) },
                                 contentPadding = PaddingValues(0.dp)) { Text("Clear filters", color = Gold) }
                         }
-                        grouped.isEmpty() -> Text(if (query.isBlank()) "No chats yet." else "Nothing matches “$query”.",
+                        grouped.isEmpty() && found.isEmpty() && !search.loading -> Text(if (query.isBlank()) "No chats yet." else "Nothing matches “$query”.",
                             color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(20.dp))
                     }
                 }
@@ -610,6 +637,8 @@ private fun GroupHeader(label: String, count: Int, collapsed: Boolean, modifier:
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun SessionRow(s: SessionSummary, current: Boolean, live: String?, modifier: Modifier, nested: Boolean = false,
+                       /** For a search hit: the matching text from inside the chat. */
+                       snippet: String? = null,
                        onClick: () -> Unit, onLongClick: () -> Unit) {
     val haptics = LocalHapticFeedback.current
     val bg by animateColorAsState(if (current) Gold.copy(alpha = 0.13f) else Color.Transparent, label = "row")
@@ -626,6 +655,10 @@ private fun SessionRow(s: SessionSummary, current: Boolean, live: String?, modif
         Column(Modifier.weight(1f)) {
             Text(s.displayTitle, maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.bodyLarge,
                 fontWeight = if (current) FontWeight.SemiBold else FontWeight.Normal)
+            snippet?.takeIf { it.isNotBlank() }?.let {
+                Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 2, overflow = TextOverflow.Ellipsis)
+            }
             val meta = listOfNotNull(s.lastActive?.let { relative(it) }, sourceLabel(s.source), "${s.messageCount} msgs").joinToString(" · ")
             Text(meta, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1,
                 overflow = TextOverflow.Ellipsis)

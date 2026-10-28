@@ -28,6 +28,11 @@ task…", and the send button turns into a stop button. You can add instructions
 Long-press a session for those actions; deleting asks for confirmation. A session that is working
 right now — on any screen — shimmers in the list, like the desktop sidebar.
 
+**Search inside chats.** The drawer's search box filters titles and previews as you type. Pause
+for a moment after two or more characters and it also asks Hermes on the PC, which searches the
+text of every message (the desktop sidebar's search). Chats found only that way appear under
+*In messages* with the matching line; tap one to open it. An older bridge keeps the title filter.
+
 **Pinned sessions.** Pins are shared with the Hermes desktop app; pin on either surface.
 
 **Hermes profiles.** If the PC has more than one Hermes profile (`hermes profile list`), the drawer
