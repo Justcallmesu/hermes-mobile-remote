@@ -40,7 +40,7 @@ from .folders import FolderError, list_dirs, make_dir
 from .project_notes import IDEA_MAX_BYTES, NoFolder, read_idea, write_idea
 from .profiles import ProfileRefused, is_visible, media_roots, profile_home, resolve_profile
 from .monitor import RANGES, ClaudeUsage, Monitor
-from .relay import Relay
+from .relay import ParkedUpstreams, Relay
 from .terminal import Shell
 from .terminal import serve as serve_terminal
 from .tailnet import TailnetClient, is_loopback, is_private_lan_ip, is_tailnet_ip
@@ -168,7 +168,7 @@ def create_app(cfg: Config, *, locator: BackendLocator | None = None, tailnet: T
                devices: DeviceStore | None = None, owner_login: str | None = None,
                hermes_cli=None, trust: TrustStore | None = None,
                http: httpx.AsyncClient | None = None, monitor: Monitor | None = None,
-               shell_factory=None) -> FastAPI:
+               shell_factory=None, park_sleep=asyncio.sleep) -> FastAPI:
     if monitor is None and cfg.monitor:
         monitor = Monitor(cfg.monitor_db, ClaudeUsage(cfg.claude_credentials) if cfg.claude_usage else None)
     shell_factory = shell_factory or Shell
@@ -186,6 +186,8 @@ def create_app(cfg: Config, *, locator: BackendLocator | None = None, tailnet: T
     def audit_event(entry: dict) -> None:
         audit.info(json.dumps({"ts": round(time.time(), 3), **entry}))
 
+    parked = ParkedUpstreams(cfg.park_seconds, sleep=park_sleep, audit=audit_event)
+
     @contextlib.asynccontextmanager
     async def lifespan(_: FastAPI):
         async def housekeeping() -> None:
@@ -201,6 +203,7 @@ def create_app(cfg: Config, *, locator: BackendLocator | None = None, tailnet: T
             yield
         finally:
             task.cancel()
+            await parked.close_all()
             if monitor is not None:
                 monitor.stop()
             with contextlib.suppress(Exception):
@@ -717,7 +720,7 @@ def create_app(cfg: Config, *, locator: BackendLocator | None = None, tailnet: T
         relay = Relay(locator, max_frame_bytes=cfg.max_frame_bytes,
                       allow_frame=lambda: limiter.allow(frames_key, cfg.frames_per_minute),
                       audit=lambda e: audit_event({**e, "peer": node}),
-                      allowed_profiles=cfg.allowed_profiles)
+                      allowed_profiles=cfg.allowed_profiles, parked=parked)
         await relay.run(ws, device.name)
 
     app.state.locator = locator

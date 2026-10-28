@@ -58,6 +58,8 @@ ALLOWED_METHODS = frozenset({
     # the vault page: list (metadata only, never a secret), add, remove. Unlocking a password manager
     # (its master password) stays on the PC.
     "vault.list", "vault.sources", "vault.add", "vault.remove",
+    # read-only state of the open chat's /loop and /heartbeat (background work signals)
+    "session.control.read",
 })
 
 # config.set keys the phone may change: the chat's model, reasoning and fast mode.
@@ -105,17 +107,90 @@ def check_frame(raw: str, max_bytes: int, allowed_profiles: Iterable[str] = ()) 
     return raw, None
 
 
+class _Live:
+    """A phone connection that is running now; `replaced` is set when the same device connects again."""
+
+    def __init__(self) -> None:
+        self.replaced = asyncio.Event()
+        self.done = asyncio.Event()
+
+
+class ParkedUpstreams:
+    """Hermes sockets kept open, per device, for a while after the phone's socket dropped.
+
+    Hermes reaps a session 20 s after its socket detaches. Holding the upstream socket for
+    `park_seconds` lets a phone that comes back (app reopened, network change) re-attach to the
+    same one. Frames Hermes sends meanwhile are dropped: the phone's `session.resume` rebuilds state.
+    """
+
+    def __init__(self, park_seconds: float = 0, *, sleep: Callable[[float], Awaitable[Any]] = asyncio.sleep,
+                 audit: Callable[[dict], None] = lambda e: None):
+        self.park_seconds = park_seconds
+        self._sleep = sleep
+        self._audit = audit
+        self._parked: dict[str, tuple[Any, str, list[asyncio.Task]]] = {}
+        self.live: dict[str, _Live] = {}
+
+    @property
+    def enabled(self) -> bool:
+        return self.park_seconds > 0
+
+    def park(self, device: str, upstream: Any, ready: str) -> None:
+        self._discard(device)
+
+        async def expire() -> None:
+            await self._sleep(self.park_seconds)
+            self._audit({"event": "ws_park_expired", "device": device})
+            self._discard(device)
+
+        async def drain() -> None:
+            with contextlib.suppress(Exception):
+                async for _ in upstream:
+                    pass
+            self._discard(device)  # Hermes closed (or errored) while parked
+
+        self._parked[device] = (upstream, ready, [asyncio.create_task(expire()), asyncio.create_task(drain())])
+
+    def claim(self, device: str) -> tuple[Any, str] | None:
+        entry = self._parked.pop(device, None)
+        if entry is None:
+            return None
+        for t in entry[2]:
+            t.cancel()
+        return entry[0], entry[1]
+
+    def _discard(self, device: str) -> None:
+        entry = self._parked.pop(device, None)
+        if entry is not None:
+            for t in entry[2]:
+                t.cancel()
+            asyncio.get_running_loop().create_task(_close_quietly(entry[0]))
+
+    async def close_all(self) -> None:
+        entries, self._parked = list(self._parked.values()), {}
+        for upstream, _, tasks in entries:
+            for t in tasks:
+                t.cancel()
+            await _close_quietly(upstream)
+
+
+async def _close_quietly(upstream: Any) -> None:
+    with contextlib.suppress(BaseException):
+        await upstream.close()
+
+
 class Relay:
     """One phone connection ↔ one Hermes connection."""
 
     def __init__(self, locator: BackendLocator, *, max_frame_bytes: int,
                  allow_frame: Callable[[], bool], audit: Callable[[dict], None],
-                 allowed_profiles: Iterable[str] = ()):
+                 allowed_profiles: Iterable[str] = (), parked: ParkedUpstreams | None = None):
         self.locator = locator
         self.max_frame_bytes = max_frame_bytes
         self.allow_frame = allow_frame
         self.audit = audit
         self.allowed_profiles = frozenset(allowed_profiles)
+        self.parked = parked or ParkedUpstreams(0)
 
     async def run(self, phone: WebSocket, device_name: str) -> None:
         try:
@@ -123,15 +198,30 @@ class Relay:
         except BackendUnavailable as exc:
             await phone.close(code=CLOSE_UNAVAILABLE, reason=str(exc)[:120])
             return
-        try:
-            upstream = await websockets.connect(backend.ws, max_size=None, ping_interval=20, ping_timeout=20,
-                                                open_timeout=10, close_timeout=2, compression=None)
-        except (OSError, websockets.WebSocketException, asyncio.TimeoutError) as exc:
-            log.warning("could not reach Hermes on port %d: %s", backend.port, exc)
-            self.locator.forget(backend)
-            await phone.close(code=CLOSE_UNAVAILABLE, reason="Hermes is not answering")
-            return
+        parked = self.parked
+        old = parked.live.get(device_name)
+        if old is not None:
+            # Same device again: the old phone side ends, and its upstream is parked for us below.
+            old.replaced.set()
+            with contextlib.suppress(asyncio.TimeoutError):
+                await asyncio.wait_for(old.done.wait(), 5)
+        claimed = parked.claim(device_name)
+        ready: str | None = None
+        if claimed is not None:
+            upstream, ready = claimed
+        else:
+            try:
+                upstream = await websockets.connect(backend.ws, max_size=None, ping_interval=20, ping_timeout=20,
+                                                    open_timeout=10, close_timeout=2, compression=None)
+            except (OSError, websockets.WebSocketException, asyncio.TimeoutError) as exc:
+                log.warning("could not reach Hermes on port %d: %s", backend.port, exc)
+                self.locator.forget(backend)
+                await phone.close(code=CLOSE_UNAVAILABLE, reason="Hermes is not answering")
+                return
         await phone.accept()
+        live = parked.live[device_name] = _Live()
+        if claimed is not None:
+            self.audit({"event": "ws_reattach", "device": device_name})
         self.audit({"event": "ws_open", "device": device_name, "backend_port": backend.port})
         methods: dict[str, int] = {}
 
@@ -158,16 +248,25 @@ class Relay:
                     await upstream.send(forward)
 
         async def hermes_to_phone() -> None:
+            nonlocal ready
+            if ready is not None:
+                await phone.send_text(ready)  # Hermes sent its gateway.ready to the first phone only
             async for raw in upstream:
-                await phone.send_text(raw if isinstance(raw, str) else raw.decode(errors="replace"))
+                text = raw if isinstance(raw, str) else raw.decode(errors="replace")
+                if ready is None and "gateway.ready" in text and _is_ready(text):
+                    ready = text
+                await phone.send_text(text)
 
-        tasks = [asyncio.create_task(phone_to_hermes()), asyncio.create_task(hermes_to_phone())]
+        tasks = [asyncio.create_task(phone_to_hermes()), asyncio.create_task(hermes_to_phone()),
+                 asyncio.create_task(live.replaced.wait())]
         reason = "phone left"
         try:
             done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
             for t in done:
                 exc = t.exception()
-                if t is tasks[1]:
+                if t is tasks[2]:
+                    reason = "replaced by a new connection"
+                elif t is tasks[1]:
                     reason = "hermes closed" if exc is None else f"hermes error: {type(exc).__name__}"
                 elif exc is not None and not isinstance(exc, WebSocketDisconnect):
                     reason = f"phone error: {type(exc).__name__}"
@@ -184,12 +283,28 @@ class Relay:
                 # the phone's reconnect attaches to, or starts, whatever runs next.
                 self.locator.forget(backend)
             self.audit({"event": "ws_close", "device": device_name, "reason": reason, "methods": methods})
+            keep = (parked.enabled and ready is not None
+                    and not reason.startswith("hermes") and reason != "bridge shutting down")
+            if keep:
+                parked.park(device_name, upstream, ready)
+                self.audit({"event": "ws_park", "device": device_name})
+            if parked.live.get(device_name) is live:
+                del parked.live[device_name]
+            live.done.set()
             with contextlib.suppress(BaseException):
                 await asyncio.gather(*tasks, return_exceptions=True)
-                await upstream.close()
+                if not keep:
+                    await upstream.close()
                 if (phone.application_state != WebSocketState.DISCONNECTED
                         and phone.client_state != WebSocketState.DISCONNECTED):
                     await phone.close(code=1012 if reason.startswith("hermes") else 1000)
+
+
+def _is_ready(raw: str) -> bool:
+    try:
+        return json.loads(raw).get("params", {}).get("type") == "gateway.ready"
+    except (ValueError, AttributeError):
+        return False
 
 
 def _method_of(raw: str) -> str | None:

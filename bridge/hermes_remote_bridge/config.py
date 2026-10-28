@@ -66,6 +66,9 @@ class Config:
     requests_per_minute: int = 240
     # Frames per minute on one live connection (the phone's RPCs, not Hermes' events).
     frames_per_minute: int = 600
+    # Seconds the bridge keeps Hermes' socket open after the phone's drops, so a quick return
+    # re-attaches to the same session (Hermes reaps a detached one after 20 s). 0 turns it off.
+    park_seconds: float = 300
 
     @classmethod
     def load(cls, path: Path | None = None) -> "Config":

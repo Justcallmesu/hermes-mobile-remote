@@ -1,3 +1,4 @@
+import asyncio
 import json
 import os
 import threading
@@ -465,6 +466,145 @@ def test_relay_carries_both_directions(tmp_path, fake_hermes):
             break
         time.sleep(0.05)
     assert '"event": "ws_open"' in log and '"prompt.submit": 1' in log and token not in log
+
+
+@pytest.fixture
+def parkable_hermes():
+    """Like fake_hermes, but exposes each upstream connection and whether it has closed."""
+    conns, closed = [], []
+
+    def handler(conn):
+        conns.append(conn)
+        conn.send(json.dumps({"jsonrpc": "2.0", "method": "event", "params": {"type": "gateway.ready", "payload": {"n": len(conns)}}}))
+        for raw in conn:
+            frame = json.loads(raw)
+            if "method" in frame:
+                conn.send(json.dumps({"jsonrpc": "2.0", "id": frame["id"], "result": {"conn": conns.index(conn)}}))
+        closed.append(conn)
+
+    server = serve(handler, "127.0.0.1", 0)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    yield server.socket.getsockname()[1], conns, closed
+    server.shutdown()
+
+
+def _park_app(tmp_path, port, park_seconds=300):
+    expire = threading.Event()
+
+    async def fake_sleep(_):  # the grace passes when the test says so
+        while not expire.is_set():
+            await asyncio.sleep(0.01)
+
+    cfg = Config(devices_file=tmp_path / "d.json", audit_log=tmp_path / "a.log", park_seconds=park_seconds)
+    store = DeviceStore(cfg.devices_file)
+    tokens = {name: store.pair(name)[1] for name in ("phone", "tablet")}
+    app = create_app(cfg, locator=FakeLocator(Backend(port, "tok")), http=fake_http(),
+                     tailnet=FakeTailnet({PHONE: "me@example.com"}), devices=store,
+                     owner_login="me@example.com", park_sleep=fake_sleep)
+    return app, tokens, expire, cfg
+
+
+def _wait(cond, what):
+    for _ in range(100):
+        if cond():
+            return
+        time.sleep(0.05)
+    raise AssertionError(f"timed out waiting for {what}")
+
+
+def _connect_and_drop(c, token):
+    with c.websocket_connect("/v1/ws", headers=auth(token)) as ws:
+        ready = ws.receive_json()
+        ws.send_text(json.dumps({"jsonrpc": "2.0", "id": 1, "method": "ping"}))
+        reply = ws.receive_json()
+    return ready, reply
+
+
+def _log(cfg):
+    return cfg.audit_log.read_text() if cfg.audit_log.exists() else ""
+
+
+def test_returning_device_gets_its_parked_upstream_and_the_stored_ready(tmp_path, parkable_hermes):
+    port, conns, closed = parkable_hermes
+    app, tokens, _, cfg = _park_app(tmp_path, port)
+    with client(app, PHONE) as c:
+        ready, reply = _connect_and_drop(c, tokens["phone"])
+        assert ready["params"]["payload"] == {"n": 1} and reply["result"] == {"conn": 0}
+        _wait(lambda: '"ws_park"' in _log(cfg), "ws_park")
+        with c.websocket_connect("/v1/ws", headers=auth(tokens["phone"])) as ws:
+            assert ws.receive_json() == ready  # the stored gateway.ready comes first
+            ws.send_text(json.dumps({"jsonrpc": "2.0", "id": 2, "method": "ping"}))
+            assert ws.receive_json()["result"] == {"conn": 0}  # forwarded both ways, same upstream
+        assert len(conns) == 1 and closed == []
+        assert '"ws_reattach"' in _log(cfg)
+
+
+def test_grace_expiry_closes_the_parked_upstream(tmp_path, parkable_hermes):
+    port, conns, closed = parkable_hermes
+    app, tokens, expire, cfg = _park_app(tmp_path, port)
+    with client(app, PHONE) as c:
+        _connect_and_drop(c, tokens["phone"])
+        _wait(lambda: '"ws_park"' in _log(cfg), "ws_park")
+        expire.set()
+        _wait(lambda: '"ws_park_expired"' in _log(cfg) and len(closed) == 1, "expiry and close")
+        ready, _ = _connect_and_drop(c, tokens["phone"])
+        assert len(conns) == 2 and ready["params"]["payload"] == {"n": 2}
+
+
+def test_parked_upstream_closed_by_hermes_is_discarded(tmp_path, parkable_hermes):
+    port, conns, closed = parkable_hermes
+    app, tokens, _, cfg = _park_app(tmp_path, port)
+    with client(app, PHONE) as c:
+        _connect_and_drop(c, tokens["phone"])
+        _wait(lambda: '"ws_park"' in _log(cfg), "ws_park")
+        conns[0].close()
+        _wait(lambda: len(closed) == 1, "Hermes close")
+        time.sleep(0.5)  # let the bridge notice
+        ready, _ = _connect_and_drop(c, tokens["phone"])
+        assert len(conns) == 2 and ready["params"]["payload"] == {"n": 2}
+        assert '"ws_reattach"' not in _log(cfg)
+
+
+def test_park_seconds_zero_closes_upstream_with_the_phone(tmp_path, parkable_hermes):
+    port, conns, closed = parkable_hermes
+    app, tokens, _, cfg = _park_app(tmp_path, port, park_seconds=0)
+    with client(app, PHONE) as c:
+        _connect_and_drop(c, tokens["phone"])
+        _wait(lambda: len(closed) == 1, "upstream close")
+        _connect_and_drop(c, tokens["phone"])
+        assert len(conns) == 2 and '"ws_park"' not in _log(cfg)
+
+
+def test_different_devices_never_share_a_parked_socket(tmp_path, parkable_hermes):
+    port, conns, closed = parkable_hermes
+    app, tokens, _, cfg = _park_app(tmp_path, port)
+    with client(app, PHONE) as c:
+        _connect_and_drop(c, tokens["phone"])
+        _wait(lambda: '"ws_park"' in _log(cfg), "ws_park")
+        ready, reply = _connect_and_drop(c, tokens["tablet"])
+        assert len(conns) == 2 and reply["result"] == {"conn": 1}
+        _wait(lambda: _log(cfg).count('"ws_park"') == 2, "second park")
+        ready, reply = _connect_and_drop(c, tokens["phone"])
+        assert len(conns) == 2 and reply["result"] == {"conn": 0}
+
+
+def test_bridge_shutdown_closes_every_parked_socket(tmp_path, parkable_hermes):
+    port, conns, closed = parkable_hermes
+    app, tokens, _, cfg = _park_app(tmp_path, port)
+    with client(app, PHONE) as c:
+        _connect_and_drop(c, tokens["phone"])
+        _connect_and_drop(c, tokens["tablet"])
+        _wait(lambda: _log(cfg).count('"ws_park"') == 2, "both parked")
+        assert closed == []
+    _wait(lambda: len(closed) == 2, "shutdown closing both")
+
+
+def test_phone_can_read_loop_state_but_not_call_outside_the_list():
+    ok = json.dumps({"jsonrpc": "2.0", "id": 1, "method": "session.control.read", "params": {"session_id": "a"}})
+    assert check_frame(ok, 1000) == (ok, None)
+    bad = json.dumps({"jsonrpc": "2.0", "id": 2, "method": "session.control.write", "params": {}})
+    forward, reply = check_frame(bad, 1000)
+    assert forward is None and json.loads(reply)["error"]["code"] == -32601
 
 
 def test_relay_requires_a_live_device_token(tmp_path, fake_hermes):

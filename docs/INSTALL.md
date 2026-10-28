@@ -148,6 +148,7 @@ allowed_profiles = []           # Hermes profiles the phone may switch to; empty
 max_body_bytes = 1_000_000
 requests_per_minute = 240
 frames_per_minute = 600         # per live connection
+park_seconds = 300              # keep Hermes' socket open this long after the phone drops; 0 = off
 ```
 
 An unknown key is an error, not a silently ignored typo. Keys from 0.x (`hermes_url`,
