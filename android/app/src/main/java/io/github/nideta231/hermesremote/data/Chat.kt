@@ -283,8 +283,11 @@ object HistoryMapper {
  * uses the event's seq), so a list diff never confuses two items.
  */
 object LiveReducer {
-    fun apply(items: List<ChatItem>, type: String, p: JSONObject, key: String): List<ChatItem> {
+    fun apply(items: List<ChatItem>, type: String, p: JSONObject, seqKey: String): List<ChatItem> {
         val out = items.toMutableList()
+        // Event seqs restart (new run, reconnect replay), so "live-38" can already be on screen;
+        // a repeated LazyColumn key crashes the app. Suffix until every derived key is free.
+        val key = uniqueLiveKey(items, seqKey)
         fun seal() {
             for (i in out.indices.reversed()) {
                 when (val it = out[i]) {
@@ -378,6 +381,16 @@ object LiveReducer {
             else -> return items
         }
         return out
+    }
+
+    /** [seqKey], or [seqKey].2, .3… when "live-<key>" (or its -n/-w notices) is already taken. */
+    internal fun uniqueLiveKey(items: List<ChatItem>, seqKey: String): String {
+        val used = items.mapTo(HashSet()) { it.key }
+        fun free(k: String) = "live-$k" !in used && "live-$k-n" !in used && "live-$k-w" !in used
+        if (free(seqKey)) return seqKey
+        var i = 2
+        while (!free("$seqKey.$i")) i++
+        return "$seqKey.$i"
     }
 
     /** A question Hermes asked arrived (or was replayed on resume): add it once. */
