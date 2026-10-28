@@ -166,6 +166,22 @@ Repo layout: top-level `desktop/` (`src-tauri/` Rust, Vue UI), next to `android/
 | D33 | Linux "keep running after logout" (`loginctl enable-linger`), off by default; always-on mode with start at login only. |
 | D34 | Windows keeps "the app owns the bridge" (D6/D7): no always-on mode, since it would need a Scheduled Task again. |
 
+### Decisions made during the build (planner, 2026-10-28; the maintainer was away and delegated them)
+
+| # | Decision |
+|---|---|
+| D35 | Desktop releases use tags `desktop-v<semver>`; the APK keeps `v<semver>`. The repo's "latest release" is usually an APK, so neither the updater nor the `.deb` release check may read `releases/latest`. |
+| D36 | The updater reads `latest.json` from a rolling pre-release `desktop-latest`; `desktop-updater.yml` copies it there when a `desktop-v*` release is published. `release.yml` makes desktop releases as drafts; publishing one is the maintainer's step. |
+| D37 | The `.deb` (and a dev build) checks the GitHub releases list for the newest `desktop-v*` tag and links its page (D30). |
+| D38 | The UI is plain JavaScript (no TypeScript), Vue 3 + Vite + vitest. |
+| D39 | uv is pinned in the app (`UV_VERSION`, 0.13.6 at first) and checked against the release's `.sha256` file. `uv sync --frozen --no-dev`. |
+| D40 | The data dir is `$XDG_DATA_HOME/hermes-remote` on Linux (default `~/.local/share/hermes-remote`), `%LOCALAPPDATA%\hermes-remote` on Windows; the venv, uv and the bridge source live under it. |
+| D41 | Linux run mode is stored as `run_mode` in `<config_dir>/desktop.toml`, a file the bridge never reads. A failed switch to app-only puts the systemd service back and keeps always-on. |
+| D42 | The app-only child is `supervise` with a stdin pipe: closing it (app exit) stops the bridge, `PR_SET_PDEATHSIG` covers a crash. The supervisor ignores a stdin that is a TTY or `/dev/null`. |
+| D43 | Linux tray: created only when `org.kde.StatusNotifierWatcher` has an owner on the session bus. The trust notification is sent by the app once per untrusted network (`<config_dir>/desktop-asked.json`); the notification plugin cannot report a click on Linux, so the window is shown when it fires. |
+| D44 | Open: the bridge's own `notify-send` trust prompt (`cli._ask_to_trust`) still runs under `serve`, so a Linux desktop may see two prompts. Remove it once the app has proven itself (with D23's follow-up). |
+| D45 | Controls whose OS backend is per platform (start/stop, start at logon, firewall fix, open logs) are Tauri commands behind a `Control` trait; a platform without a backend answers "not available yet on this platform". |
+
 ## Rejected
 
 | Option | Why not |

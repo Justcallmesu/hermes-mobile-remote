@@ -297,6 +297,47 @@ jobs:
               Where-Object { $_.CommandLine -and $_.CommandLine -like '*tray.ps1*' })
           if ($trayLeft) { throw "tray still running: $($trayLeft.ProcessId -join ',')" }
 
+  # The desktop app (Tauri: Rust + Vue): Rust unit tests, Vue unit tests and a web build on both OSes,
+  # then a debug bundle so a broken bundle config shows up before a release.
+  desktop:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-latest]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: desktop
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+      - name: Linux build dependencies (WebKitGTK 4.1, AppIndicator)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2.9.3
+        with:
+          workspaces: desktop/src-tauri
+      - uses: actions/setup-node@v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+      - run: npm ci --no-audit --no-fund
+      - run: bash test.sh
+      - name: Bundles build (unsigned, no updater artifacts)
+        run: npx tauri build --debug --bundles ${{ runner.os == 'Linux' && 'appimage,deb' || 'nsis' }} --config '{"bundle":{"createUpdaterArtifacts":false}}'
+      - uses: actions/upload-artifact@v7
+        with:
+          name: hermes-remote-desktop-${{ runner.os }}
+          path: |
+            desktop/src-tauri/target/debug/bundle/appimage/*.AppImage
+            desktop/src-tauri/target/debug/bundle/deb/*.deb
+            desktop/src-tauri/target/debug/bundle/nsis/*.exe
+          if-no-files-found: error
+
   android:
     runs-on: ubuntu-latest
     defaults:

@@ -1,0 +1,29 @@
+name: Desktop updater manifest
+
+# The phone's APK releases are also GitHub releases, so "the latest release" is often not a desktop one.
+# The desktop updater therefore reads latest.json from a fixed rolling release, desktop-latest. When the
+# maintainer publishes a desktop-v* draft (made by release.yml), copy its latest.json there.
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
+jobs:
+  manifest:
+    if: startsWith(github.event.release.tag_name, 'desktop-v') && !github.event.release.prerelease
+    runs-on: ubuntu-latest
+    steps:
+      - name: Copy latest.json to the desktop-latest release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          gh release download "$TAG" --pattern latest.json --dir "$RUNNER_TEMP"
+          gh release view desktop-latest >/dev/null 2>&1 \
+            || gh release create desktop-latest --prerelease --title "Desktop updater manifest" \
+                 --notes "Points the desktop app's updater at the newest desktop release. Do not delete."
+          gh release upload desktop-latest "$RUNNER_TEMP/latest.json" --clobber
+          echo "desktop-latest/latest.json now points at $TAG"

@@ -61,7 +61,7 @@
     "updater": {
       "pubkey": "PLACEHOLDER_UPDATER_PUBKEY_SET_IN_TICKET_08",
       "endpoints": [
-        "https://github.com/nideta231/hermes-mobile-remote/releases/latest/download/latest.json"
+        "https://github.com/nideta231/hermes-mobile-remote/releases/download/desktop-latest/latest.json"
       ]
     }
   }
