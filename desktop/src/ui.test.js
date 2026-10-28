@@ -396,6 +396,8 @@ describe("Settings", () => {
     await w.find('[data-test="logon"]').setValue(true);
     await flushPromises();
     expect(invoke).toHaveBeenCalledWith("set_start_at_logon", { on: true });
+    // Linger is Linux-only (D33/D34): never offered on Windows, even with start at logon on.
+    expect(w.find('[data-test="linger"]').exists()).toBe(false);
     answers.get_settings = {
       start_at_logon: false,
       terminal_shell: null,
