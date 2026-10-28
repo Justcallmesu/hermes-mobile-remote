@@ -167,3 +167,14 @@ def test_supervise_subcommand_exists(capsys):
         cli.main(["supervise", "--help"])
     assert exc.value.code == 0
     assert "supervise" in capsys.readouterr().out
+
+
+def test_serve_child_never_inherits_the_supervisors_stdin(monkeypatch):
+    # On Windows the child hung in interpreter start-up behind watch_stdin's pending read on the
+    # shared stdin pipe (synchronous I/O on one file object is serialised).
+    from hermes_remote_bridge import supervise
+    seen = {}
+    monkeypatch.setattr(supervise.subprocess, "Popen", lambda cmd, **kw: seen.update(kw) or "child")
+    assert supervise.popen_launcher(None)() == "child"
+    assert seen["stdin"] is supervise.subprocess.DEVNULL
+

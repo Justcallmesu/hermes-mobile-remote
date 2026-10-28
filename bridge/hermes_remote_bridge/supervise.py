@@ -116,6 +116,9 @@ def popen_launcher(config: Path | None) -> Callable[[], subprocess.Popen]:
     env = {**os.environ, "PYTHONIOENCODING": "utf-8", "PYTHONUNBUFFERED": "1"}
 
     def launch() -> subprocess.Popen:
-        return subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
-                                encoding="utf-8", errors="replace", env=env)
+        # stdin=DEVNULL: `serve` must not inherit our stdin. When the app runs us, watch_stdin keeps a
+        # blocking read pending on that pipe, and Windows serialises synchronous I/O on one file
+        # object, so the child's interpreter start-up (fstat on stdin) hung forever behind it.
+        return subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                text=True, encoding="utf-8", errors="replace", env=env)
     return launch
