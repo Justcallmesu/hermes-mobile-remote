@@ -243,7 +243,8 @@ impl Setup<'_> {
         if self.wait_for_bridge() {
             self.emit("wait", "done", "The bridge answers");
         } else {
-            self.emit("wait", "done", "warning: the bridge did not answer within 20 s");
+            let msg = format!("warning: the bridge did not answer within {} s", self.wait.as_secs_f64());
+            self.emit("wait", "done", &msg);
         }
         Ok(())
     }
@@ -266,6 +267,7 @@ impl Downloader for UreqDownloader {
 
 pub struct RealFs;
 
+/// `skip` applies to the top level of `from` only; nested folders are copied whole.
 fn copy_tree(from: &Path, to: &Path, skip: &[&str]) -> std::io::Result<()> {
     std::fs::create_dir_all(to)?;
     for entry in std::fs::read_dir(from)? {
@@ -276,7 +278,7 @@ fn copy_tree(from: &Path, to: &Path, skip: &[&str]) -> std::io::Result<()> {
         }
         let dest = to.join(&name);
         if entry.file_type()?.is_dir() {
-            copy_tree(&entry.path(), &dest, skip)?;
+            copy_tree(&entry.path(), &dest, &[])?;
         } else {
             std::fs::copy(entry.path(), dest)?;
         }
@@ -295,6 +297,10 @@ impl Fs for RealFs {
         p.exists()
     }
     fn copy_dir(&self, from: &Path, to: &Path, skip: &[&str]) -> Result<(), String> {
+        // Replace the destination so files removed from the source do not linger.
+        if to.exists() {
+            std::fs::remove_dir_all(to).map_err(|e| format!("removing {}: {e}", to.display()))?;
+        }
         copy_tree(from, to, skip).map_err(|e| format!("copying {}: {e}", from.display()))
     }
     fn set_executable(&self, p: &Path) -> Result<(), String> {
@@ -605,6 +611,53 @@ mod tests {
         assert!(log.contains(
             &"copy /res/bridge /home/u/.local/share/hermes-remote/bridge .venv,__pycache__,.pytest_cache,tests".to_string()
         ));
+    }
+
+    #[test]
+    fn setup_dirs_sit_under_xdg_data_home() {
+        let r = rig(None, true);
+        let b = FakeBridge(true);
+        let report = |_| {};
+        let mut s = setup(&r, &b, &report);
+        s.paths = BridgePaths::resolve(Os::Linux, &|k| match k {
+            "HOME" => Some("/home/u".to_string()),
+            "XDG_DATA_HOME" => Some("/d".to_string()),
+            _ => None,
+        });
+        s.run(false).unwrap();
+        let log = r.log.lock().unwrap();
+        assert!(log.contains(&"write /d/hermes-remote/uv/uv UVBIN".to_string()));
+        assert!(log.iter().any(|l| l.starts_with("copy /res/bridge /d/hermes-remote/bridge ")));
+        assert_eq!(r.runner.calls.lock().unwrap()[0].3, Some(PathBuf::from("/d/hermes-remote/bridge")));
+    }
+
+    #[test]
+    fn recopy_removes_stale_files_and_skips_tests_only_at_the_top() {
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join("src");
+        let dst = dir.path().join("dst");
+        std::fs::create_dir_all(src.join("tests")).unwrap();
+        std::fs::create_dir_all(src.join("pkg/tests")).unwrap();
+        std::fs::write(src.join("tests/top.py"), "x").unwrap();
+        std::fs::write(src.join("pkg/tests/nested.py"), "x").unwrap();
+        std::fs::write(src.join("keep.py"), "x").unwrap();
+        std::fs::create_dir_all(&dst).unwrap();
+        std::fs::write(dst.join("stale.py"), "x").unwrap();
+        RealFs.copy_dir(&src, &dst, &COPY_SKIP).unwrap();
+        assert!(!dst.join("stale.py").exists());
+        assert!(dst.join("keep.py").exists());
+        assert!(dst.join("pkg/tests/nested.py").exists());
+        assert!(!dst.join("tests").exists());
+    }
+
+    #[test]
+    fn wait_warning_names_the_configured_wait() {
+        let r = rig(Some("/usr/bin/uv"), true);
+        let b = FakeBridge(false);
+        let report = |p| r.events.lock().unwrap().push(p);
+        setup(&r, &b, &report).run(false).unwrap();
+        let ev = r.events.lock().unwrap();
+        assert_eq!(ev.last().unwrap().message, "warning: the bridge did not answer within 0.03 s");
     }
 
     #[test]

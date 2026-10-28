@@ -21,6 +21,7 @@ async function cont() {
   running.value = true;
   error.value = "";
   steps.value = [];
+  stop?.();
   stop = await onSetupProgress(progress);
   try {
     await setupRun(update.value);

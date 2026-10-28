@@ -10,10 +10,14 @@ const invoke = vi.fn(async (cmd, args) => {
 vi.mock("@tauri-apps/api/core", () => ({ invoke: (...x) => invoke(...x) }));
 
 let progressHandler;
+let listening = 0;
 vi.mock("@tauri-apps/api/event", () => ({
   listen: async (_name, h) => {
     progressHandler = h;
-    return () => {};
+    listening += 1;
+    return () => {
+      listening -= 1;
+    };
   },
 }));
 
@@ -170,6 +174,23 @@ describe("Setup", () => {
       "error: uv sync failed: boom",
     ]);
     expect(w.find('[data-test="error"]').text()).toContain("uv sync failed: boom");
+  });
+
+  it("Try again twice leaves one progress listener", async () => {
+    listening = 0;
+    answers.setup_state = { needed: true, change_list: ["x"] };
+    answers.setup_run = () => {
+      progressHandler({ payload: { step: "uv", state: "error", message: "boom" } });
+      throw new Error("boom");
+    };
+    const w = await open();
+    await w.find('[data-test="continue"]').trigger("click");
+    await flushPromises();
+    await w.find('[data-test="retry"]').trigger("click");
+    await flushPromises();
+    await w.find('[data-test="retry"]').trigger("click");
+    await flushPromises();
+    expect(listening).toBe(1);
   });
 });
 

@@ -99,7 +99,11 @@ impl BridgePaths {
                     Some(x) => PathBuf::from(x),
                     None => home.join(".config"),
                 };
-                let venv = home.join(".local/share/hermes-remote/venv");
+                let data = match get("XDG_DATA_HOME") {
+                    Some(x) => PathBuf::from(x),
+                    None => home.join(".local/share"),
+                };
+                let venv = data.join("hermes-remote/venv");
                 BridgePaths {
                     config_dir: config.join("hermes-remote"),
                     exe: venv.join("bin").join("hermes-remote-bridge"),
@@ -621,5 +625,14 @@ mod tests {
         assert_eq!(p.venv, base.join("venv"));
         assert_eq!(p.exe, base.join("venv").join("Scripts").join("hermes-remote-bridge.exe"));
         assert_eq!(p.secret_file(), base.join("config").join("local-secret"));
+    }
+
+    #[test]
+    fn linux_data_dir_honours_xdg_data_home_when_set_and_not_empty() {
+        let p = BridgePaths::resolve(Os::Linux, &env_of(&[("HOME", "/home/u"), ("XDG_DATA_HOME", "/d")]));
+        assert_eq!(p.venv, PathBuf::from("/d/hermes-remote/venv"));
+        assert_eq!(p.exe, PathBuf::from("/d/hermes-remote/venv/bin/hermes-remote-bridge"));
+        let p = BridgePaths::resolve(Os::Linux, &env_of(&[("HOME", "/home/u"), ("XDG_DATA_HOME", "")]));
+        assert_eq!(p.venv, PathBuf::from("/home/u/.local/share/hermes-remote/venv"));
     }
 }
