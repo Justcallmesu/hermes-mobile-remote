@@ -44,12 +44,17 @@ class Host:
         return self.hermes_root() / "venv" / self.venv_bin / f"python{self.exe_suffix}"
 
     def hermes_bin(self) -> Path:
-        """The Hermes CLI: the venv's entry point, else whatever ``hermes`` is on PATH."""
+        """The Hermes CLI: the venv's entry point, else ``hermes`` on PATH, else the launcher the
+        current Hermes installer puts in ``<hermes home>/bin`` (its venv no longer lives under
+        ``hermes-agent/venv``, so this launcher is how Hermes Desktop itself starts ``serve``)."""
         own = self.hermes_root() / "venv" / self.venv_bin / f"hermes{self.exe_suffix}"
         if own.exists():
             return own
         found = shutil.which("hermes")
-        return Path(found) if found else own
+        if found:
+            return Path(found)
+        launcher = self.hermes_home() / "bin" / f"hermes{self.exe_suffix}"
+        return launcher if launcher.exists() else own
 
     # ------------------------------------------------------------------ networking
 

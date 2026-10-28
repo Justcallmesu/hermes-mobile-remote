@@ -31,6 +31,7 @@ def _cfg_path(tmp_path, lan=False):
         f"local_secret_file = '{(tmp_path / 'local-secret').as_posix()}'",
         f"hermes_home = '{(tmp_path / 'no-hermes').as_posix()}'",
         f"hermes_python = '{(tmp_path / 'no-hermes' / 'python').as_posix()}'",
+        f"hermes_bin = '{(tmp_path / 'no-hermes' / 'hermes').as_posix()}'",  # never the real launcher
         f"lan = {'true' if lan else 'false'}",
     ]) + "\n")
     return path

@@ -191,7 +191,7 @@ def create_app(cfg: Config, *, locator: BackendLocator | None = None, tailnet: T
         monitor = Monitor(cfg.monitor_db, ClaudeUsage(cfg.claude_credentials) if cfg.claude_usage else None)
     shell_factory = shell_factory or (lambda **kw: Shell(cfg=cfg, **kw))
     locator = locator or BackendLocator(cfg.hermes_home, cfg.hermes_root, cfg.hermes_python, cfg.backend_log,
-                                        spawn=cfg.start_hermes)
+                                        hermes_bin=cfg.hermes_bin, spawn=cfg.start_hermes)
     cli = hermes_cli or (lambda *a: _hermes_cli(cfg, *a))
     tailnet = tailnet or TailnetClient()
     devices = devices or DeviceStore(cfg.devices_file)

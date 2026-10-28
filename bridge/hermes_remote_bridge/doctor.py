@@ -38,7 +38,7 @@ def _check_hermes(cfg: Config) -> tuple[str, str]:
             return OK, f"Hermes is running on port {port}{f' (v{version})' if version else ''}; the phone shares it"
         except Exception:  # noqa: BLE001 - a stale ledger row; try the next
             continue
-    if not cfg.hermes_python.exists():
+    if not cfg.hermes_python.exists() and not cfg.hermes_bin.exists():
         return FAIL, f"Hermes is not installed at {cfg.hermes_root}"
     if cfg.start_hermes:
         return OK, "Hermes is not running now; the bridge starts it when the phone connects"

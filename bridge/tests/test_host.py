@@ -393,3 +393,15 @@ def test_reachability_check_accepts_the_bridges_own_certificate(tmp_path, capsys
     finally:
         server.shutdown()
     assert "Reachable" in capsys.readouterr().out
+
+
+def test_hermes_bin_falls_back_to_the_installers_launcher(monkeypatch, tmp_path):
+    # Current Hermes installers put the venv elsewhere and a `hermes` launcher in <home>/bin.
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path / "hermes"))
+    monkeypatch.setattr(base.shutil, "which", lambda name: None)
+    launcher = tmp_path / "hermes" / "bin" / "hermes"
+    assert base.Host().hermes_bin() != launcher  # absent: the old venv path, as before
+    launcher.parent.mkdir(parents=True)
+    launcher.write_text("")
+    assert base.Host().hermes_bin() == launcher
+
