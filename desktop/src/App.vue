@@ -18,6 +18,10 @@ const tabs = [
 ];
 const showSetup = ref(false);
 onMounted(async () => {
+  // The tray menu (Rust) dispatches this DOM event: `new CustomEvent("navigate", { detail: "pair" })`.
+  window.addEventListener("navigate", (e) => {
+    if (tabs.some(([id]) => id === e.detail)) tab.value = e.detail;
+  });
   version.value = await appVersion();
   try {
     const st = await setupState();

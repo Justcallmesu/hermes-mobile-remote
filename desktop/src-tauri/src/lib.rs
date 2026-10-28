@@ -3,6 +3,7 @@
 
 pub mod bridge;
 pub mod control;
+pub mod flyout;
 pub mod linux_service;
 pub mod run_mode;
 pub mod setup;
@@ -24,7 +25,7 @@ pub fn run() {
         ))
         .setup(|app| {
             run_mode::on_app_start();
-            #[cfg(target_os = "linux")]
+            #[cfg(any(target_os = "linux", windows))]
             tray::install(app)?;
             #[cfg(windows)]
             win_child::set_app_handle(app.handle().clone());
@@ -33,9 +34,9 @@ pub fn run() {
             Ok(())
         })
         .on_window_event(|window, event| {
-            #[cfg(target_os = "linux")]
+            #[cfg(any(target_os = "linux", windows))]
             tray::on_window_event(window, event);
-            #[cfg(not(target_os = "linux"))]
+            #[cfg(not(any(target_os = "linux", windows)))]
             let _ = (window, event);
         })
         .plugin(tauri_plugin_notification::init())
