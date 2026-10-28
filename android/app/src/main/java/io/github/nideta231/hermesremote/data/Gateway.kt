@@ -103,7 +103,7 @@ class Gateway(
     fun start() {
         if (loop != null) return
         loop = scope.launch {
-            var backoff = 1_000L
+            var attempt = 0
             var refreshedAfter401 = false
             while (!closed) {
                 val connectUrl = try {
@@ -117,8 +117,7 @@ class Gateway(
                     }
                     lastError = e.message
                     _state.value = GatewayState.RECONNECTING
-                    delay(backoff)
-                    backoff = (backoff * 2).coerceAtMost(15_000)
+                    delay(ReattachPolicy.retryDelayMs(attempt++))
                     continue
                 }
                 val ended = CompletableDeferred<Int>()
@@ -132,7 +131,7 @@ class Gateway(
                     call("client.capabilities", JSONObject().put("server_requests", true), 10_000)
                     _state.value = GatewayState.OPEN
                     lastError = null
-                    backoff = 1_000L
+                    attempt = 0
                     refreshedAfter401 = false
                     _incoming.emit(Incoming.Open)
                     ended.await()
@@ -155,8 +154,7 @@ class Gateway(
                             lastError = e.message
                             refreshedAfter401 = false
                             _state.value = GatewayState.RECONNECTING
-                            delay(backoff)
-                            backoff = (backoff * 2).coerceAtMost(15_000)
+                            delay(ReattachPolicy.retryDelayMs(attempt++))
                             continue
                         }
                     }
@@ -166,8 +164,7 @@ class Gateway(
                     _state.value = GatewayState.UNAUTHORIZED; break
                 }
                 _state.value = GatewayState.RECONNECTING
-                delay(backoff)
-                backoff = (backoff * 2).coerceAtMost(15_000)
+                delay(ReattachPolicy.retryDelayMs(attempt++))
             }
             if (_state.value != GatewayState.UNAUTHORIZED) _state.value = GatewayState.CLOSED
         }

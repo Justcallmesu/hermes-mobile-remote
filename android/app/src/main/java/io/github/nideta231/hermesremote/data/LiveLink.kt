@@ -1,6 +1,10 @@
 package io.github.nideta231.hermesremote.data
 
 import android.content.Context
+import android.net.ConnectivityManager
+import android.net.Network
+import kotlinx.coroutines.delay
+import org.json.JSONObject
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.ProcessLifecycleOwner
 import kotlinx.coroutines.CoroutineScope
@@ -35,6 +39,12 @@ object LiveLink {
     /** Runtime id → session the phone has open or started. Only these notify. */
     private val watched = ConcurrentHashMap<String, Watched>()
 
+    /** Runtime ids loaded from disk after a process restart: resumed on the first Open whatever [busy] says. */
+    private val toResume = ConcurrentHashMap.newKeySet<String>()
+    private var store: WatchedStore? = null
+    private var heartbeat: Job? = null
+    private var networkCallback: ConnectivityManager.NetworkCallback? = null
+
     /** Runtime ids with a turn running or a question waiting: what keeps [WatchService] up. */
     private val _busy = MutableStateFlow<Set<String>>(emptySet())
     val busy: StateFlow<Set<String>> = _busy.asStateFlow()
@@ -49,6 +59,9 @@ object LiveLink {
     fun restore(context: Context) {
         if (gateway != null) return
         val app = context.applicationContext
+        // The process was killed: whatever the phone was watching is resumed on the first Open.
+        val saved = store(app).load()
+        if (saved.isNotEmpty()) { watched.putAll(saved); toResume += saved.keys }
         val pr = ProfileStore(app).active()
         val store = if (pr.kind == HostKind.GATEWAY) GatewayCredentialStore(app, pr.id) else null
         when (val how = decideConnection(pr.kind, store?.load())) {
@@ -74,13 +87,45 @@ object LiveLink {
         gateway = fresh
         fresh.start()
         val app = context.applicationContext
+        store(app)
         collector = scope.launch { fresh.incoming.collect { onIncoming(app, it) } }
+        heartbeat = scope.launch {
+            while (true) {
+                delay(ReattachPolicy.PING_INTERVAL_MS)
+                ReattachPolicy.heartbeat(link(fresh), background = !visible())
+            }
+        }
+        if (networkCallback == null) {
+            networkCallback = object : ConnectivityManager.NetworkCallback() {
+                override fun onAvailable(network: Network) { scope.launch { reattach() } }
+            }
+            runCatching { app.getSystemService(ConnectivityManager::class.java)?.registerDefaultNetworkCallback(networkCallback!!) }
+        }
         return fresh
     }
+
+    /** The one reattach: a network change and a service start both come here. */
+    fun reattach() {
+        val g = gateway ?: return
+        scope.launch { ReattachPolicy.reattach(link(g)) }
+    }
+
+    private fun link(g: Gateway) = object : ReattachLink {
+        override val isOpen get() = g.state.value == GatewayState.OPEN
+        override fun forceReconnect() = g.forceReconnect()
+        override fun nudge() = g.nudge()
+        override suspend fun call(method: String, params: JSONObject, timeoutMs: Long) = g.call(method, params, timeoutMs)
+    }
+
+    private fun store(app: Context): WatchedStore = store ?: WatchedStore(app).also { store = it }
+
+    private fun saveWatched() { store?.save(watched) }
 
     fun close() {
         collector?.cancel()
         collector = null
+        heartbeat?.cancel()
+        heartbeat = null
         gateway?.close()
         gateway = null
         _busy.value = emptySet()
@@ -88,11 +133,12 @@ object LiveLink {
     }
 
     fun watch(runtimeId: String, storedId: String, title: String?, profile: String? = null) {
-        watched[runtimeId] = Watched(storedId, title, profile)
+        val w = Watched(storedId, title, profile)
+        if (watched.put(runtimeId, w) != w) saveWatched()
     }
 
     fun retitle(runtimeId: String, title: String) {
-        watched[runtimeId]?.let { watched[runtimeId] = it.copy(title = title) }
+        watched[runtimeId]?.let { watched[runtimeId] = it.copy(title = title); saveWatched() }
     }
 
     fun storedIdOf(runtimeId: String): String? = watched[runtimeId]?.storedId
@@ -103,7 +149,16 @@ object LiveLink {
 
     private fun onIncoming(app: Context, inc: Incoming) {
         when (inc) {
-            is Incoming.Open -> {}
+            is Incoming.Open -> {
+                val g = gateway ?: return
+                val want = _busy.value + toResume
+                toResume.clear()
+                scope.launch {
+                    ReattachPolicy.resumeWatched(link(g), watched.toMap(), want).forEach { (old, new) ->
+                        if (old != new) watched.remove(old)?.let { watched[new] = it; saveWatched() }
+                    }
+                }
+            }
             is Incoming.Event -> {
                 val sid = inc.sessionId
                 when (inc.type) {

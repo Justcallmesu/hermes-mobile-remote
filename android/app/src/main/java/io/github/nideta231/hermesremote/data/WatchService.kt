@@ -37,6 +37,7 @@ class WatchService : Service() {
         startForegroundCompat()
         // A sticky restart arrives with no intent and a fresh process: open the socket again.
         if (KeepAlive.needsReopen(intent == null, LiveLink.gateway != null)) LiveLink.restore(this)
+        LiveLink.reattach()
         if (!started) {
             started = true
             scope.launch {
