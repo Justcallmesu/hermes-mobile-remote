@@ -22,8 +22,8 @@ authoritative history — this file only summarises what is worth knowing before
   be reached, then returns to the bridge when it answers again. The connection row says "via
   Bridge" or "via Gateway". After a gateway sign-in the app offers to pair the PC's bridge too;
   the host menu has *Link with...* and *Unlink*.
-- Chats resumed from the phone are recorded by Hermes as desktop chats, as new ones already were
-  (they were recorded as `tui` before).
+- Chats resumed from the phone are now labelled `desktop` in Hermes' live session, like new ones
+  already were (they were labelled `tui` before). The stored chat row is not changed.
 
 ## v1.25.1
 
