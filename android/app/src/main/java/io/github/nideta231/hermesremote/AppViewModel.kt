@@ -602,8 +602,11 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
         val pr = profiles.active()
         linkJob?.cancel()
         _conn.update { it.copy(via = null) }
-        if (pr.kind == HostKind.BRIDGE) profiles.links().firstOrNull { it.bridgeId == pr.id }?.let { watchLink(it) }
         val creds = if (pr.kind == HostKind.GATEWAY) GatewayCredentialStore(app, pr.id).load() else null
+        HostLinking.linkOf(profiles.links(), pr.id)?.let { l ->
+            if (pr.kind == HostKind.BRIDGE) watchLink(l, HostConnection.BridgePairing)
+            else creds?.let { watchLink(l, HostConnection.GatewayLogin(it)) }
+        }
         _pairing.value = if (pr.kind == HostKind.BRIDGE) store.load() else null
         when (val how = decideConnection(pr.kind, creds)) {
             HostConnection.BridgePairing -> {
@@ -638,13 +641,15 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
      * A linked PC: the bridge is used while it answers; when its socket is down and a probe gets no answer the app
      * moves to the gateway sign-in, and back to the bridge on a later check once it answers (not within [SWITCH_MIN_MS]).
      */
-    private fun watchLink(l: HostLink) {
+    private fun watchLink(l: HostLink, entry: HostConnection) {
         linkJob = viewModelScope.launch {
-            var on: HostConnection = HostConnection.BridgePairing
-            var since = System.currentTimeMillis()
+            var on: HostConnection = entry
+            // Opened from the gateway side: the first check is at once, so the bridge is taken as soon as it answers.
+            var since = if (entry is HostConnection.GatewayLogin) 0L else System.currentTimeMillis()
+            var first = entry is HostConnection.GatewayLogin
             _conn.update { it.copy(via = viaLabel(on)) }
             while (true) {
-                delay(if (on is HostConnection.GatewayLogin) 10_000L else 5_000L)
+                if (first) first = false else delay(if (on is HostConnection.GatewayLogin) 10_000L else 5_000L)
                 val pairing = CredentialStore(app, ProfileStore.pairingFile(l.bridgeId)).load() ?: continue
                 val bridgeUp = (on is HostConnection.BridgePairing && gateway?.state?.value == GatewayState.OPEN) ||
                     BridgeClient(pairing).probe() != BridgeClient.Probe.UNREACHABLE
@@ -664,6 +669,7 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
                     }
                     else -> {
                         _gatewayHost.value = null
+                        _pairing.value = pairing
                         start(pairing)
                     }
                 }

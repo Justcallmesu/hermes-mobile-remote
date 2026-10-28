@@ -6,6 +6,8 @@ import io.github.nideta231.hermesremote.data.GatewayCredentials
 import io.github.nideta231.hermesremote.data.GatewayState
 import io.github.nideta231.hermesremote.data.HostConnection
 import io.github.nideta231.hermesremote.data.HostKind
+import io.github.nideta231.hermesremote.data.HostLink
+import io.github.nideta231.hermesremote.data.HostLinking
 import io.github.nideta231.hermesremote.data.HttpReply
 import io.github.nideta231.hermesremote.data.HttpTransport
 import io.github.nideta231.hermesremote.data.Root
@@ -54,6 +56,26 @@ class HostConnectionTest {
         assertEquals(gw, back(5_000))
         assertEquals(gw, back(29_999))
         assertEquals(HostConnection.BridgePairing, back(30_000))
+    }
+
+    @Test fun linkedPlanIsTheSameFromEitherSide() {
+        val link = HostLink("b1", "g1")
+        val links = listOf(HostLink("b0", "g0"), link)
+        val plans = listOf("b1" to HostKind.BRIDGE, "g1" to HostKind.GATEWAY).map { (id, kind) ->
+            val l = HostLinking.linkOf(links, id)
+            assertEquals(link, l)
+            decideConnection(kind, creds, linked = l != null, bridgeReachable = true)
+        }
+        assertEquals(plans[0], plans[1])
+        assertEquals(null, HostLinking.linkOf(links, "other"))
+    }
+
+    @Test fun linkedRowSaysViaBridgeFromEitherSide() {
+        val links = listOf(HostLink("b1", "g1"))
+        for ((id, kind) in listOf("b1" to HostKind.BRIDGE, "g1" to HostKind.GATEWAY)) {
+            val plan = decideConnection(kind, creds, linked = HostLinking.linkOf(links, id) != null, bridgeReachable = true)
+            assertEquals("via Bridge", viaLabel(plan.connection))
+        }
     }
 
     @Test fun connectionRowNamesTheLiveWay() {

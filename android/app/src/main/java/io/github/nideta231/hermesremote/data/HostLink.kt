@@ -39,6 +39,10 @@ object HostLinking {
             }
         }
 
+    /** The link a host belongs to, found from its bridge id or its gateway id alike. */
+    fun linkOf(links: List<HostLink>, hostId: String): HostLink? =
+        links.firstOrNull { it.bridgeId == hostId || it.gatewayId == hostId }
+
     /** The probe request: no credential of either server, only a look at whether a bridge answers. */
     fun probeRequest(bridgeUrl: String): Request = Request.Builder().url("${bridgeUrl.trimEnd('/')}/v1/me").build()
 
