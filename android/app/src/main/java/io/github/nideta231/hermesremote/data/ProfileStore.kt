@@ -53,9 +53,42 @@ class ProfileStore(private val prefs: SharedPreferences) {
     fun remove(id: String): String {
         val rest = list().filterNot { it.id == id }
         save(rest)
+        saveLinks(links().filterNot { it.bridgeId == id || it.gatewayId == id })
         val next = rest.firstOrNull()?.id ?: LEGACY
         if (activeId == id || rest.none { it.id == activeId }) activeId = next
         return activeId
+    }
+
+    /** The bridge/gateway pairs that are one PC. Only this record changes when hosts are linked. */
+    fun links(): List<HostLink> = runCatching {
+        val arr = JSONArray(prefs.getString(KEY_LINKS, null) ?: "[]")
+        (0 until arr.length()).map { i -> arr.getJSONObject(i).let { HostLink(it.getString("bridge"), it.getString("gateway")) } }
+    }.getOrDefault(emptyList())
+
+    /** The host linked with [id] (either side), or null. */
+    fun linkedWith(id: String): String? = links().firstNotNullOfOrNull {
+        when (id) { it.bridgeId -> it.gatewayId; it.gatewayId -> it.bridgeId; else -> null }
+    }
+
+    /** A host is in at most one link: linking replaces the older ones of either side. */
+    fun link(bridgeId: String, gatewayId: String) =
+        saveLinks(links().filterNot { it.bridgeId == bridgeId || it.gatewayId == gatewayId } + HostLink(bridgeId, gatewayId))
+
+    fun unlink(id: String) = saveLinks(links().filterNot { it.bridgeId == id || it.gatewayId == id })
+
+    /** "Not now" on the offer to link two existing hosts: never offered again for this pair. */
+    fun declineLink(l: HostLink) {
+        prefs.edit().putStringSet(KEY_DECLINED, declined() + "${l.bridgeId}|${l.gatewayId}").apply()
+    }
+
+    fun isDeclined(l: HostLink) = "${l.bridgeId}|${l.gatewayId}" in declined()
+
+    private fun declined(): Set<String> = prefs.getStringSet(KEY_DECLINED, null).orEmpty().toSet()
+
+    private fun saveLinks(items: List<HostLink>) {
+        val arr = JSONArray()
+        items.forEach { arr.put(JSONObject().put("bridge", it.bridgeId).put("gateway", it.gatewayId)) }
+        prefs.edit().putString(KEY_LINKS, arr.toString()).apply()
     }
 
     private fun save(items: List<Profile>) {
@@ -69,6 +102,8 @@ class ProfileStore(private val prefs: SharedPreferences) {
         const val LEGACY = "default"
         private const val KEY_LIST = "list"
         private const val KEY_ACTIVE = "active"
+        private const val KEY_LINKS = "links"
+        private const val KEY_DECLINED = "links_declined"
 
         fun pairingFile(id: String) = if (id == LEGACY) "pairing" else "pairing_$id"
         fun draftsFile(id: String) = if (id == LEGACY) "drafts" else "drafts_$id"

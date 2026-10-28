@@ -255,6 +255,18 @@ class MainActivity : ComponentActivity() {
                 androidx.compose.runtime.CompositionLocalProvider(LocalHiddenFeatures provides hidden) { PairedApp() }
             }
         }
+        val offer by vm.linkOffer.collectAsState()
+        offer?.let { o ->
+            val pairBridge = o.bridgeId == null
+            androidx.compose.material3.AlertDialog(onDismissRequest = vm::declineLinkOffer,
+                title = { androidx.compose.material3.Text(if (pairBridge) "Pair this PC's bridge too" else "Same PC?") },
+                text = {
+                    androidx.compose.material3.Text(if (pairBridge) "A bridge answers on ${o.name}. Pair it to link it with this gateway; you'll scan its QR code."
+                        else "${o.name} and this gateway look like the same PC. Link them? Each keeps its own sign-in and chats.")
+                },
+                confirmButton = { androidx.compose.material3.TextButton(onClick = vm::acceptLinkOffer) { androidx.compose.material3.Text(if (pairBridge) "Pair" else "Link") } },
+                dismissButton = { androidx.compose.material3.TextButton(onClick = vm::declineLinkOffer) { androidx.compose.material3.Text("Not now") } })
+        }
     }
 
     @Composable
@@ -333,6 +345,8 @@ class MainActivity : ComponentActivity() {
             addPc = { scope.launch { drawer.close() }; vm.startAddingPc() },
             renamePc = vm::renamePc,
             forgetPc = vm::forgetPc,
+            linkPcs = vm::linkPcs,
+            unlinkPc = vm::unlinkPc,
             switchProfile = { vm.switchProfile(it); go(Page.CHAT) },
             openScheduled = { go(Page.SCHEDULED) },
             openVault = { go(Page.VAULT) },

@@ -62,6 +62,8 @@ import io.github.nideta231.hermesremote.data.GatewayCredentials
 import io.github.nideta231.hermesremote.data.GatewayUrl
 import io.github.nideta231.hermesremote.data.HostConnection
 import io.github.nideta231.hermesremote.data.HostKind
+import io.github.nideta231.hermesremote.data.HostLink
+import io.github.nideta231.hermesremote.data.HostLinking
 import io.github.nideta231.hermesremote.data.decideConnection
 import io.github.nideta231.hermesremote.data.gatewayAuthFor
 import io.github.nideta231.hermesremote.data.LoopbackListener
@@ -158,7 +160,13 @@ data class SessionsState(
 
 /** A paired PC in the switcher. [name] is the PC's computer name, or the host it was paired at. */
 /** [gateway]: a direct gateway host (signs in, no bridge pairing to redo). */
-data class PairedPc(val id: String, val name: String, val url: String, val active: Boolean, val gateway: Boolean = false)
+data class PairedPc(val id: String, val name: String, val url: String, val active: Boolean, val gateway: Boolean = false, val linked: Boolean = false)
+
+/**
+ * The app asks whether two hosts are one PC. [bridgeId] set: a listed bridge and gateway match, offer "Link".
+ * [bridgeId] null: a bridge answers at [bridgeUrl] next to the gateway host [gatewayId], offer "Pair".
+ */
+data class LinkOffer(val gatewayId: String, val bridgeId: String?, val bridgeUrl: String?, val name: String)
 
 /**
  * The Hermes profiles on the PC in use, and which one the app talks to. [items] is empty until
@@ -219,6 +227,65 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
     /** Every paired PC, for the switcher. */
     private val _pcs = MutableStateFlow<List<PairedPc>>(emptyList())
     val pcs: StateFlow<List<PairedPc>> = _pcs.asStateFlow()
+
+    /** A question about linking hosts that are one PC; null when nothing is offered. */
+    private val _linkOffer = MutableStateFlow<LinkOffer?>(null)
+    val linkOffer: StateFlow<LinkOffer?> = _linkOffer.asStateFlow()
+
+    /** Set by "Pair" on the bridge offer: the next bridge pairing is linked with this gateway host. */
+    private var pendingLinkGateway: String? = null
+
+    /** Link [a] and [b] by hand ("Link with..."): one is a bridge host, the other a gateway host. */
+    fun linkPcs(a: String, b: String) {
+        val kinds = profiles.list().associate { it.id to it.kind }
+        val bridge = listOf(a, b).firstOrNull { kinds[it] == HostKind.BRIDGE } ?: return
+        val gateway = listOf(a, b).firstOrNull { kinds[it] == HostKind.GATEWAY } ?: return
+        profiles.link(bridge, gateway)
+        refreshPcs()
+    }
+
+    fun unlinkPc(id: String) { profiles.unlink(id); refreshPcs() }
+
+    /** "Pair" on the bridge offer opens the pairing screen; "Link" on the existing-hosts offer links them. */
+    fun acceptLinkOffer() {
+        val o = _linkOffer.value ?: return
+        _linkOffer.value = null
+        if (o.bridgeId != null) { profiles.link(o.bridgeId, o.gatewayId); refreshPcs() }
+        else { pendingLinkGateway = o.gatewayId; startAddingPc() }
+    }
+
+    fun declineLinkOffer() {
+        val o = _linkOffer.value ?: return
+        _linkOffer.value = null
+        if (o.bridgeId != null) profiles.declineLink(HostLink(o.bridgeId, o.gatewayId))
+    }
+
+    /** Offers once to link two listed hosts that are one PC (the gateway's host is an address of the bridge). */
+    private fun offerExistingLinks() {
+        if (_linkOffer.value != null) return
+        val bridges = profiles.list().filter { it.kind == HostKind.BRIDGE }.mapNotNull { pr ->
+            val saved = CredentialStore(app, ProfileStore.pairingFile(pr.id)).load() ?: return@mapNotNull null
+            val known = CredentialStore(app, ProfileStore.pairingFile(pr.id)).bridgeAddresses.orEmpty().values.flatten()
+            pr.id to (known + listOfNotNull(EndpointResolver.hostOf(saved.url))).toSet()
+        }.toMap()
+        val gateways = profiles.list().filter { it.kind == HostKind.GATEWAY }.mapNotNull { pr ->
+            GatewayCredentialStore(app, pr.id).load()?.let { pr.id to it.baseUrl }
+        }.toMap()
+        val found = HostLinking.matches(bridges, gateways)
+            .firstOrNull { profiles.linkedWith(it.bridgeId) == null && profiles.linkedWith(it.gatewayId) == null && !profiles.isDeclined(it) } ?: return
+        val name = profiles.list().firstOrNull { it.id == found.bridgeId }?.name.orEmpty()
+        _linkOffer.value = LinkOffer(found.gatewayId, found.bridgeId, null, name.ifBlank { "this PC" })
+    }
+
+    /** After a gateway sign-in: offer to link a listed bridge, else look for a bridge on the same host. */
+    private fun offerBridgeFor(gatewayId: String, gatewayUrl: String) {
+        offerExistingLinks()
+        if (_linkOffer.value != null || profiles.linkedWith(gatewayId) != null) return
+        viewModelScope.launch {
+            val url = HostLinking.findBridgeFor(gatewayUrl, HostLinking::probe) ?: return@launch
+            if (_linkOffer.value == null) _linkOffer.value = LinkOffer(gatewayId, null, url, EndpointResolver.hostOf(url).orEmpty())
+        }
+    }
 
     /** "Add a PC" is open: the pairing screen shows over the app, and a pairing lands in a new profile. */
     private val _addingPc = MutableStateFlow(false)
@@ -777,7 +844,9 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
                 }.mapValues { (_, us) -> us.mapNotNull { EndpointResolver.hostOf(it) } }
                 store.bridgeAddresses = known
                 _pairing.value = candidate
+                pendingLinkGateway?.let { g -> profiles.link(profiles.activeId, g); pendingLinkGateway = null }
                 refreshPcs()
+                offerExistingLinks()
                 start(candidate)
                 return null
             } catch (t: Throwable) {
@@ -910,6 +979,7 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
                 activate(id)
                 enterActiveHost()
             } else refreshPcs()
+            offerBridgeFor(id, base)
             null
         } catch (t: Throwable) {
             if (t is CancellationException) throw t
@@ -929,12 +999,12 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
                 // The active gateway host stays listed while signed out, so the user can see and remove it.
                 val gw = GatewayCredentialStore(app, pr.id).load()
                 if (gw == null && pr.id != active) return@mapNotNull null
-                return@mapNotNull PairedPc(pr.id, pr.name.ifBlank { gw?.let { GatewayUrl.hostName(it.baseUrl) } ?: "Gateway" }, gw?.baseUrl.orEmpty(), pr.id == active, gateway = true)
+                return@mapNotNull PairedPc(pr.id, pr.name.ifBlank { gw?.let { GatewayUrl.hostName(it.baseUrl) } ?: "Gateway" }, gw?.baseUrl.orEmpty(), pr.id == active, gateway = true, linked = profiles.linkedWith(pr.id) != null)
             }
             val saved = if (pr.id == active) _pairing.value ?: store.load()
                 else CredentialStore(app, ProfileStore.pairingFile(pr.id)).load()
             saved ?: return@mapNotNull null
-            PairedPc(pr.id, pr.name.ifBlank { EndpointResolver.hostOf(saved.url) ?: "PC" }, saved.url, pr.id == active)
+            PairedPc(pr.id, pr.name.ifBlank { EndpointResolver.hostOf(saved.url) ?: "PC" }, saved.url, pr.id == active, linked = profiles.linkedWith(pr.id) != null)
         }
     }
 
