@@ -6,7 +6,6 @@ off Windows: see the planner's side-by-side Verify against the old PowerShell an
 """
 from __future__ import annotations
 
-import contextlib
 import functools
 import gc
 import logging
@@ -22,6 +21,7 @@ FW_PROTOCOL_TCP = 6
 FW_ACTION_ALLOW = 1
 FW_PROFILE_PRIVATE = 2
 SEE_MASK_NOCLOSEPROCESS = 0x40
+RPC_E_CHANGED_MODE = -2147417850  # 0x80010106: the thread already has COM in the other mode
 BRIDGE_PORT = 8650
 _NEIGHBOR_BAD_STATES = (0, 1)  # NlnsUnreachable, NlnsIncomplete
 
@@ -165,17 +165,33 @@ def _adapter_guid(alias: str) -> str | None:
     return str(uuid.UUID(bytes_le=bytes(guid)))
 
 
-@contextlib.contextmanager
-def _com():
-    """COM initialised for this thread (the bridge calls from to_thread workers); no COM object may
-    outlive the block, so callers return plain values."""
-    import comtypes
-    comtypes.CoInitializeEx(0)
-    try:
-        yield
-    finally:
-        gc.collect()
-        comtypes.CoUninitialize()
+def _com(fn):
+    """Run ``fn`` with COM initialised for this thread (the bridge calls from to_thread workers).
+
+    ``fn`` must return plain values. Its COM objects are released when its frame ends, which is
+    BEFORE CoUninitialize here. A ``with`` block inside the function cannot give that order: the
+    objects are still the function's locals when the block exits, so their Release() ran after
+    CoUninitialize and crashed the process (access violation, seen on Windows 11).
+    """
+    @functools.wraps(fn)
+    def wrapper(*a, **k):
+        import comtypes
+        try:
+            comtypes.CoInitializeEx(comtypes.COINIT_MULTITHREADED)
+            initialised = True
+        except OSError as e:
+            # Importing comtypes already made the MAIN thread an STA, so asking for MTA there fails
+            # with RPC_E_CHANGED_MODE. COM is usable as it is; we just must not uninitialise it.
+            if getattr(e, "winerror", None) != RPC_E_CHANGED_MODE:
+                raise
+            initialised = False
+        try:
+            return fn(*a, **k)
+        finally:
+            gc.collect()
+            if initialised:
+                comtypes.CoUninitialize()
+    return wrapper
 
 
 def _wrap(item):
@@ -190,16 +206,23 @@ def network_profile(alias: str) -> tuple[str, str] | None:
     guid = _adapter_guid(alias)
     if not guid:
         return None
-    with _com():
-        import comtypes.client
-        nlm = comtypes.client.CreateObject(NETWORK_LIST_MANAGER_CLSID)
-        matches = [conn for conn in map(_wrap, nlm.GetNetworkConnections())
-                   if str(conn.GetAdapterId()).strip("{}").lower() == guid.lower()]
-        if not matches:
-            return None
-        conn = next((m for m in matches if m.GetConnectivity() != 0), matches[0])
-        net = _wrap(conn.GetNetwork())
-        return instance_id(str(net.GetNetworkId())), str(net.GetName() or alias)
+    return _network_profile_com(alias, guid)
+
+
+@_com
+def _network_profile_com(alias: str, guid: str) -> tuple[str, str] | None:
+    import comtypes.client
+    nlm = comtypes.client.CreateObject(NETWORK_LIST_MANAGER_CLSID)
+    matches = [conn for conn in map(_wrap, nlm.GetNetworkConnections())
+               if str(conn.GetAdapterId()).strip("{}").lower() == guid.lower()]
+    if not matches:
+        return None
+    conn = next((m for m in matches if m.GetConnectivity() != 0), matches[0])
+    net = _wrap(conn.GetNetwork())
+    # The id is the ADAPTER GUID, not INetwork.GetNetworkId(): Get-NetConnectionProfile's InstanceID
+    # (what the PowerShell host stored for trusted networks) is the adapter GUID, checked side by
+    # side on Windows 11. Returning the network id would untrust every network on upgrade.
+    return instance_id(str(conn.GetAdapterId())), str(net.GetName() or alias)
 
 
 def _policy():
@@ -208,41 +231,41 @@ def _policy():
 
 
 @_safe(False)
+@_com
 def firewall_profiles_enabled() -> bool:
-    with _com():
-        policy = _policy()
-        return any(bool(policy.FirewallEnabled(p)) for p in FW_PROFILES)
+    policy = _policy()
+    return any(bool(policy.FirewallEnabled(p)) for p in FW_PROFILES)
 
 
 @_safe([])
+@_com
 def firewall_rules() -> list[dict]:
-    with _com():
-        return [{"Name": str(r.Name), "Enabled": bool(r.Enabled), "Inbound": r.Direction == FW_DIRECTION_IN,
-                 "LocalPorts": str(r.LocalPorts or "")} for r in map(_wrap, _policy().Rules)]
+    return [{"Name": str(r.Name), "Enabled": bool(r.Enabled), "Inbound": r.Direction == FW_DIRECTION_IN,
+             "LocalPorts": str(r.LocalPorts or "")} for r in map(_wrap, _policy().Rules)]
 
 
 @_safe(False)
+@_com
 def firewall_add_rule(name: str, description: str, port: int, remote_addresses: str) -> bool:
     """Inbound TCP allow rule on the Private profile only. Needs an elevated process."""
     import comtypes.client
-    with _com():
-        rule = comtypes.client.CreateObject("HNetCfg.FWRule")
-        rule.Name, rule.Description = name, description
-        rule.Protocol, rule.LocalPorts = FW_PROTOCOL_TCP, str(port)
-        rule.Direction, rule.Action = FW_DIRECTION_IN, FW_ACTION_ALLOW
-        rule.Profiles, rule.RemoteAddresses, rule.Enabled = FW_PROFILE_PRIVATE, remote_addresses, True
-        _policy().Rules.Add(rule)
-        return True
+    rule = comtypes.client.CreateObject("HNetCfg.FWRule")
+    rule.Name, rule.Description = name, description
+    rule.Protocol, rule.LocalPorts = FW_PROTOCOL_TCP, str(port)
+    rule.Direction, rule.Action = FW_DIRECTION_IN, FW_ACTION_ALLOW
+    rule.Profiles, rule.RemoteAddresses, rule.Enabled = FW_PROFILE_PRIVATE, remote_addresses, True
+    _policy().Rules.Add(rule)
+    return True
 
 
 @_safe(False)
+@_com
 def firewall_remove_rules(name: str) -> bool:
     """Delete every rule called ``name`` (and nothing else). Needs an elevated process."""
-    with _com():
-        rules = _policy().Rules
-        while any(str(r.Name) == name for r in map(_wrap, rules)):
-            rules.Remove(name)
-        return True
+    rules = _policy().Rules
+    while any(str(r.Name) == name for r in map(_wrap, rules)):
+        rules.Remove(name)
+    return True
 
 
 def _shell():

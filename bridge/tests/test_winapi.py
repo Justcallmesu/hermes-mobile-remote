@@ -102,6 +102,7 @@ class _Obj:
 def fake_comtypes(monkeypatch):
     log = []
     ct = types.ModuleType("comtypes")
+    ct.COINIT_MULTITHREADED = 0
     ct.CoInitializeEx = lambda flag: log.append("init")
     ct.CoUninitialize = lambda: log.append("uninit")
     client = types.ModuleType("comtypes.client")
@@ -128,9 +129,45 @@ def test_network_profile_wraps_items_inside_com(monkeypatch, fake_comtypes):
     conn = _Obj(GetAdapterId=lambda: "{AAAAAAAA-0000-0000-0000-000000000001}", GetConnectivity=lambda: 4,
                 GetNetwork=lambda: net)
     client.objects[winapi.NETWORK_LIST_MANAGER_CLSID] = _Obj(GetNetworkConnections=lambda: [other, conn])
-    assert winapi.network_profile("Wi-Fi") == ("{3F2A9C1E-0000-4B1B-9C11-AABBCCDDEEFF}", "HomeWiFi")
+    # The id is the adapter GUID (= Get-NetConnectionProfile's InstanceID), not the network id, so
+    # networks trusted under the PowerShell host stay trusted.
+    assert winapi.network_profile("Wi-Fi") == ("{AAAAAAAA-0000-0000-0000-000000000001}", "HomeWiFi")
     assert other.wrapped and conn.wrapped and net.wrapped
     assert log == ["init", "create", "uninit"]
+
+
+class _Released(_Obj):
+    """A COM object that logs its Release (CPython frees it when the last reference goes)."""
+    def __init__(self, log, **kw):
+        super().__init__(**kw)
+        self._log = log
+
+    def __del__(self):
+        self._log.append("release")
+
+
+def test_com_objects_are_released_before_couninitialize(fake_comtypes):
+    # On Windows a Release() after CoUninitialize crashed the process (access violation in doctor).
+    client, log = fake_comtypes
+    client.objects["HNetCfg.FwPolicy2"] = _Released(log, FirewallEnabled=lambda p: p == 2)
+    client.CreateObject = lambda progid: (log.append("create"), client.objects.pop(progid))[1]  # hand it over
+    assert winapi.firewall_profiles_enabled() is True
+    assert log == ["init", "create", "release", "uninit"]
+
+
+def test_thread_already_in_sta_still_answers_and_is_not_uninitialised(fake_comtypes):
+    # Importing comtypes makes the main thread an STA; asking for MTA there raises RPC_E_CHANGED_MODE.
+    client, log = fake_comtypes
+    ct = sys.modules["comtypes"]
+
+    def changed_mode(flag):
+        e = OSError("Cannot change thread mode after it is set")
+        e.winerror = winapi.RPC_E_CHANGED_MODE
+        raise e
+    ct.CoInitializeEx = changed_mode
+    client.objects["HNetCfg.FwPolicy2"] = _Obj(FirewallEnabled=lambda p: True)
+    assert winapi.firewall_profiles_enabled() is True
+    assert "uninit" not in log
 
 
 def test_firewall_rules_wrap_items_inside_com(fake_comtypes):
