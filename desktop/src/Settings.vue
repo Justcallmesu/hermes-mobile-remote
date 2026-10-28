@@ -14,6 +14,7 @@ import {
   getRunMode,
   setRunMode,
 } from "./api.js";
+import { ACCENTS, applyAccent, savedAccent } from "./theme.js";
 
 defineEmits(["setup"]);
 const settings = ref({ start_at_logon: false, terminal_shell: "" });
@@ -24,6 +25,13 @@ const checks = ref([]);
 const pending = ref(false);
 const firewall = ref("");
 const error = ref("");
+const accent = ref(savedAccent());
+const dark =
+  globalThis.matchMedia?.("(prefers-color-scheme: light)")?.matches !== true;
+function pickAccent(id) {
+  accent.value = id;
+  applyAccent(id);
+}
 
 // Run an action; a failure (e.g. "not available yet on this platform") shows inline.
 async function guard(fn) {
@@ -78,6 +86,24 @@ async function changeRunMode(event) {
 <template>
   <div class="settings stack">
     <p v-if="error" class="error" data-test="error">{{ error }}</p>
+
+    <div class="card stack">
+      <h2>Appearance</h2>
+      <div class="swatches" role="radiogroup" aria-label="Accent colour">
+        <button
+          v-for="(a, id) in ACCENTS"
+          :key="id"
+          class="swatch"
+          :class="{ selected: accent === id }"
+          role="radio"
+          :aria-checked="accent === id"
+          :title="a[0]"
+          :data-accent="id"
+          :style="{ background: dark ? a[1] : a[2] }"
+          @click="pickAccent(id)"
+        ></button>
+      </div>
+    </div>
 
     <div class="card stack">
       <h2>Doctor</h2>

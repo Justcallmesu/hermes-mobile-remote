@@ -8,7 +8,7 @@
   --border: #33363f;
   --text: #e6e6e9;
   --muted: #a9abb3;
-  --accent: #e8b54a;
+  --accent: var(--accent-dark, #e8b54a);
   --on-accent: #15130f;
   --ok: #5bc27a;
   --warn: #e0a53a;
@@ -40,7 +40,7 @@
     --border: #dcd8cf;
     --text: #1c1b19;
     --muted: #5a5852;
-    --accent: #8a5f00;
+    --accent: var(--accent-light, #8a5f00);
     --on-accent: #ffffff;
     --ok: #1e7a43;
     --warn: #9a6700;
@@ -511,4 +511,25 @@ ul.plain {
 .update-banner a {
   color: var(--accent);
   font-weight: 600;
+}
+
+/* ------------------------------------------------------------------ accent picker */
+.swatches {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.swatch {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border-radius: 50%;
+  border: 2px solid transparent;
+  outline-offset: 2px;
+}
+.swatch:hover:not(:disabled) {
+  filter: brightness(1.1);
+}
+.swatch.selected {
+  border-color: var(--text);
 }

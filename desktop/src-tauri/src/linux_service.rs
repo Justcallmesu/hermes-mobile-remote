@@ -19,7 +19,8 @@ pub trait ServiceControl {
     /// Start at login.
     fn enable(&self) -> Result<(), String>;
     fn disable(&self) -> Result<(), String>;
-    /// `enable --now`: used by setup.
+    /// `enable` then `restart`: used by setup. Restart (not `--now`) so a bridge an old
+    /// `install.sh` already started is replaced by the new unit's binary.
     fn enable_now(&self) -> Result<(), String>;
     fn is_enabled(&self) -> bool;
     /// Keep running after logout.
@@ -116,7 +117,8 @@ impl ServiceControl for Systemd<'_> {
         self.systemctl_ok(&["disable", UNIT_NAME])
     }
     fn enable_now(&self) -> Result<(), String> {
-        self.systemctl_ok(&["enable", "--now", UNIT_NAME])
+        self.systemctl_ok(&["enable", UNIT_NAME])?;
+        self.systemctl_ok(&["restart", UNIT_NAME])
     }
     fn is_enabled(&self) -> bool {
         self.systemctl(&["is-enabled", UNIT_NAME]).map(|o| o.stdout.trim() == "enabled").unwrap_or(false)
@@ -174,8 +176,8 @@ impl<S: ServiceControl> Control for LinuxControl<S> {
     }
 }
 
-/// Setup's OS step: write the unit, daemon-reload, `enable --now`. An existing unit of the same name
-/// (from `install.sh`) is taken over.
+/// Setup's OS step: write the unit, daemon-reload, enable, restart. An existing unit of the same name
+/// (from `install.sh`) is taken over, and a bridge it already started is restarted on the new venv.
 pub struct LinuxOsStep<S: ServiceControl> {
     pub service: S,
     pub bin: PathBuf,
@@ -262,7 +264,11 @@ mod tests {
         assert!(text.contains("ExecStart=/v/bin/hermes-remote-bridge serve"));
         assert_eq!(
             f.calls(),
-            ["systemctl --user daemon-reload", "systemctl --user enable --now hermes-remote-bridge.service"]
+            [
+                "systemctl --user daemon-reload",
+                "systemctl --user enable hermes-remote-bridge.service",
+                "systemctl --user restart hermes-remote-bridge.service"
+            ]
         );
         assert_eq!(step.describe(), ["systemd user service hermes-remote-bridge.service, enabled at login"]);
         assert_eq!(
