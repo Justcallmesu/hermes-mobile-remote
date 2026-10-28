@@ -5,6 +5,7 @@ pub mod bridge;
 pub mod control;
 pub mod flyout;
 pub mod linux_service;
+pub mod migration;
 pub mod run_mode;
 pub mod setup;
 pub mod tray;
@@ -18,6 +19,25 @@ fn app_version() -> String {
 }
 
 pub fn run() {
+    let args: Vec<String> = std::env::args().collect();
+    if let Some(remove_data) = migration::uninstall_flags(&args) {
+        let paths = bridge::BridgePaths::from_env();
+        let code = match (migration::Uninstall {
+            child: run_mode::app_child(),
+            runner: &bridge::SystemRunner,
+            paths: &paths,
+            remove_data,
+        })
+        .run()
+        {
+            Ok(()) => 0,
+            Err(e) => {
+                eprintln!("uninstall: {e}");
+                1
+            }
+        };
+        std::process::exit(code);
+    }
     tauri::Builder::default()
         .plugin(tauri_plugin_autostart::init(
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,

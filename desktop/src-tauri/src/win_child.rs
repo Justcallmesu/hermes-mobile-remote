@@ -113,6 +113,8 @@ pub fn firewall_fix_with(runner: &dyn crate::bridge::ProcessRunner, exe: &std::p
 pub struct WindowsOsStep<'a> {
     pub autostart: &'a dyn Autostart,
     pub child: &'a dyn ChildSupervisor,
+    /// Migrate a script install; `migration::migrate_script_install` in the real app.
+    pub migrate: &'a dyn Fn(),
 }
 
 impl OsStep for WindowsOsStep<'_> {
@@ -120,6 +122,8 @@ impl OsStep for WindowsOsStep<'_> {
         vec!["Start at logon: HKCU Run key 'Hermes Remote'".into()]
     }
     fn apply(&self) -> Result<(), String> {
+        // Old script install (tray, run-bridge, Scheduled Task) goes first; data dirs stay as they are.
+        (self.migrate)();
         self.autostart.enable()?;
         self.child.spawn()
     }
@@ -347,10 +351,11 @@ mod tests {
         c.start().unwrap();
         c.stop().unwrap();
         assert_eq!(*log.lock().unwrap(), ["child.spawn", "child.stop"]);
-        let step = WindowsOsStep { autostart: &auto, child: &child };
+        let migrate = || log.lock().unwrap().push("migrate".into());
+        let step = WindowsOsStep { autostart: &auto, child: &child, migrate: &migrate };
         log.lock().unwrap().clear();
         step.apply().unwrap();
-        assert_eq!(*log.lock().unwrap(), ["autostart.enable", "child.spawn"]);
+        assert_eq!(*log.lock().unwrap(), ["migrate", "autostart.enable", "child.spawn"]);
         assert_eq!(step.describe(), ["Start at logon: HKCU Run key 'Hermes Remote'"]);
     }
 
