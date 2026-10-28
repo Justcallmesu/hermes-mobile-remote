@@ -171,6 +171,47 @@ jobs:
       - run: bash test.sh
       - name: Bundles build (unsigned, no updater artifacts)
         run: npx tauri build --debug --bundles ${{ runner.os == 'Linux' && 'appimage,deb' || 'nsis' }} --config '{"bundle":{"createUpdaterArtifacts":false}}'
+      # D17 on a real Windows runner: install the built NSIS per-user, the app owns the bridge (Job Object),
+      # a hard kill of the app takes the bridge with it, and the uninstaller removes autostart and the old task.
+      - name: NSIS install, bridge dies with the app, uninstall cleans up
+        if: runner.os == 'Windows'
+        shell: pwsh
+        working-directory: .
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # A script install leaves this task behind; the app must remove it (D12).
+          schtasks /Create /TN "Hermes Mobile Remote" /TR "cmd.exe /c exit 0" /SC ONLOGON /F | Out-Null
+          $setup = Get-ChildItem desktop/src-tauri/target/debug/bundle/nsis/*-setup.exe | Select-Object -First 1
+          Start-Process $setup.FullName -ArgumentList '/S' -Wait
+          $dir = Join-Path $env:LOCALAPPDATA 'Hermes Remote'
+          $app = Get-ChildItem $dir -Filter *.exe | Where-Object { $_.Name -notmatch 'uninstall' } | Select-Object -First 1
+          if (-not $app) { throw "no app exe under $dir" }
+          # First-run setup downloads uv; on the runner the venv is made from the checkout instead.
+          $data = Join-Path $env:LOCALAPPDATA 'hermes-remote'
+          $env:UV_PROJECT_ENVIRONMENT = Join-Path $data 'venv'
+          uv sync --frozen --no-dev --directory bridge | Out-Null
+          New-Item -ItemType Directory -Force (Join-Path $data 'config') | Out-Null
+          Set-Content (Join-Path $data 'config\config.toml') -Encoding ASCII -Value "lan = true"
+          $p = Start-Process $app.FullName -PassThru
+          $up = $false
+          for ($i = 0; $i -lt 60 -and -not $up; $i++) {
+            Start-Sleep -Seconds 1
+            try { $null = Invoke-WebRequest 'http://127.0.0.1:8650/v1/me' -UseBasicParsing -TimeoutSec 2 }
+            catch { if ($_.Exception.Response) { $up = $true } }
+          }
+          if (-not $up) { throw 'the installed app did not bring the bridge up' }
+          & taskkill.exe /PID $p.Id /F | Out-Null
+          Start-Sleep -Seconds 4
+          if (Get-NetTCPConnection -LocalPort 8650 -State Listen -ErrorAction SilentlyContinue) { throw 'bridge outlived a hard kill of the app' }
+          $uninst = Get-ChildItem $dir -Filter uninstall*.exe | Select-Object -First 1
+          Start-Process $uninst.FullName -ArgumentList '/S' -Wait
+          Start-Sleep -Seconds 3
+          schtasks /Query /TN "Hermes Mobile Remote" 2>$null | Out-Null
+          if ($LASTEXITCODE -eq 0) { throw 'old Scheduled Task still registered after uninstall' }
+          $run = Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -ErrorAction SilentlyContinue
+          if ($run.PSObject.Properties.Name -contains 'Hermes Remote') { throw 'autostart left behind' }
+          'installed, bridge died with the app, uninstall removed autostart and the old task'
+          exit 0
       - uses: actions/upload-artifact@v7
         with:
           name: hermes-remote-desktop-${{ runner.os }}

@@ -2,8 +2,8 @@
 no PowerShell anywhere (elevation re-runs the CLI via ShellExecuteExW runas). The old Scheduled
 Task of a script install is removed by the desktop app (migration).
 
-Written against Microsoft's documented APIs and unit-tested with their output replaced; the
-ctypes/COM calls have not yet run on a real Windows machine (see docs/PLATFORMS.md).
+Written against Microsoft's documented APIs and unit-tested with their output replaced; CI's Windows job
+runs them for real and compares them with the cmdlets' answers (see docs/PLATFORMS.md).
 """
 from __future__ import annotations
 
