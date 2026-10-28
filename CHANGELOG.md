@@ -3,6 +3,13 @@
 Releases are git tags; the version in the app comes from the tag. `git log v0.9.0..vX.Y.Z` is the
 authoritative history — this file only summarises what is worth knowing before upgrading.
 
+## v1.25.1
+
+- Fixed a crash (app force closing) while a chat was streaming: a new run could reuse an
+  item id already on screen.
+- The Scheduled (clock) icon in the chat list now shows how many scheduled jobs are active.
+  Paused jobs are not counted.
+
 ## v1.25.0
 
 - Pictures returned by tools (vision_analyze, screenshots, browser captures) now show as images
