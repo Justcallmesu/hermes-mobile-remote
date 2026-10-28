@@ -19,13 +19,34 @@ async function go() {
 </script>
 
 <template>
-  <div class="pair">
-    <label>
-      Device name
-      <input v-model="name" data-test="name" placeholder="phone" />
-    </label>
-    <button data-test="pair-go" :disabled="!name.trim()" @click="go">Pair</button>
-    <p v-if="error" class="error" data-test="error">{{ error }}</p>
-    <PairResult v-if="result" :answer="result" />
+  <div class="pair stack">
+    <div class="card stack">
+      <h2>Pair a device</h2>
+      <p class="muted small" style="margin: 0">
+        Give the phone a name, then scan the code with the Hermes Remote app.
+      </p>
+      <div class="row">
+        <label class="field" style="flex: 1">
+          Device name
+          <input
+            v-model="name"
+            data-test="name"
+            placeholder="phone"
+            @keyup.enter="name.trim() && go()"
+          />
+        </label>
+        <button
+          data-test="pair-go"
+          class="primary"
+          style="align-self: flex-end"
+          :disabled="!name.trim()"
+          @click="go"
+        >
+          Pair
+        </button>
+      </div>
+      <p v-if="error" class="error" data-test="error">{{ error }}</p>
+    </div>
+    <div v-if="result" class="card"><PairResult :answer="result" /></div>
   </div>
 </template>

@@ -13,7 +13,7 @@ const tab = ref("home");
 const tabs = [
   ["home", "Home"],
   ["devices", "Devices"],
-  ["pair", "Pair a device"],
+  ["pair", "Pair"],
   ["settings", "Settings"],
 ];
 const showSetup = ref(false);
@@ -39,6 +39,7 @@ onMounted(async () => {
 <template>
   <main class="app">
     <header>
+      <div class="logo" aria-hidden="true">H</div>
       <h1>Hermes Remote</h1>
       <p class="version">{{ version }}</p>
     </header>
@@ -56,79 +57,10 @@ onMounted(async () => {
       </button>
     </nav>
     <section v-if="!showSetup">
-      <Home v-if="tab === 'home'" />
+      <Home v-if="tab === 'home'" @pair="tab = 'pair'" />
       <Devices v-else-if="tab === 'devices'" />
       <Pair v-else-if="tab === 'pair'" />
       <Settings v-else @setup="showSetup = true" />
     </section>
   </main>
 </template>
-
-<style>
-:root {
-  color-scheme: light dark;
-  --ok: #1a8a3a;
-  --warn: #b7791f;
-  --fail: #c0392b;
-  font-family: system-ui, sans-serif;
-}
-body {
-  margin: 0;
-}
-.app {
-  box-sizing: border-box;
-  min-width: 320px;
-  max-width: 720px;
-  min-height: 100vh;
-  margin: 0 auto;
-  padding: 12px;
-}
-.app header {
-  display: flex;
-  align-items: baseline;
-  gap: 8px;
-}
-.app h1 {
-  font-size: 1.1rem;
-  margin: 0;
-}
-.version {
-  opacity: 0.6;
-  margin: 0;
-  font-size: 0.8rem;
-}
-nav {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-  margin: 8px 0;
-}
-nav button.active {
-  font-weight: 600;
-  text-decoration: underline;
-}
-.error {
-  color: var(--fail);
-}
-.notice {
-  color: var(--warn);
-}
-.level-ok {
-  color: var(--ok);
-}
-.level-warn {
-  color: var(--warn);
-}
-.level-fail {
-  color: var(--fail);
-}
-.qr {
-  width: 100%;
-  max-width: 260px;
-  image-rendering: pixelated;
-}
-ul.plain {
-  list-style: none;
-  padding: 0;
-}
-</style>

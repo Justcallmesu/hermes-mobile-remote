@@ -29,23 +29,22 @@ async function restart() {
 <template>
   <aside v-if="info" class="update-banner" data-test="update-banner">
     <span>New version {{ info.version }} available</span>
-    <a v-if="info.kind === 'link'" :href="info.url" data-test="update-link" @click.prevent="openUrl(info.url)"
+    <a
+      v-if="info.kind === 'link'"
+      :href="info.url"
+      data-test="update-link"
+      @click.prevent="openUrl(info.url)"
       >View release</a
     >
-    <button v-else :disabled="busy" data-test="update-restart" @click="restart">Restart to update</button>
+    <button
+      v-else
+      class="primary"
+      :disabled="busy"
+      data-test="update-restart"
+      @click="restart"
+    >
+      Restart to update
+    </button>
     <span v-if="error" class="error" data-test="update-error">{{ error }}</span>
   </aside>
 </template>
-
-<style>
-.update-banner {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px;
-  margin: 8px 0;
-  padding: 6px 8px;
-  border: 1px solid var(--warn);
-  border-radius: 4px;
-}
-</style>

@@ -56,7 +56,8 @@ onMounted(async () => {
     settings.value = { ...settings.value, ...(await getSettings()) };
     installed.value = await getInstalledList();
     linger.value = (await getLinger()) === true;
-    runMode.value = (await getRunMode()) === "app-only" ? "app-only" : "always-on";
+    runMode.value =
+      (await getRunMode()) === "app-only" ? "app-only" : "always-on";
   });
 });
 
@@ -75,85 +76,138 @@ async function changeRunMode(event) {
 </script>
 
 <template>
-  <div class="settings">
+  <div class="settings stack">
     <p v-if="error" class="error" data-test="error">{{ error }}</p>
 
-    <h2>Doctor</h2>
-    <button data-test="doctor" :disabled="pending" @click="doctor">Run doctor</button>
-    <p v-if="pending" data-test="doctor-pending">Checking…</p>
-    <ul class="plain">
-      <li v-for="c in checks" :key="c.id" data-test="check" :class="`level-${c.level}`">{{ c.message }}</li>
-    </ul>
+    <div class="card stack">
+      <h2>Doctor</h2>
+      <div class="row">
+        <button
+          data-test="doctor"
+          class="primary"
+          :disabled="pending"
+          @click="doctor"
+        >
+          Run doctor
+        </button>
+        <span v-if="pending" data-test="doctor-pending" class="muted"
+          >Checking…</span
+        >
+      </div>
+      <ul class="plain status-rows" v-if="checks.length">
+        <li
+          v-for="c in checks"
+          :key="c.id"
+          data-test="check"
+          :class="`level-${c.level}`"
+        >
+          {{ c.message }}
+        </li>
+      </ul>
+    </div>
 
-    <h2>Firewall</h2>
-    <button data-test="fw-check" @click="checkFirewall">Check</button>
-    <button data-test="fw-fix" @click="guard(firewallFix)">Fix</button>
-    <span v-if="firewall" data-test="fw-state">{{ firewall }}</span>
+    <div class="card stack">
+      <h2>Firewall</h2>
+      <div class="row">
+        <button data-test="fw-check" @click="checkFirewall">Check</button>
+        <button data-test="fw-fix" @click="guard(firewallFix)">Fix</button>
+        <span
+          v-if="firewall"
+          data-test="fw-state"
+          :class="firewall === 'open' ? 'level-ok' : 'level-warn'"
+          >{{ firewall }}</span
+        >
+      </div>
+    </div>
 
-    <h2>General</h2>
-    <button data-test="open-logs" @click="guard(openLogs)">Open log folder</button>
-    <label v-if="settings.platform !== 'windows'">
-      Run mode
-      <select data-test="run-mode" :value="runMode" @change="changeRunMode">
-        <option value="always-on">Always on (systemd service)</option>
-        <option value="app-only">Only while the app is open</option>
-      </select>
-    </label>
-    <p v-if="settings.platform !== 'windows' && runMode === 'app-only'" data-test="no-sandbox">
-      In this mode the bridge runs without systemd sandboxing.
-    </p>
-    <label>
-      <input
-        type="checkbox"
-        data-test="logon"
-        :disabled="runMode === 'app-only'"
-        :checked="settings.start_at_logon"
-        @change="
-          guard(async () => {
-            const on = $event.target.checked;
-            await setStartAtLogon(on);
-            settings.start_at_logon = on;
-          })
-        "
-      />
-      Start at logon
-    </label>
-    <p v-if="settings.platform === 'windows'" data-test="crash-note">
-      If the app crashes the bridge stops too; start Hermes Remote from the Start menu again.
-    </p>
-    <label v-if="settings.start_at_logon">
-      <input
-        type="checkbox"
-        data-test="linger"
-        :disabled="runMode === 'app-only'"
-        :checked="linger"
-        @change="
-          guard(async () => {
-            const on = $event.target.checked;
-            try {
-              await setLinger(on);
-              linger = on;
-            } catch (e) {
-              $event.target.checked = linger;
-              throw e;
-            }
-          })
-        "
-      />
-      Keep running after logout
-    </label>
-    <label>
-      Terminal shell
-      <input
-        data-test="shell"
-        :value="settings.terminal_shell ?? ''"
-        @change="guard(() => setTerminalShell($event.target.value))"
-      />
-    </label>
+    <div class="card stack">
+      <h2>General</h2>
+      <label v-if="settings.platform !== 'windows'" class="field">
+        Run mode
+        <select data-test="run-mode" :value="runMode" @change="changeRunMode">
+          <option value="always-on">Always on (systemd service)</option>
+          <option value="app-only">Only while the app is open</option>
+        </select>
+      </label>
+      <p
+        v-if="settings.platform !== 'windows' && runMode === 'app-only'"
+        data-test="no-sandbox"
+        class="muted small"
+        style="margin: 0"
+      >
+        In this mode the bridge runs without systemd sandboxing.
+      </p>
+      <label class="check">
+        <input
+          type="checkbox"
+          data-test="logon"
+          :disabled="runMode === 'app-only'"
+          :checked="settings.start_at_logon"
+          @change="
+            guard(async () => {
+              const on = $event.target.checked;
+              await setStartAtLogon(on);
+              settings.start_at_logon = on;
+            })
+          "
+        />
+        Start at logon
+      </label>
+      <p
+        v-if="settings.platform === 'windows'"
+        data-test="crash-note"
+        class="muted small"
+        style="margin: 0"
+      >
+        If the app crashes the bridge stops too; start Hermes Remote from the
+        Start menu again.
+      </p>
+      <label v-if="settings.start_at_logon" class="check">
+        <input
+          type="checkbox"
+          data-test="linger"
+          :disabled="runMode === 'app-only'"
+          :checked="linger"
+          @change="
+            guard(async () => {
+              const on = $event.target.checked;
+              try {
+                await setLinger(on);
+                linger = on;
+              } catch (e) {
+                $event.target.checked = linger;
+                throw e;
+              }
+            })
+          "
+        />
+        Keep running after logout
+      </label>
+      <label class="field">
+        Terminal shell (empty = default)
+        <input
+          data-test="shell"
+          :value="settings.terminal_shell ?? ''"
+          @change="guard(() => setTerminalShell($event.target.value))"
+        />
+      </label>
 
-    <h2>What this install changed</h2>
-    <pre v-if="installed" data-test="installed">{{ installed }}</pre>
-    <p v-else>Setup has not run yet</p>
-    <button data-test="rerun-setup" @click="$emit('setup')">Run setup again</button>
+      <div class="row">
+        <button data-test="open-logs" @click="guard(openLogs)">
+          Open log folder
+        </button>
+      </div>
+    </div>
+
+    <div class="card stack">
+      <h2>What this install changed</h2>
+      <pre v-if="installed" data-test="installed">{{ installed }}</pre>
+      <p v-else class="muted" style="margin: 0">Setup has not run yet</p>
+      <div class="row">
+        <button data-test="rerun-setup" @click="$emit('setup')">
+          Run setup again
+        </button>
+      </div>
+    </div>
   </div>
 </template>

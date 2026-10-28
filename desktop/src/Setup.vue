@@ -45,22 +45,48 @@ onUnmounted(() => stop?.());
 </script>
 
 <template>
-  <div class="setup">
+  <div class="setup card stack">
     <h2>Set up Hermes Remote</h2>
     <template v-if="!running && !finished && !steps.length">
-      <p>Setup will change:</p>
-      <ul data-test="change-list">
+      <p style="margin: 0">Setup will change:</p>
+      <ul data-test="change-list" class="changes">
         <li v-for="c in changes" :key="c" data-test="change">{{ c }}</li>
       </ul>
-      <button data-test="continue" @click="cont">Continue</button>
+      <div class="row">
+        <button data-test="continue" class="primary" @click="cont">
+          Continue
+        </button>
+      </div>
     </template>
-    <ul class="plain">
-      <li v-for="s in steps" :key="s.step" data-test="step" :class="`state-${s.state}`">
-        {{ s.state }}: {{ s.message }}
+    <ul class="plain steps">
+      <li
+        v-for="s in steps"
+        :key="s.step"
+        data-test="step"
+        :class="`state-${s.state}`"
+      >
+        <span class="badge">{{ s.state }}</span
+        ><span class="sr">:</span> {{ s.message }}
       </li>
     </ul>
     <p v-if="error" class="error" data-test="error">{{ error }}</p>
-    <button v-if="error && steps.length" data-test="retry" @click="cont">Try again</button>
-    <button v-if="finished" data-test="finish" @click="emit('done')">Open the app</button>
+    <div class="row">
+      <button
+        v-if="error && steps.length"
+        data-test="retry"
+        class="primary"
+        @click="cont"
+      >
+        Try again
+      </button>
+      <button
+        v-if="finished"
+        data-test="finish"
+        class="primary"
+        @click="emit('done')"
+      >
+        Open the app
+      </button>
+    </div>
   </div>
 </template>
