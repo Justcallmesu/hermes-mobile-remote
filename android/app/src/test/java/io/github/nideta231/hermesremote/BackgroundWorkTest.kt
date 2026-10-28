@@ -32,9 +32,32 @@ class BackgroundWorkTest {
         val on = BackgroundWork.poll(PollLink(answers(true, true, "active")), listOf("r1"), emptySet())
         assertEquals(setOf("r1:process", "r1:subagent", "r1:loop"), on)
         val hb = BackgroundWork.poll(PollLink(answers(false, false, "paused", "active")), listOf("r1"), emptySet())
-        assertEquals(setOf("r1:loop"), hb)
+        assertEquals(setOf("r1:heartbeat"), hb)
         val off = BackgroundWork.poll(PollLink(answers(false, false, "done")), listOf("r1"), on)
         assertEquals(emptySet<String>(), off)
+    }
+
+    private fun update(control: JSONObject?, current: Set<String>) =
+        BackgroundWork.controlUpdate("r1", JSONObject().apply { control?.let { put("control", it) } }, current)
+
+    private fun ctl(loop: String?, heartbeat: String?) = JSONObject()
+        .put("loop", loop?.let { JSONObject().put("status", it) } ?: JSONObject.NULL)
+        .put("heartbeat", heartbeat?.let { JSONObject().put("status", it) } ?: JSONObject.NULL)
+
+    @Test fun activeLoopTurnsKeyOnAndOtherStatusesTurnItOff() {
+        assertEquals(setOf("r1:loop"), update(ctl("active", null), emptySet()))
+        for (s in listOf("paused", "done", "cleared")) assertEquals(emptySet<String>(), update(ctl(s, null), setOf("r1:loop")))
+    }
+
+    @Test fun payloadWithoutControlOrWithEmptyControlLeavesKeysUnchanged() {
+        val current = setOf("r1:loop", "r1:heartbeat")
+        assertEquals(current, update(null, current))
+        assertEquals(current, update(JSONObject(), current))
+        assertEquals(current, BackgroundWork.controlUpdate("r1", JSONObject().put("loop", JSONObject().put("status", "done")), current))
+    }
+
+    @Test fun activeHeartbeatWithNullLoopKeepsHeartbeatOnAndLoopOff() {
+        assertEquals(setOf("r1:heartbeat"), update(ctl(null, "active"), setOf("r1:loop")))
     }
 
     @Test fun refusedOrFailingCallLeavesTheSetUnchanged() = runBlocking {

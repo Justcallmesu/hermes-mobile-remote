@@ -43,7 +43,7 @@ object LiveLink {
     /** Runtime ids loaded from disk after a process restart: resumed on the first Open whatever [busy] says. */
     private val toResume = ConcurrentHashMap.newKeySet<String>()
     private var store: WatchedStore? = null
-    private var heartbeat: Job? = null
+    private var ping: Job? = null
     private var poller: Job? = null
     private var networkCallback: ConnectivityManager.NetworkCallback? = null
 
@@ -54,8 +54,6 @@ object LiveLink {
     /** Keys of background work a session still owns (delegation, loop, heartbeat): also keeps [WatchService] up. */
     private val _backgroundWork = MutableStateFlow<Set<String>>(emptySet())
     val backgroundWork: StateFlow<Set<String>> = _backgroundWork.asStateFlow()
-
-    fun setBackgroundWork(key: String, on: Boolean) = _backgroundWork.update { if (on) it + key else it - key }
 
     /** After the system killed the process: open the socket again for the active host, from its saved login. */
     fun restore(context: Context) {
@@ -90,10 +88,10 @@ object LiveLink {
         val app = context.applicationContext
         store(app)
         collector = scope.launch { fresh.incoming.collect { onIncoming(app, it) } }
-        heartbeat = scope.launch {
+        ping = scope.launch {
             while (true) {
                 delay(ReattachPolicy.PING_INTERVAL_MS)
-                ReattachPolicy.heartbeat(link(fresh), background = !visible())
+                ReattachPolicy.ping(link(fresh), background = !visible())
             }
         }
         poller = scope.launch {
@@ -141,8 +139,8 @@ object LiveLink {
     fun close() {
         collector?.cancel()
         collector = null
-        heartbeat?.cancel()
-        heartbeat = null
+        ping?.cancel()
+        ping = null
         poller?.cancel()
         poller = null
         gateway?.close()
@@ -192,7 +190,7 @@ object LiveLink {
                         }
                     }
                     "session.control.update" ->
-                        if (watched.containsKey(sid)) setBackgroundWork("$sid:loop", BackgroundWork.controlActive(inc.payload.optJSONObject("control") ?: inc.payload))
+                        if (watched.containsKey(sid)) _backgroundWork.update { BackgroundWork.controlUpdate(sid, inc.payload, it) }
                     "session.title" -> inc.payload.str("title")?.let { retitle(sid, it) }
                     "request.cancel" -> inc.payload.str("id")?.let { Notifier.clearQuestion(app, it) }
                 }

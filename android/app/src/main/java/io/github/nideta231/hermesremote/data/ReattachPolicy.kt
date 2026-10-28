@@ -38,7 +38,7 @@ object ReattachPolicy {
     }
 
     /** Ping; one that gets no answer in 5 s drops the socket so the reconnect starts before the grace ends. Background only. */
-    suspend fun heartbeat(link: ReattachLink, background: Boolean) {
+    suspend fun ping(link: ReattachLink, background: Boolean) {
         if (!background || !link.isOpen) return
         if (!alive(link)) link.forceReconnect()
     }

@@ -48,14 +48,14 @@ class ReattachPolicyTest {
 
     @Test fun unansweredPingForcesReconnectOnlyInBackground() = runBlocking {
         val dead = FakeLink(pingFails = true)
-        ReattachPolicy.heartbeat(dead, background = false)
+        ReattachPolicy.ping(dead, background = false)
         assertEquals(0, dead.calls.size)
         assertEquals(0, dead.forced)
-        ReattachPolicy.heartbeat(dead, background = true)
+        ReattachPolicy.ping(dead, background = true)
         assertEquals(listOf(5_000L), dead.timeouts)
         assertEquals(1, dead.forced)
         val live = FakeLink()
-        ReattachPolicy.heartbeat(live, background = true)
+        ReattachPolicy.ping(live, background = true)
         assertEquals(0, live.forced)
         assertEquals(10_000L, ReattachPolicy.PING_INTERVAL_MS)
     }
