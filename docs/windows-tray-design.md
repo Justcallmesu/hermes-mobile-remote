@@ -1,3 +1,5 @@
+Replaced by docs/desktop-app-design.md
+
 # Windows tray app - design and outcome
 
 Status: **built and verified on this machine (Windows 11).** Sections marked *deferred* were

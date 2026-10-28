@@ -34,6 +34,8 @@ class Config:
     lan: bool = False
     trust_file: Path = CONFIG_DIR / "networks.json"
     tls_dir: Path = CONFIG_DIR / "tls"
+    # Proves a request to /v1/local/* comes from a local client (see local_secret.py).
+    local_secret_file: Path = CONFIG_DIR / "local-secret"
     # Advertise the bridge over mDNS on trusted networks so the app finds a changed IP.
     mdns: bool = True
     # Hermes' home (spawn ledger, sessions) and install (to start `hermes serve` when the desktop
@@ -63,7 +65,13 @@ class Config:
     claude_usage: bool = True
     claude_credentials: Path = Path.home() / ".claude" / ".credentials.json"
     terminal: bool = True
+    # Command line the phone's Terminal opens, e.g. "cmd.exe" or "/usr/bin/fish -l". Empty = the default.
+    terminal_shell: str = ""
     requests_per_minute: int = 240
+    # `GET /metrics` (Prometheus text): counts and timings, never content. Still needs a device
+    # token, or the local metrics token in this file (mode 600, made by `serve`).
+    metrics: bool = True
+    metrics_token_file: Path = CONFIG_DIR / "metrics.token"
     # Frames per minute on one live connection (the phone's RPCs, not Hermes' events).
     frames_per_minute: int = 600
     # Seconds the bridge keeps Hermes' socket open after the phone's drops, so a quick return

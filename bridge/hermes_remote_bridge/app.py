@@ -11,7 +11,9 @@ Two kinds of endpoint:
 from __future__ import annotations
 
 import asyncio
+import base64
 import contextlib
+import hmac
 import json
 import logging
 import logging.handlers
@@ -26,7 +28,7 @@ from typing import Any
 import httpx
 from fastapi import Depends, FastAPI, Request, WebSocket
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 from pydantic import BaseModel, Field
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
@@ -34,9 +36,13 @@ from . import __version__
 from .backend import SESSION_HEADER, Backend, BackendLocator, BackendUnavailable
 from .config import Config
 from .devices import Device, DeviceStore
-from .network import TrustStore, network_info, serving_lan_ips
+from . import local_secret
+from .local_api import devices_doc, pairing_payload, pairing_uri, qr_png, trust_doc
+from .network import TrustStore, current_network, network_info, serving_lan_ips
 from .chat_files import referenced_file
 from .folders import FolderError, list_dirs, make_dir
+from .metrics import CONTENT_TYPE as METRICS_CONTENT_TYPE
+from .metrics import BridgeMetrics, read_metrics_token
 from .project_notes import IDEA_MAX_BYTES, NoFolder, read_idea, write_idea
 from .profiles import ProfileRefused, is_visible, media_roots, profile_home, resolve_profile
 from .monitor import RANGES, ClaudeUsage, Monitor
@@ -57,6 +63,8 @@ MEDIA_MAX_BYTES = 25 * 1024 * 1024
 CHAT_FILE_MAX_BYTES = 100 * 1024 * 1024
 # The wire contract between this bridge and the app. 2 = the WebSocket relay (v1.0.0).
 PROTOCOL = 2
+# Sent by a local client (the desktop app) on every `/v1/local/*` request.
+LOCAL_HEADER = "X-Hermes-Local"
 
 
 class ApiError(Exception):
@@ -77,6 +85,46 @@ CRON_ACTIONS = ("pause", "resume", "trigger")
 _CRON_JOB_FIELDS = ("id", "name", "schedule_display", "state", "enabled", "next_run_at", "last_run_at",
                     "last_status", "last_error", "failure_streak", "model")
 _CRON_RUN_FIELDS = ("id", "title", "preview", "source", "started_at", "ended_at", "message_count", "model")
+
+
+# Session search: how long a query may be, how many chats one search returns, and how much of the
+# matching message the phone gets (a drawer line, not the message).
+SEARCH_QUERY_MAX = 200
+SEARCH_LIMIT_MAX = 50
+SNIPPET_MAX_CHARS = 160
+# The fields of a search hit the phone gets: a /v1/sessions row plus the matching text.
+_SEARCH_ROW_FIELDS = ("id", "title", "preview", "source", "message_count", "last_active", "model", "pinned")
+# Hermes' FTS5 snippet() wraps the match in these markers for the desktop to highlight.
+_SNIPPET_MARKS = re.compile(r">>>|<<<")
+
+
+def _snippet(text: Any) -> str:
+    """The matching text on one short line: highlight markers dropped, whitespace collapsed."""
+    flat = " ".join(_SNIPPET_MARKS.sub("", text if isinstance(text, str) else "").split())
+    return flat if len(flat) <= SNIPPET_MAX_CHARS else flat[:SNIPPET_MAX_CHARS - 1].rstrip() + "…"
+
+
+def _search_hit(row: dict) -> dict:
+    """One Hermes search result in the shape of a /v1/sessions row (+ `snippet`).
+
+    Hermes names the chat `session_id` (its compression tip) and leaves `last_active` empty for
+    pure text hits; the phone wants `id` and some recency, so fall back to when the chat started.
+    """
+    hit = {k: row.get(k) for k in _SEARCH_ROW_FIELDS}
+    hit["id"] = row.get("session_id") or row.get("id")
+    hit["last_active"] = row.get("last_active") or row.get("started_at") or row.get("session_started")
+    hit["pinned"] = bool(row.get("pinned"))
+    hit["snippet"] = _snippet(row.get("snippet"))
+    return hit
+
+
+def _visible_hits(rows: list, limit: int) -> list[dict]:
+    """The hits the sidebar would show: no archived chats (Hermes' search includes them), no
+    cron runs, at most `limit`."""
+    hits = [_search_hit(r) for r in rows
+            if isinstance(r, dict) and not r.get("archived") and r.get("source") != "cron"
+            and (r.get("session_id") or r.get("id"))]
+    return hits[:limit]
 
 
 def _cron_job(job: dict) -> dict:
@@ -119,6 +167,19 @@ class SetDefaultModel(BaseModel):
     model: str = Field(min_length=1, max_length=200)
     provider: str = Field(default="", max_length=100)
     confirm_expensive_model: bool = False
+
+
+class LocalPair(BaseModel):
+    name: str = Field(min_length=1, max_length=64)
+    replace: bool = False
+
+
+class LocalName(BaseModel):
+    name: str = Field(min_length=1, max_length=64)
+
+
+class LocalNetworkId(BaseModel):
+    id: str = Field(min_length=1, max_length=200)
 
 
 class RateLimiter:
@@ -171,9 +232,9 @@ def create_app(cfg: Config, *, locator: BackendLocator | None = None, tailnet: T
                shell_factory=None, park_sleep=asyncio.sleep) -> FastAPI:
     if monitor is None and cfg.monitor:
         monitor = Monitor(cfg.monitor_db, ClaudeUsage(cfg.claude_credentials) if cfg.claude_usage else None)
-    shell_factory = shell_factory or Shell
+    shell_factory = shell_factory or (lambda **kw: Shell(cfg=cfg, **kw))
     locator = locator or BackendLocator(cfg.hermes_home, cfg.hermes_root, cfg.hermes_python, cfg.backend_log,
-                                        spawn=cfg.start_hermes)
+                                        hermes_bin=cfg.hermes_bin, spawn=cfg.start_hermes)
     cli = hermes_cli or (lambda *a: _hermes_cli(cfg, *a))
     tailnet = tailnet or TailnetClient()
     devices = devices or DeviceStore(cfg.devices_file)
@@ -182,6 +243,8 @@ def create_app(cfg: Config, *, locator: BackendLocator | None = None, tailnet: T
     allowed_logins = set(cfg.allowed_logins) or ({owner_login} if owner_login else set())
     audit = _audit_logger(cfg)
     limiter = RateLimiter()
+    metrics = BridgeMetrics(__version__, PROTOCOL)
+    metrics_token = read_metrics_token(cfg.metrics_token_file) if cfg.metrics else None
 
     def audit_event(entry: dict) -> None:
         audit.info(json.dumps({"ts": round(time.time(), 3), **entry}))
@@ -272,20 +335,34 @@ def create_app(cfg: Config, *, locator: BackendLocator | None = None, tailnet: T
         request.state.device = None
         node, rejected = await peer_verdict(peer, request.url.scheme == "https")
         if rejected:
-            return _err(*rejected)
+            return counted(request, start, _err(*rejected), "refused")
         request.state.peer_node = node
         if request.method in ("POST", "PATCH", "PUT"):
             length = request.headers.get("content-length")
             if length is None and request.headers.get("transfer-encoding"):
-                return _err(411, "length_required", "Chunked request bodies are not accepted")
+                return counted(request, start, _err(411, "length_required", "Chunked request bodies are not accepted"),
+                               "refused")
             if length is not None and (not length.isdigit() or int(length) > cfg.max_body_bytes):
-                return _err(413, "body_too_large", "Request body too large")
-        response = await call_next(request)
+                return counted(request, start, _err(413, "body_too_large", "Request body too large"), "refused")
+        try:
+            response = counted(request, start, await call_next(request))
+        except Exception:
+            counted(request, start, JSONResponse({}, status_code=500))
+            raise
         if request.url.path != "/healthz":
             device: Device | None = request.state.device
             audit_event({"peer": node, "device": device.name if device else None, "method": request.method,
                          "path": request.url.path, "status": response.status_code,
                          "ms": round((time.monotonic() - start) * 1000)})
+        return response
+
+    def counted(request: Request, start: float, response, route: str | None = None):
+        """Count a REST answer under its route template (`/v1/sessions/{session_id}`), never the raw
+        path: ids, file paths and query strings stay out of the metrics. Requests refused before
+        routing are `refused`; paths no route serves are `unmatched`."""
+        matched = request.scope.get("route")
+        route = route or getattr(matched, "path", None) or "unmatched"
+        metrics.http_request(route, request.method, response.status_code, time.monotonic() - start)
         return response
 
     # ------------------------------------------------------------ device auth
@@ -328,6 +405,25 @@ def create_app(cfg: Config, *, locator: BackendLocator | None = None, tailnet: T
     @app.get("/healthz")
     async def healthz():
         return {"ok": True}
+
+    async def metrics_auth(request: Request) -> None:
+        """A paired device's token, or the local metrics token (read-only, this endpoint only)."""
+        token = _bearer(request.headers.get("authorization", ""))
+        if metrics_token and token and hmac.compare_digest(token.encode(), metrics_token.encode()):
+            if not limiter.allow("req:metrics-token", cfg.requests_per_minute):
+                raise ApiError(429, "rate_limited", "Too many requests")
+            return
+        await device_auth(request)
+
+    @app.get("/metrics")
+    async def get_metrics(format: str = "text", _: None = Depends(metrics_auth)):
+        """Prometheus text format 0.0.4; `?format=json` is the same data for the CLI."""
+        if not cfg.metrics:
+            raise ApiError(404, "metrics_off", "Metrics are turned off in the bridge's config.toml")
+        metrics.paired_devices.set(sum(d.active for d in await asyncio.to_thread(devices.list)))
+        if format == "json":
+            return metrics.registry.snapshot()
+        return Response(metrics.registry.render(), media_type=METRICS_CONTENT_TYPE)
 
     async def _tailnet_ips() -> list[str]:
         try:
@@ -377,6 +473,86 @@ def create_app(cfg: Config, *, locator: BackendLocator | None = None, tailnet: T
             components["tailscale"] = {"status": "unreachable"}
         return {"components": components, "checked_at": time.time()}
 
+    # ------------------------------------------------------------ local control API (desktop app)
+    # Loopback alone is not trusted (`tailscale serve`, other accounts and local programs reach
+    # 127.0.0.1): the caller must also present the secret from the user-only local-secret file.
+    # No device token, so no device rate limit; the guard middleware audits these like any request.
+
+    async def local_auth(request: Request) -> None:
+        peer = request.client.host if request.client else ""
+        presented = request.headers.get(LOCAL_HEADER, "")
+        if not is_loopback(peer) or not await asyncio.to_thread(
+                local_secret.matches, cfg.local_secret_file, presented):
+            raise ApiError(403, "forbidden_local", "Local control needs a local client with the local secret")
+
+    local = Depends(local_auth)
+    local_secret.ensure_secret(cfg.local_secret_file)  # first start creates it
+
+    @app.get("/v1/local/status")
+    async def local_status(_: None = local):
+        from . import firewall
+
+        fw = await asyncio.to_thread(firewall.state, cfg.port)
+        net = await asyncio.to_thread(current_network)
+        lan = await asyncio.to_thread(serving_lan_ips, cfg.lan, trust)
+        return {"running": True, "version": __version__, "protocol": PROTOCOL, "port": cfg.port,
+                "listen": [h for h in cfg.listen if h != "tailscale"] + await _tailnet_ips() + lan,
+                "network": ({"id": net.id, "name": net.name, "trusted": net.id in trust.list()}
+                            if net else None),
+                "firewall_ok": not fw.needs_opening}
+
+    @app.get("/v1/local/devices")
+    async def local_devices(_: None = local):
+        return await asyncio.to_thread(devices_doc, devices)
+
+    @app.post("/v1/local/pair")
+    async def local_pair(body: LocalPair, _: None = local):
+        from . import cli  # the one place that knows which addresses go in a pairing code
+
+        try:
+            urls = await asyncio.to_thread(cli._bridge_urls, cfg)
+        except SystemExit as exc:
+            raise ApiError(409, "no_address", str(exc))
+        try:
+            device, token = await asyncio.to_thread(lambda: devices.pair(body.name, replace=body.replace))
+        except ValueError as exc:
+            raise ApiError(409, "pair_refused", str(exc))
+        payload = await asyncio.to_thread(pairing_payload, device, token, urls, cfg.tls_dir)
+        code = pairing_uri(payload)
+        return {"device": {"id": device.id, "name": device.name}, "code": code, "url": urls[0], "token": token,
+                "qr_png_base64": base64.b64encode(await asyncio.to_thread(qr_png, code)).decode()}
+
+    @app.post("/v1/local/revoke")
+    async def local_revoke(body: LocalName, _: None = local):
+        try:
+            device = await asyncio.to_thread(devices.revoke, body.name)
+        except ValueError as exc:
+            raise ApiError(404, "no_such_device", str(exc))
+        return {"revoked": {"id": device.id, "name": device.name}}
+
+    @app.get("/v1/local/trust")
+    async def local_trust(_: None = local):
+        return trust_doc(trust, await asyncio.to_thread(current_network))
+
+    @app.post("/v1/local/trust")
+    async def local_trust_now(_: None = local):
+        net = await asyncio.to_thread(current_network)
+        if net is None:
+            raise ApiError(409, "no_network", "Not on a private network (or the router has not been seen yet)")
+        trust.trust(net)
+        return trust_doc(trust, net)
+
+    @app.post("/v1/local/untrust")
+    async def local_untrust(body: LocalNetworkId, _: None = local):
+        removed = trust.untrust(body.id)
+        return {**trust_doc(trust, await asyncio.to_thread(current_network)), "removed": removed}
+
+    @app.get("/v1/local/doctor")
+    async def local_doctor(_: None = local):
+        from . import doctor
+
+        return {"checks": await asyncio.to_thread(doctor.collect, cfg)}
+
     # ------------------------------------------------------------ Hermes profiles
     # One `hermes serve` serves every profile. A REST call names the one it means with
     # `?profile=`; leaving it out (or `default`) is the default profile, as before.
@@ -414,6 +590,20 @@ def create_app(cfg: Config, *, locator: BackendLocator | None = None, tailnet: T
         data = await hermes_http("GET", "/api/sessions", params=params)
         return {"sessions": data.get("sessions", []), "total": data.get("total"),
                 "limit": data.get("limit"), "offset": data.get("offset")}
+
+    @app.get("/v1/sessions/search")
+    async def search_sessions(q: str = "", limit: int = 20, profile: str | None = Depends(profile_param),
+                              _: Device = Depends(device_auth)):
+        """Chats whose messages (or id) contain `q`: the desktop sidebar's own search
+        (Hermes' FTS5 index, one row per conversation across compressions)."""
+        query = q.strip()
+        if not 1 <= len(query) <= SEARCH_QUERY_MAX:
+            raise ApiError(400, "invalid_query", f"q must be 1..{SEARCH_QUERY_MAX} characters")
+        limit = max(1, min(limit, SEARCH_LIMIT_MAX))
+        # Over-fetch a little: archived chats are dropped here, Hermes cannot leave them out.
+        params = {"q": query, "limit": min(limit + 10, 100), "exclude_sources": "cron", **scoped(profile)}
+        data = await hermes_http("GET", "/api/sessions/search", params=params)
+        return {"sessions": _visible_hits(data.get("results", []), limit)}
 
     @app.patch("/v1/sessions/{session_id}")
     async def patch_session(session_id: str, body: PatchSession, profile: str | None = Depends(profile_param),
@@ -682,11 +872,12 @@ def create_app(cfg: Config, *, locator: BackendLocator | None = None, tailnet: T
 
     # ------------------------------------------------------------ live sockets
 
-    async def ws_device(ws: WebSocket) -> tuple[str | None, Device | None]:
+    async def ws_device(ws: WebSocket, endpoint: str) -> tuple[str | None, Device | None]:
         """Same gate as HTTP: network, then the device token from the upgrade request's header."""
         peer = ws.client.host if ws.client else ""
         node, rejected = await peer_verdict(peer, ws.url.scheme == "wss")
         if rejected:
+            metrics.ws_rejected.inc(endpoint=endpoint, reason="network")
             await ws.close(code=4403, reason=rejected[2])
             return None, None
         # The token rides in the Authorization header (OkHttp sets it on the upgrade request),
@@ -695,33 +886,40 @@ def create_app(cfg: Config, *, locator: BackendLocator | None = None, tailnet: T
         device = devices.authenticate(token) if token else None
         if device is None:
             audit_event({"event": "ws_unauthorized", "peer": node, "path": ws.url.path})
+            metrics.ws_rejected.inc(endpoint=endpoint, reason="unauthorized")
             await ws.close(code=4401, reason="Missing, invalid or revoked device token")
             return node, None
         return node, device
 
     @app.websocket("/v1/terminal")
     async def terminal(ws: WebSocket, cols: int = 80, rows: int = 24):
-        node, device = await ws_device(ws)
+        node, device = await ws_device(ws, "terminal")
         if device is None:
             return
         if not cfg.terminal:
+            metrics.ws_rejected.inc(endpoint="terminal", reason="disabled")
             await ws.close(code=4404, reason="The terminal is turned off in the bridge's config.toml")
             return
         await ws.accept()
         shell = shell_factory(cols=max(10, min(cols, 500)), rows=max(4, min(rows, 300)))
-        await serve_terminal(ws, shell, audit=lambda e: audit_event({**e, "peer": node, "device": device.name}))
+        metrics.socket_opened("terminal")
+        try:
+            await serve_terminal(ws, shell, audit=lambda e: audit_event({**e, "peer": node, "device": device.name}))
+        finally:
+            metrics.socket_closed("terminal")
 
     @app.websocket("/v1/ws")
     async def live(ws: WebSocket):
-        node, device = await ws_device(ws)
+        node, device = await ws_device(ws, "live")
         if device is None:
             return
         frames_key = f"frames:{device.id}:{id(ws)}"
         relay = Relay(locator, max_frame_bytes=cfg.max_frame_bytes,
                       allow_frame=lambda: limiter.allow(frames_key, cfg.frames_per_minute),
                       audit=lambda e: audit_event({**e, "peer": node}),
-                      allowed_profiles=cfg.allowed_profiles, parked=parked)
-        await relay.run(ws, device.name)
+                      allowed_profiles=cfg.allowed_profiles, parked=parked, metrics=metrics)
+        await relay.run(ws, device.name, device.id)
 
     app.state.locator = locator
+    app.state.metrics = metrics
     return app

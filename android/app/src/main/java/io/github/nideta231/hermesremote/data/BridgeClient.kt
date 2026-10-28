@@ -24,7 +24,7 @@ class BridgeClient(
     // real rule (tailnet, or LAN over pinned HTTPS).
     private val hostGuard: (host: String, https: Boolean) -> Boolean =
         { host, https -> Transport.allowsToken(host, https, pairing.pin != null) },
-) : SessionsSource, CronSource {
+) : SessionsSource, CronSource, SessionSearchSource {
     private val base = pairing.url.trimEnd('/')
     private val jsonType = "application/json".toMediaType()
 
@@ -148,6 +148,10 @@ class BridgeClient(
         val total = if (o.isNull("total")) null else o.optInt("total")
         return list to (if (total != null) offset + list.size < total else list.size >= limit)
     }
+
+    /** Chats whose messages contain [query] (Hermes' own search). Bridges before this route answer 404. */
+    override suspend fun searchSessions(query: String, limit: Int, profile: String?): List<SearchHit> =
+        parseSearchHits(call("GET", "/v1/sessions/search", mapOf("q" to query, "limit" to limit) + scoped(profile)))
 
     /** A project's IDEA.md (its description file in the project folder). Bridges before 1.17 answer 404. */
     suspend fun projectIdea(id: String, profile: String? = null): String =

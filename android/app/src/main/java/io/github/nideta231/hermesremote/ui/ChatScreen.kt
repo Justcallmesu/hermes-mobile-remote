@@ -1,5 +1,6 @@
 package io.github.nideta231.hermesremote.ui
 
+import io.github.nideta231.hermesremote.data.SubagentTail
 import io.github.nideta231.hermesremote.data.UpdateState
 import androidx.compose.ui.platform.LocalConfiguration
 import android.content.res.Configuration
@@ -191,6 +192,10 @@ class ChatActions(
     val edit: (ChatItem.User, String) -> Unit = { _, _ -> },
     /** Stop one child agent of the open chat. */
     val stopSubagent: (String) -> Unit = {},
+    /** Poll a running child's transcript tail into the callback until cancelled. */
+    val followSubagent: suspend (String, (SubagentTail) -> Unit) -> Unit = { _, _ -> },
+    /** Send a running child an instruction (id, text, done: queued or not). */
+    val steerSubagent: (String, String, (Boolean) -> Unit) -> Unit = { _, _, _ -> },
     /** Kill one background process of the open chat. */
     val stopProcess: (String) -> Unit = {},
 )
@@ -276,7 +281,8 @@ fun ChatScreen(
                 when (body) {
                     0 -> LoadingChat()
                     1 -> EmptyChat(onPick = { actions.draft(it) })
-                    else -> MessageList(state, actions.stopSubagent, actions.stopProcess)
+                    else -> MessageList(state, SubagentActions(actions.stopSubagent, actions.followSubagent, actions.steerSubagent),
+                        actions.stopProcess)
                 }
             }
         }
@@ -492,7 +498,7 @@ private fun EmptyChat(onPick: (String) -> Unit) {
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun MessageList(state: ChatState, stopSubagent: (String) -> Unit, stopProcess: (String) -> Unit) {
+private fun MessageList(state: ChatState, subagentActions: SubagentActions, stopProcess: (String) -> Unit) {
     val listState = rememberLazyListState()
     val scope = rememberCoroutineScope()
     var follow by remember { mutableStateOf(true) }
@@ -536,7 +542,7 @@ private fun MessageList(state: ChatState, stopSubagent: (String) -> Unit, stopPr
             }
             if (state.subagents.isNotEmpty()) item(key = "subagents") {
                 Box(Modifier.animateItem(fadeInSpec = null, fadeOutSpec = null).entrance("subagents", seen)) {
-                    SubagentPanel(state.subagents, stopSubagent)
+                    SubagentPanel(state.subagents, subagentActions)
                 }
             }
             if (state.processes.isNotEmpty()) item(key = "processes") {

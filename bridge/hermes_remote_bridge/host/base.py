@@ -44,12 +44,17 @@ class Host:
         return self.hermes_root() / "venv" / self.venv_bin / f"python{self.exe_suffix}"
 
     def hermes_bin(self) -> Path:
-        """The Hermes CLI: the venv's entry point, else whatever ``hermes`` is on PATH."""
+        """The Hermes CLI: the venv's entry point, else ``hermes`` on PATH, else the launcher the
+        current Hermes installer puts in ``<hermes home>/bin`` (its venv no longer lives under
+        ``hermes-agent/venv``, so this launcher is how Hermes Desktop itself starts ``serve``)."""
         own = self.hermes_root() / "venv" / self.venv_bin / f"hermes{self.exe_suffix}"
         if own.exists():
             return own
         found = shutil.which("hermes")
-        return Path(found) if found else own
+        if found:
+            return Path(found)
+        launcher = self.hermes_home() / "bin" / f"hermes{self.exe_suffix}"
+        return launcher if launcher.exists() else own
 
     # ------------------------------------------------------------------ networking
 
@@ -143,6 +148,22 @@ class Host:
 
     def open_file(self, path: Path) -> bool:
         """Open ``path`` with the OS's default viewer; False when that isn't possible."""
+        return False
+
+    # ------------------------------------------------------------------ firewall (Windows only)
+
+    def firewall_add(self, port: int) -> bool:
+        return False
+
+    def firewall_remove(self) -> bool:
+        return False
+
+    def process_snapshot(self) -> list[dict] | None:
+        """Every process's {pid, name, cpu_s, rss, created} in one call, or None to use psutil."""
+        return None
+
+    def elevate_cli(self, args: list[str]) -> bool:
+        """Relaunch the bridge CLI with ``args`` after a UAC prompt; False where that doesn't exist."""
         return False
 
     # ------------------------------------------------------------------ helpers

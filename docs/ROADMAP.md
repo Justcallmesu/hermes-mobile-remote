@@ -18,7 +18,7 @@ Roughly, in the order the pieces landed:
 - 1.0: the phone shares the desktop app's Hermes backend over one WebSocket. Live streaming in both
   directions, approvals and clarify answerable on either screen, every slash command (including
   `/retry`, `/undo`, `/btw`), background notifications for finished turns and questions.
-- Windows support (experimental): a host layer, `install.ps1`, a Scheduled Task and a Windows CI
+- Windows support (experimental): a host layer, the Hermes Remote desktop app and a Windows CI
   job. See [PLATFORMS.md](PLATFORMS.md).
 - A demo stack with a synthetic backend, so the app can be tried and recorded without a real
   Hermes.
@@ -30,6 +30,8 @@ Roughly, in the order the pieces landed:
   and the theme (mode and accent) in Settings.
 - Tray apps on both platforms: the Windows tray runs the bridge, the Linux tray controls the
   systemd service. On Linux, `install.sh` adds it to the app menu and starts it at login.
+- Bridge metrics: a Prometheus endpoint (`GET /metrics`, token required) and
+  `hermes-remote-bridge metrics` for request counts, Hermes latency and approval wait time.
 
 ## Next
 
@@ -58,9 +60,6 @@ dock are still phone-sized.
 
 **A desktop build.** The UI is Compose and not obviously phone-only. A resizable desktop client
 would reuse the same bridge.
-
-**Bridge metrics.** A small local status page or Prometheus endpoint for run counts, latency and
-approval wait time, for people running the bridge on a shared machine.
 
 ## Deliberately not planned
 

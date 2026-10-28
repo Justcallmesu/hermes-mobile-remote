@@ -18,12 +18,13 @@ import json
 import logging
 import re
 from collections.abc import Iterable
-from typing import Any, Awaitable, Callable
+from typing import Any, Awaitable, Callable, NamedTuple
 
 import websockets
 from starlette.websockets import WebSocket, WebSocketDisconnect, WebSocketState
 
 from .backend import BackendLocator, BackendUnavailable
+from .metrics import BridgeMetrics
 from .profiles import ProfileRefused, resolve_profile
 
 log = logging.getLogger(__name__)
@@ -42,9 +43,10 @@ ALLOWED_METHODS = frozenset({
     "projects.add_folder", "projects.remove_folder", "projects.set_primary",
     # turns
     "prompt.submit", "prompt.btw", "prompt.background", "session.interrupt", "session.steer", "session.redirect",
-    # subagents the open chat delegated to: the roster (to catch up mid-run) and stopping one. Hermes
-    # only answers for sessions this socket is attached to.
-    "subagent.list", "subagent.interrupt",
+    # subagents the open chat delegated to: the roster (to catch up mid-run), stopping one, steering
+    # one and reading its live transcript tail. Hermes only answers for sessions this socket is
+    # attached to.
+    "subagent.list", "subagent.interrupt", "subagent.steer", "subagent.tail",
     # background processes the open chat started (terminal background=true): list with output tail,
     # and stop one. Scoped by Hermes to the caller's session; the registry-wide kill stays on the PC.
     "process.list", "process.kill",
@@ -64,6 +66,9 @@ ALLOWED_METHODS = frozenset({
 
 # config.set keys the phone may change: the chat's model, reasoning and fast mode.
 ALLOWED_CONFIG_KEYS = frozenset({"model", "reasoning", "fast", "yolo"})
+# Steering text is an instruction folded into a child's next tool round, not a document: a cap well
+# under the frame limit keeps a pasted log from bloating the child's context.
+MAX_STEER_CHARS = 4000
 _SERVER_REQUEST_ID = re.compile(r"^srq-[0-9a-f]{6,32}$")
 
 CLOSE_UNAVAILABLE = 1013  # try again later: Hermes is starting or gone
@@ -75,36 +80,61 @@ def _error(rid: Any, code: int, message: str) -> str:
     return json.dumps({"jsonrpc": "2.0", "id": rid, "error": {"code": code, "message": message}})
 
 
-def check_frame(raw: str, max_bytes: int, allowed_profiles: Iterable[str] = ()) -> tuple[str | None, str | None]:
-    """Validate one phone→Hermes frame. Returns (frame to forward, error reply to send back)."""
+class Verdict(NamedTuple):
+    """What to do with one phone→Hermes frame: forward it, answer it, or drop it (and why)."""
+    forward: str | None
+    reply: str | None
+    refused: str | None = None  # a fixed reason, for the metrics; never frame content
+    frame: dict | None = None
+
+
+def inspect_frame(raw: str, max_bytes: int, allowed_profiles: Iterable[str] = ()) -> Verdict:
+    """Validate one phone→Hermes frame."""
     if len(raw.encode()) > max_bytes:
-        return None, _error(None, -32600, "Frame too large")
+        return Verdict(None, _error(None, -32600, "Frame too large"), "too_large")
     try:
         frame = json.loads(raw)
     except ValueError:
-        return None, _error(None, -32700, "Not JSON")
+        return Verdict(None, _error(None, -32700, "Not JSON"), "not_json")
     if not isinstance(frame, dict) or frame.get("jsonrpc") != "2.0":
-        return None, _error(None, -32600, "Not a JSON-RPC 2.0 frame")
+        return Verdict(None, _error(None, -32600, "Not a JSON-RPC 2.0 frame"), "not_jsonrpc")
     rid = frame.get("id")
     method = frame.get("method")
     if method is None:
         # A response: only to a question Hermes asked (approval, clarify).
         if isinstance(rid, str) and _SERVER_REQUEST_ID.match(rid) and ("result" in frame or "error" in frame):
-            return raw, None
-        return None, None  # nothing to answer a stray response with
+            return Verdict(raw, None, frame=frame)
+        return Verdict(None, None, "stray_response")  # nothing to answer a stray response with
     if not isinstance(method, str) or method not in ALLOWED_METHODS:
-        return None, _error(rid, -32601, f"Method not available from the phone: {method}")
+        return Verdict(None, _error(rid, -32601, f"Method not available from the phone: {method}"), "method")
     params = frame.get("params")
     if isinstance(params, dict) and params.get("profile") is not None:
         try:
             resolve_profile(params["profile"] if isinstance(params["profile"], str) else "?", allowed_profiles)
         except ProfileRefused as exc:
-            return None, _error(rid, -32602, str(exc))
+            return Verdict(None, _error(rid, -32602, str(exc)), "profile")
     if method == "config.set":
         key = (params or {}).get("key") if isinstance(params, dict) else None
         if key not in ALLOWED_CONFIG_KEYS:
-            return None, _error(rid, -32602, f"config key not available from the phone: {key}")
-    return raw, None
+            return Verdict(None, _error(rid, -32602, f"config key not available from the phone: {key}"), "config_key")
+    if method == "subagent.steer" and (problem := _steer_text_problem(params)):
+        return Verdict(None, _error(rid, -32602, problem), "steer_text")
+    return Verdict(raw, None, frame=frame)
+
+
+def check_frame(raw: str, max_bytes: int, allowed_profiles: Iterable[str] = ()) -> tuple[str | None, str | None]:
+    """(frame to forward, error reply to send back) for one phone→Hermes frame."""
+    verdict = inspect_frame(raw, max_bytes, allowed_profiles)
+    return verdict.forward, verdict.reply
+
+
+def _steer_text_problem(params: Any) -> str | None:
+    text = params.get("text") if isinstance(params, dict) else None
+    if not isinstance(text, str) or not text.strip():
+        return "subagent.steer needs text"
+    if len(text) > MAX_STEER_CHARS:
+        return f"steer text longer than {MAX_STEER_CHARS} characters"
+    return None
 
 
 class _Live:
@@ -187,18 +217,21 @@ class Relay:
 
     def __init__(self, locator: BackendLocator, *, max_frame_bytes: int,
                  allow_frame: Callable[[], bool], audit: Callable[[dict], None],
-                 allowed_profiles: Iterable[str] = (), parked: ParkedUpstreams | None = None):
+                 allowed_profiles: Iterable[str] = (), parked: ParkedUpstreams | None = None,
+                 metrics: BridgeMetrics | None = None):
         self.locator = locator
+        self.metrics = metrics or BridgeMetrics("", 0)
         self.max_frame_bytes = max_frame_bytes
         self.allow_frame = allow_frame
         self.audit = audit
         self.allowed_profiles = frozenset(allowed_profiles)
         self.parked = parked or ParkedUpstreams(0)
 
-    async def run(self, phone: WebSocket, device_name: str) -> None:
+    async def run(self, phone: WebSocket, device_name: str, device_id: str | None = None) -> None:
         try:
             backend = await self.locator.get()
         except BackendUnavailable as exc:
+            self.metrics.ws_rejected.inc(endpoint="live", reason="hermes_unavailable")
             await phone.close(code=CLOSE_UNAVAILABLE, reason=str(exc)[:120])
             return
         parked = self.parked
@@ -219,6 +252,7 @@ class Relay:
             except (OSError, websockets.WebSocketException, asyncio.TimeoutError) as exc:
                 log.warning("could not reach Hermes on port %d: %s", backend.port, exc)
                 self.locator.forget(backend)
+                self.metrics.ws_rejected.inc(endpoint="live", reason="hermes_unavailable")
                 await phone.close(code=CLOSE_UNAVAILABLE, reason="Hermes is not answering")
                 return
         await phone.accept()
@@ -226,6 +260,8 @@ class Relay:
         if claimed is not None:
             self.audit({"event": "ws_reattach", "device": device_name})
         self.audit({"event": "ws_open", "device": device_name, "backend_port": backend.port})
+        self.metrics.socket_opened("live", device_id)
+        stats = self.metrics.connection()
         methods: dict[str, int] = {}
 
         async def phone_to_hermes() -> None:
@@ -239,16 +275,20 @@ class Relay:
                 if raw is None:
                     continue
                 if not self.allow_frame():
+                    stats.refused("rate_limited")
                     await phone.send_text(_error(None, -32000, "Too many requests"))
                     continue
-                forward, reply = check_frame(raw, self.max_frame_bytes, self.allowed_profiles)
-                if reply:
-                    await phone.send_text(reply)
-                if forward:
-                    method = _method_of(forward)
-                    if method:
+                verdict = inspect_frame(raw, self.max_frame_bytes, self.allowed_profiles)
+                if verdict.refused:
+                    stats.refused(verdict.refused)
+                if verdict.reply:
+                    await phone.send_text(verdict.reply)
+                if verdict.forward:
+                    method = verdict.frame.get("method")
+                    if isinstance(method, str):
                         methods[method] = methods.get(method, 0) + 1
-                    await upstream.send(forward)
+                    stats.from_phone(verdict.frame)
+                    await upstream.send(verdict.forward)
 
         async def hermes_to_phone() -> None:
             nonlocal ready
@@ -258,6 +298,7 @@ class Relay:
                 text = raw if isinstance(raw, str) else raw.decode(errors="replace")
                 if ready is None and "gateway.ready" in text and _is_ready(text):
                     ready = text
+                stats.from_hermes(text)
                 await phone.send_text(text)
 
         tasks = [asyncio.create_task(phone_to_hermes()), asyncio.create_task(hermes_to_phone()),
@@ -288,6 +329,8 @@ class Relay:
             self.audit({"event": "ws_close", "device": device_name, "reason": reason, "methods": methods})
             keep = (parked.enabled and ready is not None
                     and not reason.startswith("hermes") and reason != "bridge shutting down")
+            stats.close()
+            self.metrics.socket_closed("live", device_id)
             # The reader task must have ended before the parked drain reads the same socket.
             with contextlib.suppress(BaseException):
                 await asyncio.gather(*tasks, return_exceptions=True)
@@ -310,14 +353,6 @@ def _is_ready(raw: str) -> bool:
         return json.loads(raw).get("params", {}).get("type") == "gateway.ready"
     except (ValueError, AttributeError):
         return False
-
-
-def _method_of(raw: str) -> str | None:
-    try:
-        m = json.loads(raw).get("method")
-    except ValueError:
-        return None
-    return m if isinstance(m, str) else None
 
 
 AuditFn = Callable[[dict], None]

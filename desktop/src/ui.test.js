@@ -1,0 +1,462 @@
+import { describe, it, expect, vi, beforeEach } from "vitest";
+import { mount, flushPromises } from "@vue/test-utils";
+
+let answers;
+const invoke = vi.fn(async (cmd, args) => {
+  const a = answers[cmd];
+  if (a instanceof Error) throw a;
+  return typeof a === "function" ? a(args) : (a ?? null);
+});
+vi.mock("@tauri-apps/api/core", () => ({ invoke: (...x) => invoke(...x) }));
+
+let progressHandler;
+let listening = 0;
+vi.mock("@tauri-apps/api/event", () => ({
+  listen: async (_name, h) => {
+    progressHandler = h;
+    listening += 1;
+    return () => {
+      listening -= 1;
+    };
+  },
+}));
+
+import App from "./App.vue";
+
+const running = {
+  via: "http",
+  data: {
+    running: true,
+    port: 8650,
+    listen: ["127.0.0.1", "192.168.1.5", "100.64.0.2"],
+    network: { id: "n1", name: "Home", trusted: true },
+    firewall_ok: true,
+  },
+};
+
+async function open(tab) {
+  const w = mount(App);
+  await flushPromises();
+  if (tab) {
+    await w.find(`[data-nav="${tab}"]`).trigger("click");
+    await flushPromises();
+  }
+  return w;
+}
+
+beforeEach(() => {
+  invoke.mockClear();
+  answers = {
+    app_version: "0.1.0",
+    bridge_status: running,
+    bridge_devices: {
+      via: "http",
+      data: { devices: [{ id: "d1", name: "phone", active: true }] },
+    },
+    bridge_pair: {
+      via: "http",
+      data: { code: "hermesremote://pair?x=1", qr_png_base64: "QUJD" },
+    },
+    bridge_revoke: { via: "http", data: {} },
+    bridge_doctor: {
+      via: "http",
+      data: {
+        checks: [{ id: "hermes", level: "ok", message: "Hermes found" }],
+      },
+    },
+    get_settings: { start_at_logon: false, terminal_shell: null },
+    get_installed_list: null,
+  };
+});
+
+describe("Home", () => {
+  it("switch calls stop when running and start when stopped, then reflects status", async () => {
+    const w = await open();
+    const sw = w.find('[data-test="power"]');
+    expect(sw.element.checked).toBe(true);
+    answers.bridge_status = { via: "http", data: { running: false } };
+    await sw.trigger("click");
+    await flushPromises();
+    expect(invoke).toHaveBeenCalledWith("bridge_stop");
+    expect(w.find('[data-test="power"]').element.checked).toBe(false);
+    answers.bridge_status = running;
+    await w.find('[data-test="power"]').trigger("click");
+    await flushPromises();
+    expect(invoke).toHaveBeenCalledWith("bridge_start");
+    expect(w.find('[data-test="power"]').element.checked).toBe(true);
+  });
+
+  it("shows an unsupported control error inline", async () => {
+    answers.bridge_stop = new Error("not available yet on this platform");
+    const w = await open();
+    await w.find('[data-test="power"]').trigger("click");
+    await flushPromises();
+    expect(w.find('[data-test="error"]').text()).toContain(
+      "not available yet on this platform",
+    );
+  });
+
+  it("an untrusted network offers a Trust button that trusts it", async () => {
+    answers.bridge_status = {
+      via: "http",
+      data: {
+        running: true,
+        port: 8650,
+        listen: ["127.0.0.1"],
+        network: { id: "n2", name: "Office", trusted: false },
+      },
+    };
+    answers.bridge_trust = { via: "http", data: {} };
+    const w = await open("home");
+    expect(w.find('[data-test="trust"]').text()).toBe("Trust Office");
+    await w.find('[data-test="trust"]').trigger("click");
+    await flushPromises();
+    expect(invoke.mock.calls.map((c) => c[0])).toContain("bridge_trust");
+  });
+
+  it("status line shows trusted network and each reachability path", async () => {
+    const w = await open();
+    const t = w.find('[data-test="status-line"]').text();
+    expect(t).toContain("Home");
+    expect(t).toContain("trusted");
+    expect(t).toContain("Firewall: open");
+    expect(t).toContain("LAN: 192.168.1.5");
+    expect(t).toContain("Tailnet: 100.64.0.2");
+    answers.bridge_status = {
+      via: "http",
+      data: {
+        running: true,
+        listen: ["127.0.0.1"],
+        network: { name: "Cafe", trusted: false },
+        firewall_ok: false,
+      },
+    };
+    const w2 = await open();
+    const t2 = w2.find('[data-test="status-line"]').text();
+    expect(t2).toContain("untrusted");
+    expect(t2).toContain("Firewall: blocked");
+    expect(t2).toContain("LAN: not reachable");
+    expect(t2).toContain("Tailnet: not reachable");
+  });
+
+  it("via cli shows the bridge-not-running notice", async () => {
+    answers.bridge_status = { via: "cli", data: { running: false } };
+    const w = await open();
+    expect(w.text()).toContain("bridge not running, showing saved data");
+    expect(w.find('[data-test="power"]').element.checked).toBe(false);
+  });
+});
+
+describe("Devices", () => {
+  it("lists devices; revoke asks to confirm then calls revoke", async () => {
+    const w = await open("devices");
+    expect(w.text()).toContain("phone");
+    await w.find('[data-test="revoke"]').trigger("click");
+    await flushPromises();
+    expect(invoke).not.toHaveBeenCalledWith("bridge_revoke", expect.anything());
+    await w.find('[data-test="confirm-revoke"]').trigger("click");
+    await flushPromises();
+    expect(invoke).toHaveBeenCalledWith("bridge_revoke", { name: "phone" });
+  });
+
+  it("re-pair warns the old code stops working", async () => {
+    const w = await open("devices");
+    await w.find('[data-test="repair"]').trigger("click");
+    expect(w.text()).toContain("old code stops working");
+    await w.find('[data-test="confirm-repair"]').trigger("click");
+    await flushPromises();
+    expect(invoke).toHaveBeenCalledWith("bridge_pair", {
+      name: "phone",
+      replace: true,
+    });
+    expect(w.find('[data-test="qr"]').exists()).toBe(true);
+  });
+});
+
+describe("Pair", () => {
+  it("shows the QR image and copies the code", async () => {
+    const writeText = vi.fn(async () => {});
+    Object.defineProperty(navigator, "clipboard", {
+      value: { writeText },
+      configurable: true,
+    });
+    const w = await open("pair");
+    await w.find('[data-test="name"]').setValue("tablet");
+    await w.find('[data-test="pair-go"]').trigger("click");
+    await flushPromises();
+    expect(invoke).toHaveBeenCalledWith("bridge_pair", {
+      name: "tablet",
+      replace: false,
+    });
+    expect(w.find('[data-test="qr"]').attributes("src")).toBe(
+      "data:image/png;base64,QUJD",
+    );
+    await w.find('[data-test="copy"]').trigger("click");
+    expect(writeText).toHaveBeenCalledWith("hermesremote://pair?x=1");
+  });
+});
+
+describe("Setup", () => {
+  it("lists the changes, waits for Continue, then shows each step and the error", async () => {
+    answers.setup_state = {
+      needed: true,
+      change_list: [
+        "Virtual environment: /v",
+        "Hermes Agent config: not changed",
+      ],
+    };
+    answers.setup_run = () => {
+      const send = (step, state, message) =>
+        progressHandler({ payload: { step, state, message } });
+      send("uv", "running", "Getting uv");
+      send("uv", "done", "Getting uv");
+      send("sync", "running", "Installing the bridge");
+      send("sync", "error", "uv sync failed: boom");
+      throw new Error("uv sync failed: boom");
+    };
+    const w = await open();
+    expect(w.findAll('[data-test="change"]').map((c) => c.text())).toEqual([
+      "Virtual environment: /v",
+      "Hermes Agent config: not changed",
+    ]);
+    expect(invoke).not.toHaveBeenCalledWith("setup_run", expect.anything());
+    await w.find('[data-test="continue"]').trigger("click");
+    await flushPromises();
+    expect(invoke).toHaveBeenCalledWith("setup_run", { update: false });
+    expect(w.findAll('[data-test="step"]').map((s) => s.text())).toEqual([
+      "done: Getting uv",
+      "error: uv sync failed: boom",
+    ]);
+    expect(w.find('[data-test="error"]').text()).toContain(
+      "uv sync failed: boom",
+    );
+  });
+
+  it("Try again twice leaves one progress listener", async () => {
+    listening = 0;
+    answers.setup_state = { needed: true, change_list: ["x"] };
+    answers.setup_run = () => {
+      progressHandler({
+        payload: { step: "uv", state: "error", message: "boom" },
+      });
+      throw new Error("boom");
+    };
+    const w = await open();
+    await w.find('[data-test="continue"]').trigger("click");
+    await flushPromises();
+    await w.find('[data-test="retry"]').trigger("click");
+    await flushPromises();
+    await w.find('[data-test="retry"]').trigger("click");
+    await flushPromises();
+    expect(listening).toBe(1);
+  });
+});
+
+describe("UpdateBanner", () => {
+  it("shows a link on a release check, a restart button on updater builds, and nothing without an update", async () => {
+    let w = await open();
+    expect(w.find('[data-test="update-banner"]').exists()).toBe(false);
+
+    answers.update_check = {
+      version: "0.2.0",
+      kind: "link",
+      url: "https://example.test/desktop-v0.2.0",
+    };
+    w = await open();
+    expect(w.find('[data-test="update-banner"]').text()).toContain(
+      "New version 0.2.0 available",
+    );
+    expect(w.find('[data-test="update-link"]').attributes("href")).toBe(
+      "https://example.test/desktop-v0.2.0",
+    );
+    await w.find('[data-test="update-link"]').trigger("click");
+    expect(invoke).toHaveBeenCalledWith("plugin:shell|open", {
+      path: "https://example.test/desktop-v0.2.0",
+    });
+    expect(w.find('[data-test="update-restart"]').exists()).toBe(false);
+
+    answers.update_check = { version: "0.3.0", kind: "restart", url: null };
+    answers.update_install = new Error("download failed");
+    w = await open();
+    expect(w.find('[data-test="update-link"]').exists()).toBe(false);
+    await w.find('[data-test="update-restart"]').trigger("click");
+    await flushPromises();
+    expect(w.find('[data-test="update-restart"]').text()).toBe(
+      "Restart to update",
+    );
+    expect(invoke).toHaveBeenCalledWith("update_install");
+    expect(w.find('[data-test="update-error"]').text()).toContain(
+      "download failed",
+    );
+  });
+
+  it("re-syncs the venv on start when an update left the marker", async () => {
+    answers.setup_state = { needed: false, change_list: [], resync: true };
+    await open();
+    expect(invoke).toHaveBeenCalledWith("setup_run", { update: true });
+  });
+});
+
+describe("Settings", () => {
+  it("accent picker sets the accent colour and remembers it", async () => {
+    localStorage.clear();
+    const w = await open("settings");
+    expect(w.find('[data-accent="gold"]').classes()).toContain("selected");
+    await w.find('[data-accent="teal"]').trigger("click");
+    expect(w.find('[data-accent="teal"]').classes()).toContain("selected");
+    expect(
+      document.documentElement.style.getPropertyValue("--accent-dark"),
+    ).toBe("#4fd1b5");
+    expect(
+      document.documentElement.style.getPropertyValue("--accent-light"),
+    ).toBe("#0f766e");
+    expect(localStorage.getItem("accent")).toBe("teal");
+  });
+
+  it("shows pending while doctor runs, then the coloured results", async () => {
+    let release;
+    answers.bridge_doctor = () =>
+      new Promise((r) => (release = () => r(running_doctor())));
+    const running_doctor = () => ({
+      via: "http",
+      data: {
+        checks: [
+          { id: "hermes", level: "ok", message: "Hermes found" },
+          { id: "firewall", level: "fail", message: "Port blocked" },
+        ],
+      },
+    });
+    const w = await open("settings");
+    await w.find('[data-test="doctor"]').trigger("click");
+    await flushPromises();
+    expect(w.find('[data-test="doctor-pending"]').exists()).toBe(true);
+    release();
+    await flushPromises();
+    expect(w.find('[data-test="doctor-pending"]').exists()).toBe(false);
+    const rows = w.findAll('[data-test="check"]');
+    expect(rows.map((r) => r.text())).toEqual(["Hermes found", "Port blocked"]);
+    expect(rows[1].classes()).toContain("level-fail");
+  });
+
+  it("shows the install list or that setup has not run", async () => {
+    let w = await open("settings");
+    expect(w.text()).toContain("Setup has not run yet");
+    answers.get_installed_list = "a venv\n";
+    w = await open("settings");
+    expect(w.text()).toContain("a venv");
+  });
+
+  it("settings actions call their commands and show errors inline", async () => {
+    answers.firewall_fix = new Error("not available yet on this platform");
+    const w = await open("settings");
+    await w.find('[data-test="open-logs"]').trigger("click");
+    await w.find('[data-test="logon"]').setValue(true);
+    await w.find('[data-test="shell"]').setValue("zsh");
+    await w.find('[data-test="shell"]').trigger("change");
+    await w.find('[data-test="fw-fix"]').trigger("click");
+    await flushPromises();
+    expect(invoke).toHaveBeenCalledWith("open_logs");
+    expect(invoke).toHaveBeenCalledWith("set_start_at_logon", { on: true });
+    expect(invoke).toHaveBeenCalledWith("set_terminal_shell", { value: "zsh" });
+    expect(w.find('[data-test="error"]').text()).toContain("not available yet");
+  });
+
+  it("keep running after logout shows only with start at login, and a refusal is explained", async () => {
+    answers.get_settings = { start_at_logon: false, terminal_shell: null };
+    answers.get_linger = false;
+    const w = await open("settings");
+    expect(w.find('[data-test="linger"]').exists()).toBe(false);
+    await w.find('[data-test="logon"]').setValue(true);
+    await flushPromises();
+    expect(w.find('[data-test="linger"]').exists()).toBe(true);
+    answers.set_linger = new Error(
+      "needs your password: run `loginctl enable-linger` in a terminal",
+    );
+    await w.find('[data-test="linger"]').setValue(true);
+    await flushPromises();
+    expect(invoke).toHaveBeenCalledWith("set_linger", { on: true });
+    expect(w.find('[data-test="error"]').text()).toContain(
+      "needs your password: run `loginctl enable-linger`",
+    );
+    await w.find('[data-test="logon"]').setValue(false);
+    await flushPromises();
+    expect(w.find('[data-test="linger"]').exists()).toBe(false);
+  });
+
+  it("on Windows the start at logon toggle calls its command and the crash note shows", async () => {
+    answers.get_settings = {
+      start_at_logon: false,
+      terminal_shell: null,
+      platform: "windows",
+    };
+    const w = await open("settings");
+    expect(w.find('[data-test="crash-note"]').text()).toContain(
+      "If the app crashes the bridge stops too",
+    );
+    await w.find('[data-test="logon"]').setValue(true);
+    await flushPromises();
+    expect(invoke).toHaveBeenCalledWith("set_start_at_logon", { on: true });
+    // Linger is Linux-only (D33/D34): never offered on Windows, even with start at logon on.
+    expect(w.find('[data-test="linger"]').exists()).toBe(false);
+    answers.get_settings = {
+      start_at_logon: false,
+      terminal_shell: null,
+      platform: "linux",
+    };
+    const l = await open("settings");
+    expect(l.find('[data-test="crash-note"]').exists()).toBe(false);
+  });
+
+  it("on Windows there is no run mode select", async () => {
+    answers.get_settings = {
+      start_at_logon: false,
+      terminal_shell: null,
+      platform: "windows",
+    };
+    const w = await open("settings");
+    expect(w.find('[data-test="run-mode"]').exists()).toBe(false);
+    expect(w.text()).not.toContain("Run mode");
+    answers.get_settings = {
+      start_at_logon: false,
+      terminal_shell: null,
+      platform: "linux",
+    };
+    const l = await open("settings");
+    expect(l.find('[data-test="run-mode"]').exists()).toBe(true);
+  });
+
+  it("run mode control shows the no-sandbox note and disables login and linger in app-only mode", async () => {
+    answers.get_settings = { start_at_logon: true, terminal_shell: null };
+    answers.get_run_mode = "always-on";
+    const w = await open("settings");
+    expect(w.find('[data-test="logon"]').element.disabled).toBe(false);
+    expect(w.text()).not.toContain("without systemd sandboxing");
+    await w.find('[data-test="run-mode"]').setValue("app-only");
+    await flushPromises();
+    expect(invoke).toHaveBeenCalledWith("set_run_mode", { mode: "app-only" });
+    expect(w.text()).toContain("without systemd sandboxing");
+    expect(w.find('[data-test="logon"]').element.disabled).toBe(true);
+    expect(w.find('[data-test="linger"]').element.disabled).toBe(true);
+    answers.set_run_mode = new Error(
+      "port conflict: another program is already using the bridge port",
+    );
+    await w.find('[data-test="run-mode"]').setValue("always-on");
+    await flushPromises();
+    expect(w.find('[data-test="error"]').text()).toContain("port conflict");
+    expect(w.find('[data-test="run-mode"]').element.value).toBe("app-only");
+  });
+});
+
+describe("tray navigation", () => {
+  it("switches to the tab the tray asks for and stops listening after unmount", async () => {
+    const w = await open();
+    expect(w.find('[data-test="pair-go"]').exists()).toBe(false);
+    window.dispatchEvent(new CustomEvent("navigate", { detail: "pair" }));
+    await flushPromises();
+    expect(w.find('[data-test="pair-go"]').exists()).toBe(true);
+    const spy = vi.spyOn(window, "removeEventListener");
+    w.unmount();
+    expect(spy).toHaveBeenCalledWith("navigate", expect.any(Function));
+    spy.mockRestore();
+  });
+});

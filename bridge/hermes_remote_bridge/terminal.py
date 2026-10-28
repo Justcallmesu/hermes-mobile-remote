@@ -16,16 +16,28 @@ import asyncio
 import contextlib
 import json
 import os
+import logging
+import shlex
 import shutil
 import signal
 import subprocess
 import time
 
+log = logging.getLogger(__name__)
 READ_CHUNK = 65536
 MAX_INPUT = 65536
 
 
-def default_shell() -> list[str]:
+def default_shell(cfg=None) -> list[str]:
+    """The `terminal_shell` config line if it resolves on PATH, else the platform default."""
+    override = getattr(cfg, "terminal_shell", "")
+    if override:
+        argv = shlex.split(override, posix=os.name != "nt")
+        if os.name == "nt":  # non-POSIX split keeps the quotes around a token
+            argv = [a[1:-1] if len(a) > 1 and a[0] == a[-1] and a[0] in "\"'" else a for a in argv]
+        if argv and shutil.which(argv[0]):
+            return argv
+        log.warning("config.toml: terminal_shell %r was not found on PATH; using the default shell", override)
     if os.name == "nt":
         ps = shutil.which("pwsh") or shutil.which("powershell")
         return [ps, "-NoLogo"] if ps else [os.environ.get("COMSPEC", "cmd.exe")]
@@ -36,8 +48,9 @@ def default_shell() -> list[str]:
 class Shell:
     """The process and its output stream, PTY or pipes."""
 
-    def __init__(self, argv: list[str] | None = None, cwd: str | None = None, cols: int = 80, rows: int = 24) -> None:
-        self.argv = argv or default_shell()
+    def __init__(self, argv: list[str] | None = None, cwd: str | None = None, cols: int = 80, rows: int = 24,
+                 cfg=None) -> None:
+        self.argv = argv or default_shell(cfg)
         self.cwd = cwd or os.path.expanduser("~")
         self.cols, self.rows = cols, rows
         self.proc: subprocess.Popen | None = None
@@ -121,7 +134,11 @@ class Shell:
             except OSError:
                 return b""  # EIO: the slave side closed
         assert self.proc and self.proc.stdout
-        return await loop.run_in_executor(None, self.proc.stdout.read1, READ_CHUNK)  # type: ignore[attr-defined]
+        # bufsize=0 makes stdout a raw FileIO, which has no read1(); its read(n) already returns
+        # whatever the pipe has (up to n), b"" at EOF. read1 raised here, so the Windows terminal
+        # closed itself (and killed the shell) on its first read.
+        stdout = self.proc.stdout
+        return await loop.run_in_executor(None, getattr(stdout, "read1", stdout.read), READ_CHUNK)
 
     def interrupt(self) -> None:
         if self.proc and os.name != "nt":

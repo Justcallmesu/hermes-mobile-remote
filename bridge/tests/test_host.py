@@ -1,4 +1,4 @@
-"""Per-OS behaviour. The Windows host is exercised with PowerShell's output replaced, so these run
+"""Per-OS behaviour. The Windows host is exercised with its Win32/COM answers replaced, so these run
 (and gate CI) on every platform; they prove the parsing and command construction, not that
 Windows itself behaves as documented."""
 import json
@@ -60,42 +60,73 @@ def test_mac_normalisation(raw, want):
     assert normalise_mac(raw) == want
 
 
-def test_ps_json_accepts_one_object_or_a_list(monkeypatch):
-    monkeypatch.setattr(windows, "ps", lambda s, timeout=15.0: json.dumps({"a": 1}))
-    assert windows.ps_json("x") == [{"a": 1}]
-    monkeypatch.setattr(windows, "ps", lambda s, timeout=15.0: json.dumps([{"a": 1}, {"a": 2}]))
-    assert len(windows.ps_json("x")) == 2
-    monkeypatch.setattr(windows, "ps", lambda s, timeout=15.0: "garbage")
-    assert windows.ps_json("x") == []
+class FakeWinapi:
+    """Recorded fixture data standing in for the Win32/COM calls."""
+    def default_routes(self):
+        return [{"Alias": "Ethernet", "Gateway": "192.168.1.1", "Metric": 35},
+                {"Alias": "Wi-Fi", "Gateway": "192.168.1.1", "Metric": 55},
+                {"Alias": "VPN", "Gateway": "0.0.0.0", "Metric": 1}]
+
+    def neighbor_mac(self, ip):
+        return "AA-BB-CC-DD-EE-FF" if ip == "192.168.1.1" else ""
+
+    def network_profile(self, alias):
+        return ("{3F2A9C1E-0000-4B1B-9C11-AABBCCDDEEFF}", "HomeWiFi") if alias == "Wi-Fi" else None
+
+    def firewall_profiles_enabled(self):
+        return True
+
+    def firewall_rules(self):
+        return [{"Name": "Hermes Mobile Remote", "Enabled": True, "Inbound": True, "LocalPorts": "8650"},
+                {"Name": "Other", "Enabled": True, "Inbound": True, "LocalPorts": "9999"}]
+
+    ports = []
+
+    def bridge_reachable(self, port):
+        self.ports.append(port)
+        return True
 
 
-def test_encoded_command_is_utf16le_base64():
-    import base64
-    assert base64.b64decode(windows.encode_script("Get-Date")).decode("utf-16-le") == "Get-Date"
+@pytest.fixture
+def fake_winapi(monkeypatch):
+    """Swap in the fake winapi and fail loudly if anything spawns a process."""
+    def spawned(*a, **k):
+        raise AssertionError("no subprocess/powershell allowed")
+    monkeypatch.setattr(windows.subprocess, "run", spawned)
+    monkeypatch.setattr(windows.subprocess, "Popen", spawned)
+    fake = FakeWinapi()
+    monkeypatch.setattr(windows, "winapi", fake)
+    return fake
 
 
-def test_windows_network_identity(monkeypatch):
+def test_windows_methods_return_the_old_shapes_from_fixture_data(fake_winapi):
     h = WindowsHost()
-    monkeypatch.setattr(windows, "ps_json", lambda s: [{"Name": "HomeWiFi", "InstanceID": "{GUID-1}"}])
-    assert h.network_profile("Wi-Fi") == ("{GUID-1}", "HomeWiFi")
-    monkeypatch.setattr(windows, "ps_json", lambda s: [])
-    assert h.network_profile("Wi-Fi") is None
-
-
-def test_gateway_lookup_refuses_anything_but_an_ipv4_literal(monkeypatch):
-    called = []
-    monkeypatch.setattr(windows, "ps", lambda s, timeout=15.0: called.append(s) or "AA-BB-CC-DD-EE-FF")
-    h = WindowsHost()
-    assert h.gateway_mac("1.1.1.1'; Remove-Item x #") is None and not called
+    assert h.default_route() == ("Ethernet", "192.168.1.1")
     assert h.gateway_mac("192.168.1.1") == "aa:bb:cc:dd:ee:ff"
-
-
-def test_service_state_maps_task_states(monkeypatch):
-    h = WindowsHost()
-    for ps_out, want in (("Running\r\n", "active"), ("Ready", "ready"), ("", "unknown")):
-        monkeypatch.setattr(windows, "ps", lambda s, timeout=15.0, out=ps_out: out)
-        assert h.service_state("hermes-remote-bridge") == want
+    assert h.gateway_mac("10.0.0.1") is None
+    assert h.gateway_mac("not an ip") is None
+    assert h.firewall_active() is True
+    assert h.firewall_rule_present(8650) is True and h.firewall_rule_present(9999) is False
+    assert h.service_state("hermes-remote-bridge") == "active"
     assert h.service_state("some.other.service") == "unknown"
+
+
+def test_windows_service_state_inactive_when_bridge_unreachable(fake_winapi, monkeypatch):
+    seen = []
+    monkeypatch.setattr(fake_winapi, "bridge_reachable", lambda port: seen.append(port) or False)
+    from hermes_remote_bridge import config
+    monkeypatch.setattr(config.Config, "load", classmethod(lambda cls, path=None: cls(port=9123)))
+    assert WindowsHost().service_state("hermes-remote-bridge") == "inactive"
+    assert seen == [9123]
+
+
+def test_connection_profile_id_keeps_the_instance_id_format(fake_winapi):
+    h = WindowsHost()
+    assert h.network_profile("Wi-Fi") == ("{3F2A9C1E-0000-4B1B-9C11-AABBCCDDEEFF}", "HomeWiFi")
+    assert h.network_profile("Nowhere") is None
+    from hermes_remote_bridge.host import winapi
+    assert winapi.instance_id("3f2a9c1e-0000-4b1b-9c11-aabbccddeeff") == "{3F2A9C1E-0000-4B1B-9C11-AABBCCDDEEFF}"
+    assert winapi.instance_id("{3f2a9c1e-0000-4b1b-9c11-aabbccddeeff}") == "{3F2A9C1E-0000-4B1B-9C11-AABBCCDDEEFF}"
 
 
 def test_same_ssid_different_router_is_a_different_network_on_windows(monkeypatch):
@@ -115,12 +146,69 @@ def test_same_ssid_different_router_is_a_different_network_on_windows(monkeypatc
 
 # ------------------------------------------------------------------ firewall
 
-def test_windows_firewall_rule_is_private_profile_and_private_ranges_only():
-    (cmd,) = firewall.open_commands("windows", 8650)
-    joined = " ".join(cmd)
-    assert cmd[0] == "New-NetFirewallRule" and "-Profile Private" in joined and "-LocalPort 8650" in joined
-    assert all(r in joined for r in firewall.PRIVATE_RANGES)
-    assert "Any" not in cmd and "0.0.0.0/0" not in joined
+def test_windows_elevation_argv_is_exact_and_uses_no_powershell(monkeypatch, tmp_path):
+    (tmp_path / "hermes-remote-bridge.exe").write_text("")
+    calls = []
+
+    class Fw:
+        def run_elevated(self, exe, params):
+            calls.append((exe, params))
+            return 0
+    monkeypatch.setattr(windows, "winapi", Fw())
+    monkeypatch.setattr(windows.sys, "executable", str(tmp_path / "python.exe"))
+    monkeypatch.setattr(windows.sys, "argv", ["fallback.exe"])
+    assert WindowsHost().elevate_cli(["firewall", "add", "--port", "8650", "--elevated"]) is True
+    assert calls == [(str(tmp_path / "hermes-remote-bridge.exe"), "firewall add --port 8650 --elevated")]
+    assert "powershell" not in " ".join(calls[0]).lower()
+    Fw.run_elevated = lambda self, exe, params: None  # UAC cancelled
+    assert WindowsHost().elevate_cli(["firewall", "add"]) is False
+
+
+def test_windows_firewall_open_port_elevates_the_cli_add(monkeypatch):
+    seen = []
+    monkeypatch.setattr(firewall, "host", lambda: type("H", (), {
+        "name": "windows", "elevate_cli": lambda s, a: seen.append(a) or True})())
+    assert firewall.open_commands("windows", 8650) == [
+        ["hermes-remote-bridge", "firewall", "add", "--port", "8650", "--elevated"]]
+    assert firewall.open_port("windows", 8650) is True
+    assert seen == [["firewall", "add", "--port", "8650", "--elevated"]]
+
+
+def test_elevated_firewall_cli_writes_the_rule_through_the_host(monkeypatch):
+    from hermes_remote_bridge import cli
+    seen = []
+    monkeypatch.setattr(cli, "host", lambda: type("H", (), {
+        "name": "windows", "firewall_add": lambda s, p: seen.append(("add", p)) or True,
+        "firewall_remove": lambda s: seen.append(("remove",)) or True})())
+    for action in ("add", "remove"):
+        with pytest.raises(SystemExit) as e:
+            cli.main(["firewall", action, "--port", "8650", "--elevated"])
+        assert e.value.code == 0
+    assert seen == [("add", 8650), ("remove",)]
+
+
+def test_firewall_add_port_flag_is_used_for_state_and_elevation(monkeypatch, tmp_path):
+    from hermes_remote_bridge import cli
+    seen, checked = [], []
+    fake = type("H", (), {
+        "name": "windows", "firewall_active": lambda s: True,
+        "firewall_rule_present": lambda s, p: checked.append(p) or False,
+        "elevate_cli": lambda s, a: seen.append(a) or True})()
+    monkeypatch.setattr(firewall, "host", lambda: fake)
+    monkeypatch.setattr(cli, "host", lambda: fake)
+    cli.main(["--config", str(tmp_path / "config.toml"), "firewall", "add", "--port", "9999", "--yes"])
+    assert checked == [9999]
+    assert seen == [["firewall", "add", "--port", "9999", "--elevated"]]
+
+
+def test_windows_host_firewall_add_and_remove_use_rule_name_and_private_ranges(fake_winapi):
+    rec = []
+    fake_winapi.firewall_add_rule = lambda *a: rec.append(("add",) + a) or True
+    fake_winapi.firewall_remove_rules = lambda n: rec.append(("remove", n)) or True
+    h = WindowsHost()
+    assert h.firewall_add(8650) and h.firewall_remove()
+    assert rec == [("add", "Hermes Mobile Remote", "Hermes Mobile Remote", 8650, ",".join(firewall.PRIVATE_RANGES)),
+                   ("remove", "Hermes Mobile Remote")]
 
 
 def test_windows_firewall_state(monkeypatch):
@@ -305,3 +393,15 @@ def test_reachability_check_accepts_the_bridges_own_certificate(tmp_path, capsys
     finally:
         server.shutdown()
     assert "Reachable" in capsys.readouterr().out
+
+
+def test_hermes_bin_falls_back_to_the_installers_launcher(monkeypatch, tmp_path):
+    # Current Hermes installers put the venv elsewhere and a `hermes` launcher in <home>/bin.
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path / "hermes"))
+    monkeypatch.setattr(base.shutil, "which", lambda name: None)
+    launcher = tmp_path / "hermes" / "bin" / "hermes"
+    assert base.Host().hermes_bin() != launcher  # absent: the old venv path, as before
+    launcher.parent.mkdir(parents=True)
+    launcher.write_text("")
+    assert base.Host().hermes_bin() == launcher
+

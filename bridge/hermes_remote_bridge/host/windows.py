@@ -1,66 +1,27 @@
-"""Windows 10/11: PowerShell NetTCPIP cmdlets, Scheduled Task, Windows Defender Firewall.
+"""Windows 10/11: routes, neighbours, network profile and firewall through ctypes/COM (winapi.py);
+no PowerShell anywhere (elevation re-runs the CLI via ShellExecuteExW runas). The old Scheduled
+Task of a script install is removed by the desktop app (migration).
 
-Written against Microsoft's documented cmdlets and unit-tested with their output replaced, and
-exercised for real on a Windows 11 machine (tray start, bridge up, tray quit). See
-docs/PLATFORMS.md#what-is-verified-on-windows for what that does and does not prove.
+Written against Microsoft's documented APIs and unit-tested with their output replaced; CI's Windows job
+runs them for real and compares them with the cmdlets' answers (see docs/PLATFORMS.md).
 """
 from __future__ import annotations
 
-import base64
-import json
 import os
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
+from . import winapi
 from .base import Host
 
 TASK_NAME = "Hermes Mobile Remote"
 FIREWALL_RULE = "Hermes Mobile Remote"
-_NO_WINDOW = 0x08000000  # CREATE_NO_WINDOW: don't flash a console when run from the task
 
 
 def _local_appdata() -> Path:
     return Path(os.environ.get("LOCALAPPDATA") or Path.home() / "AppData" / "Local")
-
-
-def powershell() -> str | None:
-    return shutil.which("powershell") or shutil.which("pwsh")
-
-
-def encode_script(script: str) -> str:
-    """Base64 of the UTF-16LE script, the form ``powershell -EncodedCommand`` takes."""
-    return base64.b64encode(script.encode("utf-16-le")).decode("ascii")
-
-
-def ps(script: str, timeout: float = 15.0) -> str:
-    """Run a PowerShell snippet and return stdout; "" when PowerShell is missing or it fails."""
-    exe = powershell()
-    if not exe:
-        return ""
-    try:
-        r = subprocess.run([exe, "-NoProfile", "-NonInteractive", "-EncodedCommand", encode_script(script)],
-                           capture_output=True, text=True, timeout=timeout,
-                           creationflags=_NO_WINDOW if os.name == "nt" else 0)
-    except (OSError, subprocess.SubprocessError):
-        return ""
-    return r.stdout if r.returncode == 0 else ""
-
-
-def ps_json(script: str) -> list[dict]:
-    """Run a snippet that ends in ``ConvertTo-Json`` and always return a list of objects.
-
-    ConvertTo-Json emits a bare object for one result and an array for several; callers should not
-    care which.
-    """
-    out = ps(script).strip()
-    if not out:
-        return []
-    try:
-        data = json.loads(out)
-    except ValueError:
-        return []
-    return data if isinstance(data, list) else [data]
 
 
 def parse_default_routes(rows: list[dict]) -> tuple[str, str] | None:
@@ -100,29 +61,16 @@ class WindowsHost(Host):
         return _local_appdata() / "hermes"
 
     def default_route(self) -> tuple[str, str] | None:
-        rows = ps_json(
-            "Get-NetRoute -DestinationPrefix '0.0.0.0/0' -AddressFamily IPv4 | ForEach-Object { "
-            "$i = Get-NetIPInterface -InterfaceIndex $_.InterfaceIndex -AddressFamily IPv4; "
-            "[pscustomobject]@{Alias=$_.InterfaceAlias; Gateway=$_.NextHop; "
-            "Metric=([int]$_.RouteMetric + [int]$i.InterfaceMetric)} } | ConvertTo-Json -Compress")
-        return parse_default_routes(rows)
+        return parse_default_routes(winapi.default_routes())
 
     def gateway_mac(self, gateway: str) -> str | None:
         if not all(c.isdigit() or c == "." for c in gateway):
-            return None  # the value is interpolated into a script; only ever an IPv4 literal
-        out = ps(f"(Get-NetNeighbor -IPAddress '{gateway}' -AddressFamily IPv4 -ErrorAction SilentlyContinue | "
-                 "Where-Object { $_.State -notin 'Unreachable','Incomplete' } | "
-                 "Select-Object -First 1).LinkLayerAddress")
-        return normalise_mac(out)
+            return None  # only ever an IPv4 literal
+        return normalise_mac(winapi.neighbor_mac(gateway))
 
     def network_profile(self, interface: str) -> tuple[str, str] | None:
-        """(connection profile GUID, name) from Get-NetConnectionProfile; the name is the SSID on Wi-Fi."""
-        safe = interface.replace("'", "''")
-        rows = ps_json(f"Get-NetConnectionProfile -InterfaceAlias '{safe}' -ErrorAction SilentlyContinue | "
-                       "Select-Object Name, InstanceID | ConvertTo-Json -Compress")
-        if not rows or not rows[0].get("InstanceID"):
-            return None
-        return str(rows[0]["InstanceID"]), str(rows[0].get("Name") or interface)
+        """(connection profile GUID, name) from the Network List Manager; the name is the SSID on Wi-Fi."""
+        return winapi.network_profile(interface)
 
     def tailscale_cli(self) -> str | None:
         found = shutil.which("tailscale")
@@ -132,12 +80,15 @@ class WindowsHost(Host):
         return str(default) if default.exists() else None
 
     def service_state(self, name: str) -> str:
-        """State of the Scheduled Task that runs the bridge ("active" when running). Other service
-        names are not tracked on Windows: callers fall back to probing the port."""
+        """"active" or "inactive" by whether the bridge answers on its configured port; other
+        service names are not tracked on Windows."""
         if name != "hermes-remote-bridge":
             return "unknown"
-        state = ps(f"(Get-ScheduledTask -TaskName '{TASK_NAME}' -ErrorAction SilentlyContinue).State").strip()
-        return {"Running": "active", "": "unknown"}.get(state, state.lower())
+        from ..config import Config  # config imports this package
+        return "active" if winapi.bridge_reachable(Config.load().port) else "inactive"
+
+    def process_snapshot(self) -> list[dict] | None:
+        return winapi.process_snapshot()
 
     # ------------------------------------------------------------------ interactive use
 
@@ -164,24 +115,24 @@ class WindowsHost(Host):
     # ------------------------------------------------------------------ firewall
 
     def firewall_active(self) -> bool:
-        return ps("(Get-NetFirewallProfile | Where-Object { $_.Enabled -eq 'True' }).Count").strip() not in ("", "0")
+        return winapi.firewall_profiles_enabled()
 
     def firewall_rule_present(self, port: int) -> bool:
-        out = ps(f"Get-NetFirewallRule -DisplayName '{FIREWALL_RULE}' -ErrorAction SilentlyContinue | "
-                 "Where-Object { $_.Enabled -eq 'True' -and $_.Direction -eq 'Inbound' } | "
-                 "Get-NetFirewallPortFilter | Select-Object -ExpandProperty LocalPort")
-        return str(port) in out.split()
+        return any(r["Name"] == FIREWALL_RULE and r["Enabled"] and r["Inbound"]
+                   and str(port) in str(r["LocalPorts"]).replace(" ", "").split(",")
+                   for r in winapi.firewall_rules())
 
-    def run_elevated(self, script: str) -> bool:
-        """Run ``script`` in an elevated PowerShell (one UAC prompt); True when it exits 0."""
-        exe = powershell()
-        if not exe:
-            return False
-        wrapper = ("$p = Start-Process -FilePath '%s' -Verb RunAs -Wait -PassThru -ArgumentList "
-                   "'-NoProfile','-NonInteractive','-EncodedCommand','%s'; exit $p.ExitCode"
-                   % (exe.replace("'", "''"), encode_script(script)))
-        try:
-            return subprocess.run([exe, "-NoProfile", "-EncodedCommand", encode_script(wrapper)],
-                                  timeout=180).returncode == 0
-        except (OSError, subprocess.SubprocessError):
-            return False
+    def firewall_add(self, port: int) -> bool:
+        """Create our rule (Private profile, private ranges). Only works in an elevated process."""
+        from ..firewall import COMMENT, PRIVATE_RANGES  # firewall imports this package
+        return winapi.firewall_add_rule(FIREWALL_RULE, COMMENT, port, ",".join(PRIVATE_RANGES))
+
+    def firewall_remove(self) -> bool:
+        return winapi.firewall_remove_rules(FIREWALL_RULE)
+
+    def elevate_cli(self, args: list[str]) -> bool:
+        """Relaunch this venv's bridge exe with ``args`` through the UAC prompt (one prompt, no
+        PowerShell); True when it exits 0, False when cancelled or failed."""
+        own = Path(sys.executable).with_name("hermes-remote-bridge.exe")
+        exe = str(own) if own.exists() else sys.argv[0]
+        return winapi.run_elevated(exe, subprocess.list2cmdline(args)) == 0

@@ -105,11 +105,12 @@ class BackendLocator:
     """Resolves a usable backend, caching it until it stops answering."""
 
     def __init__(self, hermes_home: Path, hermes_root: Path, hermes_python: Path, log_file: Path,
-                 *, spawn: bool = True, http: httpx.AsyncClient | None = None):
+                 *, hermes_bin: Path | None = None, spawn: bool = True, http: httpx.AsyncClient | None = None):
         self.ledger = hermes_home / "spawn-ledger.json"
         self.hermes_home = hermes_home
         self.hermes_root = hermes_root
         self.hermes_python = hermes_python
+        self.hermes_bin = hermes_bin
         self.log_file = log_file
         self.spawn_allowed = spawn
         self._http = http or httpx.AsyncClient(timeout=httpx.Timeout(4.0, connect=1.5))
@@ -163,8 +164,19 @@ class BackendLocator:
         token = m.group(1)
         return token if await self._alive(Backend(port, token)) else None
 
+    def serve_argv(self) -> list[str] | None:
+        """How to run ``hermes serve``: the old ``hermes-agent/venv`` interpreter, else the
+        ``hermes`` launcher (current installers); None when neither exists."""
+        tail = ["serve", "--host", "127.0.0.1", "--port", "0"]
+        if self.hermes_python.exists():
+            return [str(self.hermes_python), "-m", "hermes_cli.main", *tail]
+        if self.hermes_bin is not None and self.hermes_bin.exists():
+            return [str(self.hermes_bin), *tail]
+        return None
+
     async def _start(self) -> Backend:
-        if not self.hermes_python.exists():
+        argv = self.serve_argv()
+        if argv is None:
             raise BackendUnavailable(f"Hermes is not installed at {self.hermes_root}")
         token = secrets.token_urlsafe(32)
         env = dict(os.environ, HERMES_DASHBOARD_SESSION_TOKEN=token, HERMES_HOME=str(self.hermes_home),
@@ -179,8 +191,7 @@ class BackendLocator:
             kwargs["start_new_session"] = True  # outlives a bridge restart; Hermes' idle exit reaps it
         try:
             proc = subprocess.Popen(
-                [str(self.hermes_python), "-m", "hermes_cli.main", "serve", "--host", "127.0.0.1", "--port", "0"],
-                cwd=str(self.hermes_root), env=env, stdin=subprocess.DEVNULL, stdout=out, stderr=out, **kwargs)
+                argv, cwd=str(self.hermes_root if self.hermes_root.is_dir() else self.hermes_home), env=env, stdin=subprocess.DEVNULL, stdout=out, stderr=out, **kwargs)
         finally:
             out.close()
         log.info("started hermes serve (pid %d)", proc.pid)

@@ -1,0 +1,80 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Hermes Remote",
+  "version": "0.1.0",
+  "identifier": "io.github.nideta231.hermesremote.desktop",
+  "build": {
+    "frontendDist": "../dist",
+    "devUrl": "http://localhost:1420",
+    "beforeDevCommand": "npm run dev",
+    "beforeBuildCommand": "npm run build"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "Hermes Remote",
+        "width": 420,
+        "height": 640,
+        "resizable": true
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": [
+      "appimage",
+      "deb",
+      "nsis"
+    ],
+    "createUpdaterArtifacts": true,
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.png",
+      "icons/icon.ico"
+    ],
+    "shortDescription": "Control the Hermes Mobile Remote bridge",
+    "longDescription": "Installs, controls and shows the Hermes Mobile Remote bridge that lets your phone use Hermes Agent on this PC.",
+    "category": "Utility",
+    "publisher": "nideta231",
+    "homepage": "https://github.com/nideta231/hermes-mobile-remote",
+    "license": "MIT",
+    "resources": {
+      "../../bridge/hermes_remote_bridge/": "bridge/hermes_remote_bridge/",
+      "../../bridge/pyproject.toml": "bridge/pyproject.toml",
+      "../../bridge/uv.lock": "bridge/uv.lock"
+    },
+    "linux": {
+      "deb": {
+        "section": "utils"
+      },
+      "appimage": {
+        "bundleMediaFramework": false
+      }
+    },
+    "windows": {
+      "webviewInstallMode": {
+        "type": "embedBootstrapper",
+        "silent": true
+      },
+      "nsis": {
+        "installMode": "currentUser",
+        "installerHooks": "windows/hooks.nsh",
+        "startMenuFolder": "Hermes Remote"
+      }
+    }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "PLACEHOLDER_UPDATER_PUBKEY_SET_IN_TICKET_08",
+      "endpoints": [
+        "https://github.com/nideta231/hermes-mobile-remote/releases/download/desktop-latest/latest.json"
+      ]
+    }
+  }
+}

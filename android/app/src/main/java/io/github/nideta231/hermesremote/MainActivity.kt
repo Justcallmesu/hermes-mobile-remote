@@ -85,6 +85,8 @@ import io.github.nideta231.hermesremote.ui.SignInAgainScreen
 import io.github.nideta231.hermesremote.ui.SessionActions
 import io.github.nideta231.hermesremote.ui.SessionsPane
 import io.github.nideta231.hermesremote.ui.UpdateSheet
+import io.github.nideta231.hermesremote.ui.ShareTargetSheet
+import io.github.nideta231.hermesremote.data.SharedFiles
 import io.github.nideta231.hermesremote.ui.UpdateStrip
 import io.github.nideta231.hermesremote.ui.NotesSheet
 import io.github.nideta231.hermesremote.data.fullChangelog
@@ -147,7 +149,8 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
-        handleIntent(intent)
+        // A recreated activity gets the launch intent again; its share was already offered.
+        handleIntent(intent, restored = savedInstanceState != null)
         Notifier.ensureChannels(this)
         // Upgrades never pass through pairing, so ask here too. Android stops prompting after two declines.
         if (vm.pairing.value != null) askForNotifications()
@@ -175,7 +178,8 @@ class MainActivity : ComponentActivity() {
         handleIntent(intent)
     }
 
-    private fun handleIntent(intent: Intent?) {
+    private fun handleIntent(intent: Intent?, restored: Boolean = false) {
+        if (intent != null && !restored && takeShare(intent)) return
         // Tapped a notification: go straight to the chat it is about.
         intent?.getStringExtra(Notifier.EXTRA_OPEN_SESSION)?.let { sid ->
             intent.removeExtra(Notifier.EXTRA_OPEN_SESSION)
@@ -194,6 +198,18 @@ class MainActivity : ComponentActivity() {
             if (vm.pairing.value != null || vm.gatewayHost.value != null) vm.startAddingPc()
             pairUri.value = data.toString()
         }
+    }
+
+    /** A share from another app (text, link, pictures, files). True when [intent] was one. */
+    private fun takeShare(intent: Intent): Boolean {
+        val shared = SharedFiles.fromIntent(this, intent) ?: return false
+        when {
+            vm.pairing.value == null && vm.gatewayHost.value?.signedOut != false ->
+                android.widget.Toast.makeText(this, "Pair Hermes Remote with your PC first, then share again.", android.widget.Toast.LENGTH_LONG).show()
+            shared.isEmpty -> android.widget.Toast.makeText(this, "Nothing Hermes Remote can use was shared.", android.widget.Toast.LENGTH_LONG).show()
+            else -> { vm.offerShare(shared); showChat.value = true }
+        }
+        return true
     }
 
     private fun scan() {
@@ -270,6 +286,7 @@ class MainActivity : ComponentActivity() {
     private fun PairedApp() {
         val pairing by vm.pairing.collectAsState()
         val chat by vm.chat.collectAsState()
+        val sessionSearch by vm.search.state.collectAsState()
         val sessions by vm.sessions.collectAsState()
         val sessionView by vm.sessionView.collectAsState()
         val groupOrder by vm.groupOrder.collectAsState()
@@ -291,6 +308,7 @@ class MainActivity : ComponentActivity() {
         val pcState by vm.monitor.state.collectAsState()
         val features by vm.features.collectAsState()
         val unauthorized by vm.unauthorized.collectAsState()
+        val pendingShare by vm.pendingShare.collectAsState()
         var updateSheet by rememberSaveable { mutableStateOf(false) }
         var changelogSheet by rememberSaveable { mutableStateOf(false) }
 
@@ -350,9 +368,12 @@ class MainActivity : ComponentActivity() {
             openPc = if (hasMonitor) ({ go(Page.PC) }) else null,
             openTerminal = if (hasTerminal) ({ go(Page.TERMINAL) }) else null,
             repairPc = vm::startRepair,
+            search = vm.search::search,
+            openFound = { id, profile -> vm.openSession(id, profile); go(Page.CHAT) },
         )
         val chatActions = ChatActions(
             send = vm::send, stop = vm::stop, steer = vm::steer, queue = vm::queue, approve = vm::answerApproval, stopSubagent = vm::stopSubagent, stopProcess = vm::stopProcess,
+            followSubagent = vm.subagentOutput::follow, steerSubagent = vm.subagentOutput::steer,
             answerClarify = vm::answerClarify, draft = vm::setDraft,
             togglePin = vm::togglePin, newChat = { vm.newChat() },
             openDrawer = { vm.refreshSessions(); scope.launch { drawer.open() } },
@@ -418,6 +439,10 @@ class MainActivity : ComponentActivity() {
                     dismissButton = { TextButton(onClick = { vm.dismissUnauthorized(); page = Page.SETTINGS }) { Text("Later") } })
             }
             if (updateSheet && update.available != null) UpdateSheet(update, onInstall = vm.updates::installUpdate, onDismiss = { updateSheet = false })
+            pendingShare?.let { shared ->
+                ShareTargetSheet(shared, openChat = chat.title.takeIf { chat.sessionId != null },
+                    onPick = { toNew -> vm.acceptShare(toNew); page = Page.CHAT }, onDismiss = vm::cancelShare)
+            }
             if (changelogSheet) NotesSheet("Changelog", "You have ${update.installed}", remember { fullChangelog(vm.updates.changelog) },
                 onDismiss = { changelogSheet = false })
             update.whatsNew?.let { notes ->
@@ -430,7 +455,7 @@ class MainActivity : ComponentActivity() {
         if (wide) {
             Row(Modifier.fillMaxSize()) {
                 Surface(color = MaterialTheme.colorScheme.surfaceContainerLow, modifier = Modifier.width(320.dp).fillMaxHeight()) {
-                    SessionsPane(sessions, chat.sessionId, sessionActions, pcs = pcs, profiles = hermesProfiles, view = sessionView, update = update, onOpenUpdate = openUpdate, groupOrder = groupOrder, scheduledCount = cron.jobs.count { it.state == "scheduled" })
+                    SessionsPane(sessions, chat.sessionId, sessionActions, pcs = pcs, profiles = hermesProfiles, view = sessionView, update = update, onOpenUpdate = openUpdate, groupOrder = groupOrder, scheduledCount = cron.jobs.count { it.state == "scheduled" }, search = sessionSearch)
                 }
                 VerticalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f))
                 Box(Modifier.weight(1f)) { content() }
@@ -438,7 +463,7 @@ class MainActivity : ComponentActivity() {
         } else {
             ModalNavigationDrawer(drawerState = drawer, gesturesEnabled = page == Page.CHAT || drawer.isOpen, drawerContent = {
                 ModalDrawerSheet(drawerContainerColor = MaterialTheme.colorScheme.surfaceContainerLow, modifier = Modifier.width(320.dp)) {
-                    SessionsPane(sessions, chat.sessionId, sessionActions, pcs = pcs, profiles = hermesProfiles, view = sessionView, update = update, onOpenUpdate = openUpdate, groupOrder = groupOrder, scheduledCount = cron.jobs.count { it.state == "scheduled" })
+                    SessionsPane(sessions, chat.sessionId, sessionActions, pcs = pcs, profiles = hermesProfiles, view = sessionView, update = update, onOpenUpdate = openUpdate, groupOrder = groupOrder, scheduledCount = cron.jobs.count { it.state == "scheduled" }, search = sessionSearch)
                 }
             }) { content() }
         }

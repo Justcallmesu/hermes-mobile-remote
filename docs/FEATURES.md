@@ -17,16 +17,31 @@ with their arguments, result and duration; a running card shimmers, a failed one
 **Subagents.** When the agent hands work to subagents (`delegate_task`), a card under the chat
 lists them: each one's task, the tool it is using, its tool count, model and running time. Ones
 that finish turn green (tap for their answer) or red. *Stop* ends one subagent and leaves the chat
-running. Opening a chat while subagents run shows them straight away.
+running. *Output* opens a running subagent's live transcript, refreshed every couple of seconds
+while it is open. *Steer* sends it an instruction it reads after its current step (hidden when
+Hermes says it no longer takes any). Opening a chat while subagents run shows them straight away.
 
 **Steering and stopping.** While a turn is in flight the composer becomes "Steer the running
 task…", and the send button turns into a stop button. You can add instructions mid-turn or cancel.
 
 **Drafts.** An unsent message survives switching tabs, rotating the screen and restarting the app.
 
+**Share to Hermes.** Hermes Remote is in Android's share menu. Text and links (Chrome passes the
+page title and URL) go into the composer, pictures and files are attached as if picked in the app.
+A sheet asks whether it goes to a *New chat* or the chat on screen; nothing is sent until you tap
+Send. Shared files are copied into the app's cache straight away (the sending app's permission is
+short-lived) and deleted once sent or removed; leftovers are cleared on the next launch. Same
+limits as picking: 6 pictures and 6 files of up to 10 MB each, the rest is left out with a note.
+Sharing before the phone is paired only shows a hint.
+
 **Sessions.** Swipe in the drawer from the left edge to search, pin, rename and delete chats.
 Long-press a session for those actions; deleting asks for confirmation. A session that is working
 right now — on any screen — shimmers in the list, like the desktop sidebar.
+
+**Search inside chats.** The drawer's search box filters titles and previews as you type. Pause
+for a moment after two or more characters and it also asks Hermes on the PC, which searches the
+text of every message (the desktop sidebar's search). Chats found only that way appear under
+*In messages* with the matching line; tap one to open it. An older bridge keeps the title filter.
 
 **Pinned sessions.** Pins are shared with the Hermes desktop app; pin on either surface.
 

@@ -2,15 +2,18 @@ name: Release
 
 # Push a tag like v0.8.0 to publish a signed APK. Installed apps find it through
 # Settings → System → "Check for updates", or on their own at startup.
+# Push a tag like desktop-v0.2.0 to publish the desktop app (NSIS, AppImage, .deb and the updater's
+# latest.json). Desktop releases carry their own tags so the phone's update check never sees them.
 on:
   push:
-    tags: ["v*.*.*"]
+    tags: ["v*.*.*", "desktop-v*.*.*"]
 
 permissions:
   contents: write
 
 jobs:
   apk:
+    if: startsWith(github.ref_name, 'v')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -79,3 +82,61 @@ jobs:
           [ -s "$RUNNER_TEMP/notes.md" ] || { echo "::error::CHANGELOG.md has no '## $GITHUB_REF_NAME' section"; exit 1; }
           gh release create "$GITHUB_REF_NAME" "$RUNNER_TEMP"/HermesRemote-*.apk "$RUNNER_TEMP"/HermesRemote-*.apk.sha256 \
             --title "$GITHUB_REF_NAME" --notes-file "$RUNNER_TEMP/notes.md" --verify-tag
+
+  # The desktop app. Builds are unsigned (D24); the updater artifacts are signed with the updater key
+  # (TAURI_SIGNING_PRIVATE_KEY, a repo secret nideta holds, D22). The version comes from the tag and must
+  # match desktop/src-tauri/tauri.conf.json.
+  desktop:
+    if: startsWith(github.ref_name, 'desktop-v')
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            bundles: appimage,deb
+          - os: windows-latest
+            bundles: nsis
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Tag matches the app version
+        shell: bash
+        run: |
+          want="${GITHUB_REF_NAME#desktop-v}"
+          have=$(node -p "require('./desktop/src-tauri/tauri.conf.json').version")
+          [ "$want" = "$have" ] || { echo "::error::tag $want but tauri.conf.json version $have"; exit 1; }
+      - name: Updater key is set
+        shell: bash
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        run: |
+          [ -n "$TAURI_SIGNING_PRIVATE_KEY" ] || { echo "::error::TAURI_SIGNING_PRIVATE_KEY is not set (see docs/desktop-app-design.md, D22)"; exit 1; }
+          if grep -q PLACEHOLDER_UPDATER_PUBKEY desktop/src-tauri/tauri.conf.json; then
+            echo "::error::set plugins.updater.pubkey in tauri.conf.json to the updater public key"; exit 1
+          fi
+      - name: Linux build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-node@v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+      - run: npm ci --no-audit --no-fund
+        working-directory: desktop
+      - uses: tauri-apps/tauri-action@action-v1.0.0
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          projectPath: desktop
+          args: --bundles ${{ matrix.bundles }}
+          tagName: ${{ github.ref_name }}
+          releaseName: Hermes Remote desktop ${{ github.ref_name }}
+          releaseBody: See CHANGELOG.md for what changed.
+          releaseDraft: true
+          includeUpdaterJson: true

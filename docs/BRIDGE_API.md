@@ -5,6 +5,8 @@ same Hermes backend the desktop app uses (`hermes serve`): the bridge authentica
 relays one WebSocket to that backend's own JSON-RPC socket. A few REST endpoints remain for the
 session list and settings. `/v1/me` and `/v1/status` report `protocol: 2`.
 
+The `/v1/local/*` routes (see [Local control API](#local-control-api-desktop-app)) are for the desktop app on the same PC, not for the phone.
+
 Old app versions (0.x) spoke a different API (`/v1/runs`, SSE, `/sync`) and do not work with a 1.x
 bridge. Update the app from its System tab.
 
@@ -12,7 +14,7 @@ bridge. Update the app from its System tab.
 
 The bridge answers on up to three kinds of address, all on the same port (default `8650`):
 
-- **Loopback** (`127.0.0.1`): plain HTTP, for local tools. No network checks.
+- **Loopback** (`127.0.0.1`): plain HTTP, for local tools. The phone's routes make no network checks here. `/v1/local/*` is loopback-only and also needs the local secret.
 - **Tailscale** (e.g. `http://100.64.0.10:8650`): plain HTTP. The traffic travels inside Tailscale's
   WireGuard tunnel, which encrypts and authenticates both ends. Android needs a
   `network_security_config` cleartext exception scoped to those addresses only.
@@ -52,6 +54,7 @@ On the PC, run `hermes-remote-bridge pair phone`. It prints a QR code containing
 - On Android, store the token in EncryptedSharedPreferences / Keystore.
 - To revoke a device: `hermes-remote-bridge revoke phone`. It takes effect on the device's next
   request or connection; no restart needed.
+- The desktop app's *Pair a device* does the same and shows the QR code inline, with a Copy button.
 
 On a trusted network the bridge also advertises `_hermesremote._tcp` over mDNS (Avahi). The TXT record
 carries `pin=` (the first 12 characters of the pin, enough to recognise the bridge; the full pin is
@@ -73,10 +76,12 @@ for (see [Profiles](#profiles)). Without it, or with `default`, it is the defaul
 | Method | Path | Notes |
 |---|---|---|
 | GET | `/healthz` | No auth. Liveness only. |
+| GET | `/metrics?format` | Counts and timings, Prometheus text or JSON. See [Metrics](#metrics-get-metrics). |
 | GET | `/v1/me` | `{device{id,name,created_at}, peer_node, via, port, addresses{lan[],tailnet[]}, lan_scheme, network, bridge_version, protocol}`. `via` is `lan` or `tailnet`; `addresses` lists every address served right now so the app can switch; `network` is `{id, name, interface, trusted}` or null. |
 | GET | `/v1/status` | `components.{bridge, hermes, tailscale}`. `hermes` is `{status, version, port, shared_with_desktop}`, or `{status: "down", error, starts_on_connect}`. |
 | GET | `/v1/profiles` | `{profiles[]}`, each `{name, display_name, description, model, provider, is_default}`. Only profiles the phone may use. |
 | GET | `/v1/sessions?limit&offset` *(profile)* | The desktop sidebar's own query (recent first, archived and cron excluded): `{sessions[], total, limit, offset}`. Rows carry `id, title, preview, source, message_count, last_active, model, pinned`. |
+| GET | `/v1/sessions/search?q&limit` *(profile)* | Chats whose messages (or id) contain `q`: Hermes' own `/api/sessions/search` (the desktop sidebar's FTS5 search, prefix-matched, one row per conversation across compressions, best match first). `{sessions[]}`, rows shaped like `/v1/sessions` plus `snippet` (the matching text on one line, at most 160 characters, highlight marks removed). Archived chats and cron runs are left out. `q` is 1..200 characters after trimming, else 400 `invalid_query`; `limit` defaults to 20, capped at 50. Bridges before this route answer 404. |
 | PATCH | `/v1/sessions/{id}` `{title?, pinned?, archived?}` *(profile)* | Rename and/or set the desktop-sidebar flags. At least one field required, else 400 `empty_patch`. |
 | GET | `/v1/settings/approvals` *(profile)* | `{mode, modes}`. The profile's `approvals.mode`: `manual`, `smart` or `off`. |
 | PUT | `/v1/settings/approvals` `{mode}` *(profile)* | Sets it via `hermes [-p <profile>] config set` (fixed argv, no shell), reads it back, audits the change. 400 `invalid_mode` for anything else. |
@@ -95,12 +100,81 @@ for (see [Profiles](#profiles)). Without it, or with `default`, it is the defaul
 `/v1/me` also lists `features`: any of `monitor`, `claude_usage`, `terminal`, so the app shows only
 the pages this bridge serves.
 
+## Metrics: `GET /metrics`
+
+What the bridge has done since it started, in Prometheus text format 0.0.4
+(`text/plain; version=0.0.4`); `?format=json` is the same data as JSON, which
+`hermes-remote-bridge metrics [--json]` reads. In memory only: every value resets when the bridge
+restarts. Off with `metrics = false` in config.toml (then 404 `metrics_off`, after auth).
+
+**Auth.** The same network gate as every other endpoint, then a bearer token, even on loopback:
+loopback is any local user on a shared machine, and the metrics say when someone is using the
+phone. Either token works:
+
+- the **metrics token**, `~/.config/hermes-remote/metrics.token` (mode 600; `serve` creates it once
+  and keeps it). It opens `/metrics` and nothing else, so it is the one to give a scraper;
+- a paired device's token. Works, but a device token can drive Hermes: don't put one in a
+  Prometheus config.
+
+**What is never in it.** Labels come from closed sets only: route templates
+(`/v1/sessions/{session_id}`, never the path or query), allowlisted RPC method names, fixed
+reasons and outcomes. No session ids or titles, prompts, message text, file paths, device names or
+tokens. Paths no route serves count as `unmatched`, requests refused before routing (network,
+body size) as `refused`.
+
+| Metric | Type | Labels | Meaning |
+|---|---|---|---|
+| `bridge_info` | gauge | `version`, `protocol` | Always 1. |
+| `process_start_time_seconds` | gauge | | Bridge start, Unix time. |
+| `bridge_paired_devices` | gauge | | Paired devices not revoked. |
+| `bridge_live_devices` | gauge | | Distinct devices with a live socket open now. |
+| `bridge_http_requests_total` | counter | `route`, `method`, `status` | REST requests answered. |
+| `bridge_http_request_seconds` | histogram | `route` | REST request duration. |
+| `bridge_ws_connections` | gauge | `endpoint` (`live`, `terminal`) | Open sockets. |
+| `bridge_ws_connections_total` | counter | `endpoint` | Sockets accepted. |
+| `bridge_ws_rejected_total` | counter | `endpoint`, `reason` (`network`, `unauthorized`, `hermes_unavailable`, `disabled`) | Upgrades refused. |
+| `bridge_relay_frames_forwarded_total` | counter | `method` (allowlisted, or `response` for an answer to a question) | Phone→Hermes frames forwarded. |
+| `bridge_relay_frames_refused_total` | counter | `reason` (`method`, `profile`, `config_key`, `too_large`, `not_json`, `not_jsonrpc`, `stray_response`, `rate_limited`) | Phone→Hermes frames refused. |
+| `bridge_relay_frames_from_hermes_total` | counter | | Hermes→phone frames relayed. |
+| `bridge_hermes_rpc_seconds` | histogram | `method` | Phone RPC round trip: forwarded to its response relayed. |
+| `bridge_hermes_rpc_errors_total` | counter | `method` | RPCs Hermes answered with an error. |
+| `bridge_questions_total` | counter | `method` (`approval`, `clarify`, `sudo`, `secret`, `vault.*`) | Questions Hermes asked on a live socket. |
+| `bridge_questions_open` | gauge | | Seen and not yet settled. |
+| `bridge_questions_ended_total` | counter | `method`, `outcome` (`answered`, `declined` from a phone; `resolved`, `timeout`, `interrupted`, `shutdown`, `other` from Hermes' `request.cancel`; `unobserved`) | Questions settled. |
+| `bridge_question_wait_seconds` | histogram | `method` | Seen to first settlement (any screen). Buckets 1 s to 1 h. |
+| `bridge_turns_started_total` | counter | | `message.start` events. |
+| `bridge_turns_completed_total` | counter | `status` (`complete`, `interrupted`, `error`, `other`) | `message.complete` events. |
+
+Latency buckets are 5 ms to 30 s. Relay figures come from what crosses a phone's socket: questions
+and turns are only counted while at least one phone is connected, an event two phones both receive
+counts once, and a question still open when the last socket that saw it closes ends as
+`unobserved` (not timed).
+
+Scraping from Prometheus on the same PC:
+
+```yaml
+scrape_configs:
+  - job_name: hermes-remote-bridge
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["127.0.0.1:8650"]
+    authorization:
+      type: Bearer
+      credentials_file: /home/you/.config/hermes-remote/metrics.token
+    # older Prometheus: bearer_token_file: /home/you/.config/hermes-remote/metrics.token
+```
+
+From another machine, scrape the bridge's Tailscale address (the Tailscale identity check still
+applies, so the scraper's node must be an allowed login) with a copy of the metrics token.
+
 ## Terminal: `GET /v1/terminal?cols&rows` (WebSocket)
 
-A shell on the PC as the bridge's user (`$SHELL -l`; PowerShell on Windows), one per connection,
+A shell on the PC as the bridge's user (`$SHELL -l` on Linux, see below for Windows), one per connection,
 killed when it closes. Same gate as the live socket: tailnet or pinned LAN, device token in the
 upgrade request's `Authorization` header. Turn it off with `terminal = false` in config.toml
 (closes with 4404).
+
+On Windows the shell is `pwsh`, else `powershell`, else `cmd`. Set `terminal_shell` in config.toml to use another, e.g. `terminal_shell = "\"C:\\Program Files\\Git\\bin\\bash.exe\" -l"`.
 
 The bridge runs the terminal emulator (pyte), so it answers the shell's queries (fish waits for
 them) and the phone only draws rows. Frames are JSON text:
@@ -165,10 +239,15 @@ same one the desktop app uses. The bridge adds only:
 6. **Sidebar:** `session.active_list` gives what is working right now; `sessions.changed` events say
    when to re-fetch `/v1/sessions`.
 7. **Subagents:** `subagent.list {session_id}` returns the chat's live children (`subagents[]`:
-   `subagent_id, goal, model, status, tool_count, last_tool, depth, started_at`) and recently failed
-   background delegations. `subagent.interrupt {session_id, subagent_id}` stops one (`{found}`); the
-   chat's own turn goes on. Hermes answers both only for sessions this socket is attached to.
-   Steering a child (`subagent.steer`) and reading its transcript (`subagent.tail`) stay on the PC.
+   `subagent_id, goal, model, status, tool_count, last_tool, depth, started_at, accepting_steer`) and
+   recently failed background delegations. `subagent.interrupt {session_id, subagent_id}` stops one
+   (`{found}`); the chat's own turn goes on. `subagent.tail {session_id, subagent_id}` reads the end
+   of a running child's live transcript (`{available, text, truncated}`, the last 16 KB; `available`
+   is false before it starts writing and once it ended). `subagent.steer {session_id, subagent_id,
+   text}` queues an instruction the child reads after its current tool call (`{status: "queued" |
+   "rejected"}`; queued is not a delivery receipt). The bridge refuses steer text that is not a
+   non-blank string of at most 4000 characters (`-32602`). Hermes answers all four only for sessions
+   this socket is attached to.
 8. **Loop and heartbeat state:** `session.control.read {session_id}` returns `{control: {goal, loop, heartbeat,
    revision, updated_at}}`; `loop` and `heartbeat` are `null` when none is set, else carry `status`
    (`active | paused | done | cleared`). Read-only; the phone cannot change them. The same object arrives
@@ -208,6 +287,26 @@ same one the desktop app uses. The bridge adds only:
 - Models: `model.options`. Switch the chat's model with `config.set {session_id, key: "model",
   value: "<model> --provider <slug> --session"}`, and its reasoning effort with `key: "reasoning"`.
 
+## Local control API (desktop app)
+
+The desktop app manages the bridge through these routes. They are not for the phone and are never in the relay's allowlist.
+
+- **Who:** only a loopback peer that sends `X-Hermes-Local: <secret>`. Any other request gets `403 forbidden_local`, including a tailnet or LAN peer that has the secret.
+- **Secret:** `<config_dir>/local-secret`, 32 random bytes in hex, mode 0600 on Linux, created on first start and created again if it is deleted. Deleting it revokes every local client.
+- **No device token and no device rate limit** apply to these routes.
+- **Bodies and answers:** the JSON shapes are the same as the CLI's `--json` output, since both call the same functions. The exact fields of each answer are not listed here (unchecked).
+
+| Method | Path | Notes |
+|---|---|---|
+| GET | `/v1/local/status` | What the app's status line shows: network trusted, firewall, LAN, tailnet. |
+| GET | `/v1/local/devices` | Paired devices (`devices --json`). |
+| POST | `/v1/local/pair` | Body `{name, replace?}`. Pairs a device, as `pair` does. |
+| POST | `/v1/local/revoke` | Body `{name}`. Revokes that device. |
+| GET | `/v1/local/trust` | Trusted networks (`trust --list --json`). |
+| POST | `/v1/local/trust` | Trusts the network the PC is on (`trust`). |
+| POST | `/v1/local/untrust` | Body `{id}`. Removes that trusted network. |
+| GET | `/v1/local/doctor` | Doctor report (`doctor --json`). |
+
 ## Known limitations
 
 - **Smart approval mostly decides on its own.** With `approvals.mode: smart`, an approval request
@@ -217,3 +316,4 @@ same one the desktop app uses. The bridge adds only:
 - **The PC must be on with the bridge running.** There is no relay in the cloud.
 - **Secret and sudo prompts are answered on the PC.** The phone is told one is waiting but is never
   asked to type a password.
+- **Two trust prompts on Linux.** Until the bridge's own `notify-send` trust prompt is removed, a Linux desktop can show two "Trust this network?" prompts: one from the desktop app and one from the bridge.

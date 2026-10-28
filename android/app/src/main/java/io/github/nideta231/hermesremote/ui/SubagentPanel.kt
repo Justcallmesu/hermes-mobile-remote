@@ -6,6 +6,10 @@ import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -17,6 +21,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -36,15 +41,29 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.repeatOnLifecycle
 import io.github.nideta231.hermesremote.data.Subagent
+import io.github.nideta231.hermesremote.data.SubagentOutput
+import io.github.nideta231.hermesremote.data.SubagentTail
 import kotlinx.coroutines.delay
+
+/** What a subagent row can do: stop the child, follow its output, steer it. */
+internal class SubagentActions(
+    val stop: (String) -> Unit,
+    /** Polls the child's transcript tail into the callback until the caller is cancelled. */
+    val follow: suspend (String, (SubagentTail) -> Unit) -> Unit,
+    /** (id, text, done: queued or not). */
+    val steer: (String, String, (Boolean) -> Unit) -> Unit,
+)
 
 /**
  * The chat's child agents (delegate_task), under the transcript: what each is doing while it
  * runs, how it ended once it stops. Stopping one leaves the chat's own turn running.
  */
 @Composable
-internal fun SubagentPanel(subagents: List<Subagent>, onStop: (String) -> Unit) {
+internal fun SubagentPanel(subagents: List<Subagent>, actions: SubagentActions) {
     var open by rememberSaveable { mutableStateOf(true) }
     var confirm by remember { mutableStateOf<Subagent?>(null) }
     val running = subagents.count { it.running }
@@ -60,21 +79,23 @@ internal fun SubagentPanel(subagents: List<Subagent>, onStop: (String) -> Unit) 
                 Icon(Glyphs.Chevron, if (open) "Hide subagents" else "Show subagents",
                     tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(16.dp).rotate(rot))
             }
-            if (open) subagents.forEach { SubagentRow(it, onStop = { confirm = it }) }
+            if (open) subagents.forEach { SubagentRow(it, actions, onStop = { confirm = it }) }
         }
     }
     confirm?.let { s ->
         AlertDialog(onDismissRequest = { confirm = null },
             title = { Text("Stop this subagent?") },
             text = { Text("\"${s.goal.take(160)}\" stops now. The chat goes on and gets told it was stopped.") },
-            confirmButton = { TextButton(onClick = { onStop(s.id); confirm = null }) { Text("Stop", color = Bad) } },
+            confirmButton = { TextButton(onClick = { actions.stop(s.id); confirm = null }) { Text("Stop", color = Bad) } },
             dismissButton = { TextButton(onClick = { confirm = null }) { Text("Keep running") } })
     }
 }
 
 @Composable
-private fun SubagentRow(s: Subagent, onStop: () -> Unit) {
+private fun SubagentRow(s: Subagent, actions: SubagentActions, onStop: () -> Unit) {
     var expanded by rememberSaveable(s.id) { mutableStateOf(false) }
+    var showOutput by rememberSaveable(s.id) { mutableStateOf(false) }
+    var steering by rememberSaveable(s.id) { mutableStateOf(false) }
     val color by animateColorAsState(when {
         s.running -> Gold
         s.failed -> Bad
@@ -93,11 +114,74 @@ private fun SubagentRow(s: Subagent, onStop: () -> Unit) {
             }
             if (s.running) TextButton(onClick = onStop) { Text("Stop", color = Bad) }
         }
+        if (s.running) Row(Modifier.padding(start = 8.dp)) {
+            TextButton(onClick = { showOutput = !showOutput }) { Text(if (showOutput) "Hide output" else "Output") }
+            if (s.steerable) TextButton(onClick = { steering = !steering }) { Text("Steer") }
+        }
+        if (s.running && showOutput) SubagentOutputBox(s.id, actions.follow)
+        if (s.steerable && steering) SteerField(onSend = { text, done -> actions.steer(s.id, text, done) },
+            onClose = { steering = false })
         if (expanded && s.summary != null) {
             Text(s.summary, fontFamily = FontFamily.Monospace, fontSize = 11.5.sp, lineHeight = 15.sp,
                 color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(start = 16.dp, top = 4.dp, end = 8.dp))
         }
     }
+}
+
+/**
+ * The child's live transcript, newest at the bottom. Polls only while this box is composed (row
+ * open, child running, chat on screen) and the app is in the foreground; leaving any of those
+ * cancels the poll.
+ */
+@Composable
+private fun SubagentOutputBox(id: String, follow: suspend (String, (SubagentTail) -> Unit) -> Unit) {
+    var tail by remember(id) { mutableStateOf<SubagentTail?>(null) }
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
+    LaunchedEffect(id, lifecycle) {
+        lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) { follow(id) { tail = it } }
+    }
+    val scroll = rememberScrollState()
+    // Follow the end as output grows, like a terminal.
+    LaunchedEffect(tail?.text?.length) { scroll.scrollTo(scroll.maxValue) }
+    Surface(color = MaterialTheme.colorScheme.surfaceContainerHighest, shape = RoundedCornerShape(8.dp),
+        modifier = Modifier.fillMaxWidth().padding(start = 16.dp, top = 2.dp, end = 8.dp)) {
+        Column(Modifier.padding(8.dp)) {
+            if (tail?.truncated == true) Text("… earlier output cut off", style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(bottom = 4.dp))
+            Text(tailText(tail), fontFamily = FontFamily.Monospace, fontSize = 11.sp, lineHeight = 14.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.heightIn(max = 240.dp).verticalScroll(scroll).horizontalScroll(rememberScrollState()))
+        }
+    }
+}
+
+/** A one-off instruction for the child; it reads it after its current tool call. */
+@Composable
+private fun SteerField(onSend: (String, (Boolean) -> Unit) -> Unit, onClose: () -> Unit) {
+    var text by rememberSaveable { mutableStateOf("") }
+    var sending by remember { mutableStateOf(false) }
+    Column(Modifier.fillMaxWidth().padding(start = 16.dp, top = 2.dp, end = 8.dp)) {
+        OutlinedTextField(text, { text = it.take(SubagentOutput.MAX_STEER_CHARS) }, modifier = Modifier.fillMaxWidth(),
+            placeholder = { Text("Tell this subagent…") }, minLines = 1, maxLines = 5, shape = RoundedCornerShape(10.dp),
+            textStyle = MaterialTheme.typography.bodyMedium)
+        Row(Modifier.align(Alignment.End)) {
+            TextButton(onClick = onClose) { Text("Cancel") }
+            TextButton(enabled = text.isNotBlank() && !sending, onClick = {
+                sending = true
+                onSend(text) { queued ->
+                    sending = false
+                    if (queued) { text = ""; onClose() }
+                }
+            }) { Text("Send") }
+        }
+    }
+}
+
+/** What the output box shows before and while the child writes its transcript. */
+internal fun tailText(tail: SubagentTail?): String = when {
+    tail == null -> "Loading…"
+    !tail.available -> "No output yet."
+    else -> tail.text.trimEnd().ifEmpty { "No output yet." }
 }
 
 /** Seconds since a running child started, ticking; null once it ended or when unknown. */

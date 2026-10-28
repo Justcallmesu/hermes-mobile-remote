@@ -27,6 +27,7 @@ def _config(tmp_path) -> Path:
         f"audit_log = '{(tmp_path / 'audit.log').as_posix()}'",
         f"hermes_home = '{(tmp_path / 'no-hermes').as_posix()}'",
         f"hermes_python = '{(tmp_path / 'no-hermes' / 'python').as_posix()}'",
+        f"hermes_bin = '{(tmp_path / 'no-hermes' / 'hermes').as_posix()}'",  # never the real launcher
         "lan = false",
     ]) + "\n")
     return path

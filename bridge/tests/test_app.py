@@ -14,7 +14,7 @@ from hermes_remote_bridge.app import create_app
 from hermes_remote_bridge.backend import Backend, BackendUnavailable, ledger_candidates
 from hermes_remote_bridge.config import Config
 from hermes_remote_bridge.devices import DeviceStore
-from hermes_remote_bridge.relay import check_frame
+from hermes_remote_bridge.relay import MAX_STEER_CHARS, check_frame
 from hermes_remote_bridge.tailnet import is_loopback, is_tailnet_ip
 
 PHONE = "100.64.0.10"
@@ -262,11 +262,17 @@ def test_frame_filter():
     for method in ("vault.unlock", "vault.lock", "vault.source.set"):
         ok, err = check_frame(json.dumps({"jsonrpc": "2.0", "id": 9, "method": method}), 1000)
         assert ok is None and json.loads(err)["error"]["code"] == -32601
-    # Subagents: see them and stop one. Steering or spawning them stays on the PC.
-    for method in ("subagent.list", "subagent.interrupt"):
+    # Subagents: see them, stop one, steer one and read its output. Spawning them stays with the agent.
+    for method in ("subagent.list", "subagent.interrupt", "subagent.steer", "subagent.tail"):
         ok, err = check_frame(json.dumps({"jsonrpc": "2.0", "id": 11, "method": method,
-                                          "params": {"session_id": "a", "subagent_id": "s"}}), 1000)
+                                          "params": {"session_id": "a", "subagent_id": "s", "text": "hi"}}), 1000)
         assert ok and err is None
+    # Steering text must be a non-blank string of sane length.
+    for text in (None, "  ", 7, "x" * (MAX_STEER_CHARS + 1)):
+        ok, err = check_frame(json.dumps({"jsonrpc": "2.0", "id": 10, "method": "subagent.steer",
+                                          "params": {"session_id": "a", "subagent_id": "s", "text": text}}),
+                              MAX_STEER_CHARS * 2)
+        assert ok is None and json.loads(err)["error"]["code"] == -32602
     # Background processes of the open chat: see them and stop one. Killing every process stays on the PC.
     for method in ("process.list", "process.kill"):
         ok, err = check_frame(json.dumps({"jsonrpc": "2.0", "id": 12, "method": method,
@@ -274,9 +280,6 @@ def test_frame_filter():
         assert ok and err is None
     for method in ("process.stop", "agents.list"):
         ok, err = check_frame(json.dumps({"jsonrpc": "2.0", "id": 13, "method": method}), 1000)
-        assert ok is None and json.loads(err)["error"]["code"] == -32601
-    for method in ("subagent.steer", "subagent.tail"):
-        ok, err = check_frame(json.dumps({"jsonrpc": "2.0", "id": 10, "method": method}), 1000)
         assert ok is None and json.loads(err)["error"]["code"] == -32601
     # config.set only for the chat's own settings.
     ok, err = check_frame(json.dumps({"jsonrpc": "2.0", "id": 3, "method": "config.set",

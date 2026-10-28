@@ -24,6 +24,25 @@ authoritative history — this file only summarises what is worth knowing before
   the host menu has *Link with...* and *Unlink*.
 - Chats resumed from the phone are now labelled `desktop` in Hermes' live session, like new ones
   already were (they were labelled `tui` before). The stored chat row is not changed.
+- New desktop app, **Hermes Remote**, for Windows and Linux (`desktop/`). It sets up the bridge on first run, shows status, devices, trusted networks and the doctor report, pairs phones with an inline QR code, and has a Settings page.
+- Windows: the app starts and stops the bridge itself, so quitting the app stops the bridge. If the app crashes, nothing restarts it; start Hermes Remote from the Start menu. Start at logon is a "Hermes Remote" entry under Run (visible in Task Manager > Startup).
+- Windows: the tray icon opens a flyout at the taskbar corner (left click); right click gives Open, Start/Stop bridge, Pair a device and Quit. Installer is per user, needs no admin, and is unsigned, so SmartScreen shows "More info > Run anyway".
+- Linux: AppImage and .deb builds. The app opens a normal window from the launcher and adds a tray icon only where the desktop has a StatusNotifier host (KDE; GNOME needs the AppIndicator extension).
+- Linux: a run mode setting. *Always on* (the default) runs the bridge as the systemd user service `hermes-remote-bridge.service`, so it keeps running after the app closes. *Only while the app is open* stops the bridge with the app and has no systemd sandboxing. *Start at login* and *Keep running after logout* (`loginctl enable-linger`) are in the same page.
+- First run shows what it will change, saves that list to `INSTALLED.txt` in the config directory, and installs the bridge into the data directory (`~/.local/share/hermes-remote` on Linux, `%LOCALAPPDATA%\hermes-remote` on Windows). The config directory is unchanged and Hermes' own config and `.env` are never touched.
+- Upgrading from a Windows script install: setup stops the old PowerShell tray and bridge, deletes the "Hermes Mobile Remote" Scheduled Task and turns autostart on. Paired devices and trusted networks stay. On Linux the app takes over the existing service unit of the same name.
+- Removed: `install.ps1`, `install.cmd`, `tray.cmd`, `pair.cmd` and the PowerShell scripts under `bridge/windows/`. The bridge no longer starts PowerShell, and Windows network and firewall checks call the Windows APIs directly. `install.sh` stays for Linux source installs.
+- Windows: `hermes-remote-bridge firewall` asks for elevation once (one UAC prompt); cancelling it changes nothing. The rule is still "Hermes Mobile Remote", for the Private network profile only.
+- Windows: running `hermes-remote-bridge` with no command now says to pair from the Hermes Remote app.
+- Windows: the phone's Terminal opens `pwsh`, then `powershell`, then `cmd`. Set `terminal_shell` in config.toml to use another shell.
+- Windows uninstall (Settings > Apps) stops the bridge, removes autostart, the old task and the firewall rule (one UAC prompt). Config and devices are kept unless "Delete the application data" is ticked.
+- Updates: AppImage and Windows installer builds update from inside the app ("Restart to update" banner). `.deb` and dev builds show "New version X available" with a link to the release page. Desktop releases are tagged `desktop-v<version>`; the Android APK keeps `v<version>`.
+- Bridge: new `/v1/local/*` control API for the desktop app. It answers only a loopback peer that sends the local secret; the phone's API is unchanged.
+- Bridge: `hermes-remote-bridge supervise` restarts the bridge after a network change, backs off after crashes and stops instead of retrying when the port is already in use. Its log is `bridge.log` in the state directory, rotated at 2 MB.
+- Known limit: on Linux a click on the "Trust this network?" notification cannot be detected; the window opens when the notification appears.
+- Bridge: when no Hermes is running, it now starts Hermes through the `hermes` launcher if Hermes' venv is not under `hermes-agent/venv` (current Hermes installers). Before, the phone got "Hermes is not installed" and the chat socket was refused.
+- Windows: the phone's Terminal works (it closed itself as soon as it opened).
+- Windows: the phone's PC screen loads in well under a second (it took 9-16 s, so the app gave up), and "System Idle Process" is no longer listed as the top CPU user.
 
 ## v1.25.1
 

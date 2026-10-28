@@ -11,15 +11,16 @@ import socket
 import sys
 import threading
 import time
-import urllib.parse
 from datetime import datetime
 from pathlib import Path
 
 from .config import Config
 from .devices import DeviceStore
 from .host import host
+from .local_api import devices_doc, pairing_payload, pairing_uri, qr_png, trust_doc
 from .network import TrustStore, current_network, serving_lan_ips
 from .tailnet import sync_tailscale_ips
+from .supervise import EXIT_PORT_CONFLICT
 from .tls import cert_pin, ensure_identity
 
 
@@ -79,9 +80,12 @@ def _bind(host: str, port: int) -> socket.socket:
     a clear message for the common case (a bridge is already running) instead of a traceback.
     """
     if _port_in_use(host, port):
-        raise SystemExit(
-            f"Port {port} is already in use on {host}; another bridge is probably running. "
-            f"Stop it first (the tray: Quit Hermes Remote), or set a different port in config.toml.")
+        # Exit 76 (not the generic SystemExit(message) = 1) so the supervisor can tell a port
+        # conflict from a crash and stop instead of retrying.
+        print(f"Port {port} is already in use on {host}; another bridge is probably running. "
+              f"Stop it first (the tray: Quit Hermes Remote), or set a different port in config.toml.",
+              file=sys.stderr)
+        raise SystemExit(EXIT_PORT_CONFLICT)
     family = socket.AF_INET6 if ":" in host else socket.AF_INET
     sock = socket.socket(family, socket.SOCK_STREAM)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -125,6 +129,9 @@ def cmd_serve(cfg: Config, _: argparse.Namespace) -> None:
                  "trusted, serving the local network" if lan else
                  "not trusted, local network off" if net else "offline")
 
+    if cfg.metrics:
+        from .metrics import ensure_metrics_token
+        ensure_metrics_token(cfg.metrics_token_file)
     app = create_app(cfg, owner_login=owner, trust=trust)
     servers = [uvicorn.Server(uvicorn.Config(app, access_log=False, log_level="info",
                                              timeout_graceful_shutdown=5, proxy_headers=False))]
@@ -146,7 +153,7 @@ def cmd_serve(cfg: Config, _: argparse.Namespace) -> None:
     mdns = _advertise(cfg, pin, sorted(lan)) if lan and cfg.mdns else None
     if lan and cfg.mdns and mdns is None:
         log.warning("mDNS unavailable on this PC; the app can't follow an IP change by itself")
-    if cfg.lan and net and not lan:
+    if cfg.lan and net and not lan and not os.environ.get(NO_PROMPT_ENV):
         _ask_to_trust(trust, net)
     try:
         changed = asyncio.run(_serve_until_network_changes(servers, sockets, cfg, trust,
@@ -158,6 +165,18 @@ def cmd_serve(cfg: Config, _: argparse.Namespace) -> None:
         # Non-zero so the service manager (systemd Restart=always, a Scheduled Task's restart
         # policy) brings us back up on the new addresses.
         raise SystemExit(75)
+
+
+def cmd_supervise(cfg: Config, args: argparse.Namespace) -> None:
+    import signal
+
+    from .supervise import Supervisor, popen_launcher
+
+    sup = Supervisor(popen_launcher(args.config), host().state_dir() / "bridge.log")
+    for name in ("SIGINT", "SIGTERM"):
+        signal.signal(getattr(signal, name), lambda *_: sup.stop())
+    sup.watch_stdin(sys.stdin)
+    sys.exit(sup.run())
 
 
 def _listener_closed(sockets) -> bool:
@@ -216,6 +235,10 @@ def _advertise(cfg: Config, pin: str | None, lan_ips: list[str]):
     lists the addresses we actually serve, so a resolver never hands the phone a Docker bridge.
     """
     return host().advertise_mdns(cfg.port, pin, lan_ips)
+
+
+# Set by the desktop app (its unit and its child): the app asks about new networks itself (D44).
+NO_PROMPT_ENV = "HERMES_REMOTE_NO_TRUST_PROMPT"
 
 
 def _ask_to_trust(trust: TrustStore, net) -> None:
@@ -313,25 +336,17 @@ def cmd_pair(cfg: Config, args: argparse.Namespace) -> None:
     store = DeviceStore(cfg.devices_file)
     device, token = store.pair(args.name, replace=getattr(args, "replace", False))
     urls = [args.url] if args.url else _bridge_urls(cfg)
-    # v2: LAN entries are HTTPS and `pin` is the certificate the app must see before it sends
-    # the token there. Tailscale entries stay HTTP inside WireGuard.
-    payload = {"v": 2, "url": urls[0], "device": device.name, "token": token,
-               "pin": cert_pin(ensure_identity(cfg.tls_dir)[0])}
-    if len(urls) > 1:
-        payload["alt"] = ",".join(urls[1:])
+    payload = pairing_payload(device, token, urls, cfg.tls_dir)
     if args.token_file:  # non-interactive use; never print the token
         fd = os.open(args.token_file, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
         with os.fdopen(fd, "w") as fh:
             json.dump(payload, fh)
         print(f"Paired {device.name} ({device.id}); credentials written to {args.token_file}")
         return
-    import segno
-
-    uri = "hermesremote://pair?" + urllib.parse.urlencode(payload)
     if args.qr_png:
         fd = os.open(args.qr_png, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
         with os.fdopen(fd, "wb") as fh:
-            segno.make(uri, error="m").save(fh, kind="png", scale=8, border=3, dark="#000", light="#fff")
+            fh.write(qr_png(pairing_uri(payload)))
         print(f"Paired {device.name} ({device.id}); QR written to {args.qr_png} (delete it after scanning)")
         return
     print(f"Paired device {device.name!r} (id {device.id}).")
@@ -398,12 +413,7 @@ def cmd_trust(cfg: Config, args: argparse.Namespace) -> None:
         current = current_network()
         rows = trust.list()
         if getattr(args, "json", False):
-            print(json.dumps({
-                "current": ({"id": current.id, "name": current.name, "trusted": current.id in rows,
-                             "interface": current.interface} if current else None),
-                "trusted": [{"id": net_id, "name": info.get("name", "?"), "since": info.get("since")}
-                            for net_id, info in rows.items()],
-            }, indent=2))
+            print(json.dumps(trust_doc(trust, current), indent=2))
             return
         if not rows:
             print("No trusted networks.")
@@ -425,11 +435,10 @@ def cmd_trust(cfg: Config, args: argparse.Namespace) -> None:
 
 def cmd_devices(cfg: Config, args: argparse.Namespace) -> None:
     fmt = lambda ts: datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M") if ts else "-"
-    rows = DeviceStore(cfg.devices_file).list()
+    store = DeviceStore(cfg.devices_file)
+    rows = store.list()
     if getattr(args, "json", False):
-        print(json.dumps({"devices": [
-            {"id": d.id, "name": d.name, "active": d.active, "created_at": d.created_at,
-             "last_seen_at": d.last_seen_at, "revoked_at": d.revoked_at} for d in rows]}, indent=2))
+        print(json.dumps(devices_doc(store), indent=2))
         return
     if not rows:
         print("No paired devices.")
@@ -446,23 +455,69 @@ def cmd_doctor(cfg: Config, args: argparse.Namespace) -> None:
     sys.exit(doctor.run(cfg))
 
 
+def _fetch_metrics(cfg: Config) -> dict:
+    """The running bridge's metrics, over loopback with the local metrics token."""
+    import urllib.error
+    import urllib.request
+
+    from .metrics import read_metrics_token
+
+    if not cfg.metrics:
+        raise SystemExit("Metrics are off (metrics = false in config.toml).")
+    token = read_metrics_token(cfg.metrics_token_file)
+    if token is None:
+        raise SystemExit(f"No metrics token at {cfg.metrics_token_file}; start the bridge once to create it.")
+    loopback = next((h for h in cfg.listen if h != "tailscale" and ipaddress.ip_address(h).is_loopback), None)
+    if loopback is None:
+        raise SystemExit("The bridge does not listen on loopback (see listen in config.toml).")
+    host_part = f"[{loopback}]" if ":" in loopback else loopback
+    req = urllib.request.Request(f"http://{host_part}:{cfg.port}/metrics?format=json",
+                                 headers={"Authorization": f"Bearer {token}"})
+    try:
+        with urllib.request.urlopen(req, timeout=5) as r:
+            return json.loads(r.read())
+    except urllib.error.HTTPError as exc:
+        raise SystemExit(f"The bridge refused the metrics request (HTTP {exc.code}).")
+    except OSError as exc:
+        raise SystemExit(f"The bridge is not answering on {loopback}:{cfg.port} ({exc}).")
+
+
+def cmd_metrics(cfg: Config, args: argparse.Namespace) -> None:
+    from .metrics import summarize
+
+    data = _fetch_metrics(cfg)
+    if getattr(args, "json", False):
+        print(json.dumps(data, indent=2))
+        return
+    print(summarize(data))
+
+
 def cmd_firewall(cfg: Config, args: argparse.Namespace) -> None:
     from . import firewall
-    s = firewall.state(cfg.port)
+    port = args.port or cfg.port
+    if args.elevated:  # the UAC-relaunched process: write (or delete) the rule, report by exit code
+        h = host()
+        ok = h.firewall_remove() if args.action == "remove" else h.firewall_add(port)
+        sys.exit(0 if ok else 1)
+    if args.action == "remove":
+        print("Removed." if host().elevate_cli(["firewall", "remove", "--port", str(port), "--elevated"])
+              else "Not removed (cancelled or failed).")
+        return
+    s = firewall.state(port)
     if s.kind == "none" or not s.active:
-        print(f"No active firewall; port {cfg.port} is reachable.")
+        print(f"No active firewall; port {port} is reachable.")
         return
     if s.port_open:
-        print(f"{s.kind}: port {cfg.port} is already allowed from private networks.")
+        print(f"{s.kind}: port {port} is already allowed from private networks.")
         return
-    if s.kind == "unknown" or not firewall.open_commands(s.kind, cfg.port):
-        print(f"Can't manage this firewall automatically. Allow TCP {cfg.port} from your local network yourself.")
+    if s.kind == "unknown" or not firewall.open_commands(s.kind, port):
+        print(f"Can't manage this firewall automatically. Allow TCP {port} from your local network yourself.")
         return
     if args.if_needed and s.port_open is None and not sys.stdin.isatty():
         return
     print(f"{s.kind} is active. To let your phone reach the bridge over Wi-Fi, this will be added")
     print("(private networks only; the bridge only listens on Wi-Fi you trusted):")
-    for c in firewall.open_commands(s.kind, cfg.port):
+    for c in firewall.open_commands(s.kind, port):
         print("  " + " ".join(c))
     if not args.yes:
         try:
@@ -471,7 +526,7 @@ def cmd_firewall(cfg: Config, args: argparse.Namespace) -> None:
                 return
         except EOFError:
             return
-    print("Done." if firewall.open_port(s.kind, cfg.port) else "Not applied (cancelled or failed).")
+    print("Done." if firewall.open_port(s.kind, port) else "Not applied (cancelled or failed).")
 
 
 def _no_command_help(parser: argparse.ArgumentParser) -> None:
@@ -487,7 +542,7 @@ def _no_command_help(parser: argparse.ArgumentParser) -> None:
     print("  hermes-remote-bridge devices        list paired phones")
     print("  hermes-remote-bridge trust          trust the Wi-Fi network you are on now")
     if host().name == "windows":
-        print("\nEasiest: double-click  pair.cmd  in the project folder.")
+        print("\nEasiest: open Hermes Remote from the Start menu and choose Pair a device.")
     print("\nAll commands: hermes-remote-bridge --help")
     if host().launched_by_double_click():
         input("\nPress Enter to close this window...")
@@ -498,6 +553,7 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--config", type=Path, help="config.toml (default ~/.config/hermes-remote/config.toml)")
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("serve", help="Run the bridge")
+    sub.add_parser("supervise", help="Run the bridge and restart it if it stops")
     p = sub.add_parser("pair", help="Pair a new device and show its QR code")
     p.add_argument("name", help="Device name, e.g. 'phone' or 'tablet'")
     p.add_argument("--url", help="Override the bridge URL put in the QR code")
@@ -515,7 +571,13 @@ def main(argv: list[str] | None = None) -> None:
     t.add_argument("--json", action="store_true", help="Machine-readable output, with --list")
     doc = sub.add_parser("doctor", help="Check why the phone can't connect")
     doc.add_argument("--json", action="store_true", help="Machine-readable checks (for the tray app)")
+    m = sub.add_parser("metrics", help="Show what the running bridge has done since it started")
+    m.add_argument("--json", action="store_true", help="Every metric as JSON")
     f = sub.add_parser("firewall", help="Allow the bridge port from the local network (asks first)")
+    f.add_argument("action", nargs="?", choices=("add", "remove"), default="add",
+                   help="add (default) or remove the Windows rule")
+    f.add_argument("--port", type=int, help="Port (default: the configured one)")
+    f.add_argument("--elevated", action="store_true", help=argparse.SUPPRESS)
     f.add_argument("--yes", action="store_true", help="Don't ask for confirmation")
     f.add_argument("--if-needed", action="store_true", help=argparse.SUPPRESS)
     if not (argv if argv is not None else sys.argv[1:]):
@@ -524,7 +586,8 @@ def main(argv: list[str] | None = None) -> None:
     args = parser.parse_args(argv)
     cfg = Config.load(args.config)
     handler = {"serve": cmd_serve, "pair": cmd_pair, "revoke": cmd_revoke, "devices": cmd_devices,
-               "trust": cmd_trust, "doctor": cmd_doctor, "firewall": cmd_firewall}[args.command]
+               "trust": cmd_trust, "doctor": cmd_doctor, "firewall": cmd_firewall,
+               "supervise": cmd_supervise, "metrics": cmd_metrics}[args.command]
     try:
         handler(cfg, args)
     except ValueError as exc:

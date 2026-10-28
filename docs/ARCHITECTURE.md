@@ -1,6 +1,6 @@
 # Architecture
 
-Three pieces, with one rule: on a bridge host the phone never holds a credential that can reach Hermes
+Four pieces, with one rule: on a bridge host the phone never holds a credential that can reach Hermes
 directly. Gateway hosts are the exception; see [Direct gateway hosts](#direct-gateway-hosts).
 
 ```
@@ -18,6 +18,7 @@ directly. Gateway hosts are the exception; see [Direct gateway hosts](#direct-ga
 | App | `android/` | UI, one device token, TLS pinning, reconnect, rendering Hermes' events |
 | Bridge | `bridge/` | Device auth, network policy, finding the backend, relaying the socket |
 | Hermes | your install | The agent, the tools, the model calls, the session store, the live turns |
+| Desktop app | `desktop/` | Tray or window on Windows and Linux. Starts and stops the bridge, runs first-run setup, handles pairing, devices, trusted networks and doctor. Reaches the bridge only through `/v1/local/*` |
 
 ## Why a bridge at all
 
@@ -70,6 +71,12 @@ Every request passes three gates, in this order:
 Successful requests are appended to an audit log with device, path, status and duration — never
 tokens or prompts.
 
+### Running it: `supervise`
+
+`hermes-remote-bridge supervise` runs `serve` and keeps it up. A network change restarts it after 2 s. A crash restarts it with a back-off that grows when failures repeat, up to 60 s. A port conflict stops the supervisor instead of retrying. It stops, together with its child, on SIGTERM or Ctrl+C, or when the desktop app closes its stdin. Its log is `bridge.log` in the state directory, rotated at 2 MB.
+
+The desktop app decides how the bridge runs. On Linux, *Always on* runs it as the systemd user service `hermes-remote-bridge.service`. *Only while the app is open* stops that service and runs `supervise` as a child of the app. On Windows the app runs `supervise` inside a Job Object, so the bridge ends with the app.
+
 ### Finding Hermes (`backend.py`)
 
 The bridge reads Hermes' spawn ledger (`~/.hermes/spawn-ledger.json`), the same file the desktop
@@ -85,6 +92,10 @@ the phone just enough to enforce policy: a method allowlist (what the desktop's 
 `config.set` limited to the chat's model, reasoning and fast mode, replies to the agent's questions
 only by their `srq-` id, a frame size cap and a per-connection frame rate. Frames from Hermes pass
 through untouched. Each connection is audited on open and close with per-method counts.
+
+### The local control API
+
+`/v1/local/*` exists for the desktop app. It answers only a loopback peer that sends the local secret in `X-Hermes-Local`, in place of the device token. It is never in the relay's allowlist and has no device rate limit. Its routes cover status, devices, pairing, revoking, trusted networks and doctor. The routes are listed in [BRIDGE_API.md](BRIDGE_API.md#local-control-api-desktop-app), and the secret is covered in [SECURITY.md](SECURITY.md#guarantees).
 
 ## Direct gateway hosts
 
@@ -103,6 +114,12 @@ Here the phone does hold a credential for the gateway, so the rule above does no
 gateway's login and the network are the boundary; no bridge sits in front of it. The Kotlin pieces are
 `data/GatewaySignIn.kt`, `data/GatewayAuth.kt`, `data/GatewayRest.kt` and `data/GatewayCredentialStore.kt`.
 Security trade-offs are in [SECURITY.md](SECURITY.md#gateway-hosts).
+
+## The desktop app
+
+Hermes Remote is a Tauri v2 app (Rust, with Vue 3 and Vite) in `desktop/`, for Windows and Linux. On Windows it lives in the tray and opens a flyout. On Linux it is a normal window with an optional tray icon. It starts and stops the bridge, runs first-run setup, and manages pairing, devices, trusted networks and doctor. It reaches the running bridge through the [local control API](BRIDGE_API.md#local-control-api-desktop-app). When the bridge is not running, it shows saved devices and doctor output from the CLI instead.
+
+The Rust side is in `desktop/src-tauri/src/`, and the Vue screens are in `desktop/src/`. Which systems it runs on and how far each is verified is in [PLATFORMS.md](PLATFORMS.md).
 
 ## The app
 
@@ -149,6 +166,8 @@ identity, Tailscale socket, firewall, mDNS, the trust prompt) was written agains
 sit behind one interface in `bridge/hermes_remote_bridge/host/`, with a module per operating
 system. The rest of the code asks the host a question ("which interface has the default route?")
 and never checks the platform, so the security model above is the same code on every OS.
+
+The Windows host reads routes, the router, the connection profile and the firewall state through Windows APIs (ctypes and comtypes). It starts no PowerShell.
 
 Which operating systems exist, how far each is verified, and how to add one:
 [PLATFORMS.md](PLATFORMS.md).

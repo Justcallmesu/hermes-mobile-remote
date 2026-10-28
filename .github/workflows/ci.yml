@@ -30,22 +30,6 @@ jobs:
       - uses: astral-sh/setup-uv@v10.2.0
       - run: uv sync
       - run: uv run pytest -q
-      - name: Scripts parse under Windows PowerShell 5.1 (what a stock PC runs)
-        shell: powershell
-        working-directory: .
-        run: |
-          $PSVersionTable.PSVersion
-          foreach ($f in 'install.ps1', 'bridge/windows/run-bridge.ps1', 'bridge/windows/tray.ps1', 'bridge/windows/supervise.ps1') {
-            $errors = $null
-            [void][System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path $f), [ref]$null, [ref]$errors)
-            if ($errors) { $errors | ForEach-Object { Write-Error $_.Message }; exit 1 }
-          }
-          # 5.1 reads a script with no BOM as the ANSI code page; any non-ASCII byte can corrupt it.
-          foreach ($f in 'install.ps1', 'install.cmd', 'pair.cmd', 'bridge/windows/run-bridge.ps1',
-                            'bridge/windows/tray.ps1', 'bridge/windows/supervise.ps1') {
-            $bytes = [System.IO.File]::ReadAllBytes((Resolve-Path $f))
-            if ($bytes | Where-Object { $_ -gt 127 }) { Write-Error "$f contains non-ASCII bytes"; exit 1 }
-          }
       - name: The bridge has a machine-readable interface for the tray
         shell: pwsh
         run: |
@@ -58,115 +42,6 @@ jobs:
           $t = uv run hermes-remote-bridge trust --list --json | ConvertFrom-Json
           if ($null -eq $t.trusted) { throw 'trust --list --json has no trusted key' }
           'devices/trust JSON keys present'
-      - name: The tray starts the bridge and stops it again
-        shell: powershell
-        # Repo-root paths below; the job's default working directory is bridge/.
-        working-directory: .
-        run: |
-          $ErrorActionPreference = 'Continue'
-          $tray = (Resolve-Path 'bridge/windows/tray.ps1').Path
-          $bin  = (Resolve-Path 'bridge/.venv/Scripts/hermes-remote-bridge.exe').Path
-          $log  = Join-Path $env:RUNNER_TEMP 'tray-bridge.log'
-          $stdout = Join-Path $env:RUNNER_TEMP 'tray-stdout.log'
-          # The installer writes a minimal config.toml (lan = true) before it starts anything,
-          # and a runner has never run it. Without that file a PC with no Tailscale is a fatal
-          # misconfiguration for the bridge: it retries Tailscale for ~60 s and then exits with
-          # "Could not determine the Tailscale owner" instead of serving.
-          $confDir = Join-Path $env:LOCALAPPDATA 'hermes-remote\config'
-          New-Item -ItemType Directory -Force -Path $confDir | Out-Null
-          $confFile = Join-Path $confDir 'config.toml'
-          if (-not (Test-Path $confFile)) { Set-Content -Path $confFile -Encoding ASCII -Value 'lan = true' }
-          # A healthy tray prints nothing and then blocks in Application.Run(), so it cannot be
-          # run in the foreground here: start it, prove it came up, and stop it again.
-          $p = Start-Process powershell.exe -PassThru -WindowStyle Hidden `
-            -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-WindowStyle','Hidden',
-                          '-File', $tray, '-Bin', $bin, '-LogFile', $log `
-            -RedirectStandardOutput $stdout -RedirectStandardError "$stdout.err"
-          $up = $false
-          for ($i = 0; $i -lt 30 -and -not $up; $i++) {
-            Start-Sleep -Seconds 1
-            try { $null = Invoke-WebRequest 'http://127.0.0.1:8650/v1/me' -UseBasicParsing -TimeoutSec 2 }
-            catch { if ($_.Exception.Response) { $up = $true } }
-          }
-          if (-not $up) {
-            Get-Content "$stdout.err" -ErrorAction SilentlyContinue | Select-Object -First 20
-            # The log's tail: a restart loop appends, and the last failure is the live one.
-            Get-Content $log -ErrorAction SilentlyContinue | Select-Object -Last 20
-            throw 'the tray did not bring the bridge up'
-          }
-          "tray pid $($p.Id); bridge answered on 8650 after ${i}s"
-          # It must also still be alive a minute later. A tray that dies on its first health poll
-          # leaves the bridge orphaned and the port held, which reads as "installed and working"
-          # right up until the next logon. The crash was a PowerShell script block on a
-          # thread-pool thread (ScriptBlock.GetContextFromTLS), so check for those events too.
-          Start-Sleep -Seconds 45
-          if ($p.HasExited) { throw "the tray exited on its own (exit code $($p.ExitCode))" }
-          $crashes = @(Get-EventLog -LogName Application -Newest 25 -ErrorAction SilentlyContinue |
-              Where-Object { $_.TimeGenerated -gt (Get-Date).AddMinutes(-2) -and $_.Message -like '*GetContextFromTLS*' })
-          if ($crashes) { throw "the tray crashed its PowerShell host $($crashes.Count) time(s)" }
-          # Quit the tray: the bridge must go with it, and the port must be released.
-          & taskkill.exe /PID $p.Id /T /F 2>&1 | Out-Null
-          Start-Sleep -Seconds 3
-          if (Get-Process -Name hermes-remote-bridge -ErrorAction SilentlyContinue) { throw 'bridge outlived the tray' }
-          $err = Get-Content "$stdout.err" -ErrorAction SilentlyContinue | Out-String
-          $out = Get-Content $stdout -ErrorAction SilentlyContinue | Out-String
-          if ($out.Trim()) { Write-Host "tray stdout: $out"; throw 'a healthy tray prints nothing' }
-          if ($err -match 'Exception|Traceback') { Write-Host $err; throw 'the tray logged an exception' }
-          'tray started the bridge, and stopped it on exit'
-          # Every check above passed, so say so explicitly. taskkill returns 128 when a descendant
-          # exits while the tree is being walked (a health poll's doctor.exe finishing at the wrong
-          # moment), and PowerShell 5.1 lets that stray code become the step's exit code, failing a
-          # step where nothing is wrong.
-          exit 0
-      - name: The supervisor is shared, not duplicated
-        shell: powershell
-        # Reads scripts by repo-root paths; see the note on the tray step above.
-        working-directory: .
-        run: |
-          # The policy lives once, in supervise.ps1, and both entry points reach it through
-          # run-bridge.ps1. A copy pasted into the tray is the drift we are avoiding.
-          $supervise = Get-Content 'bridge/windows/supervise.ps1' -Raw
-          if ($supervise -notmatch 'function Invoke-BridgeSupervisor') { throw 'supervise.ps1 defines no entry point' }
-          $runner = Get-Content 'bridge/windows/run-bridge.ps1' -Raw
-          if ($runner -notmatch 'Invoke-BridgeSupervisor') { throw 'run-bridge.ps1 does not call the shared supervisor' }
-          if ($runner -match 'quickFailures') { throw 'run-bridge.ps1 reimplements the backoff' }
-          $tray = Get-Content 'bridge/windows/tray.ps1' -Raw
-          if ($tray -match 'quickFailures') { throw 'tray.ps1 reimplements the backoff; keep it in supervise.ps1' }
-          # The tray supervises through run-bridge.ps1, not its own copy of the loop.
-          if ($tray -notmatch 'run-bridge\.ps1') { throw 'tray.ps1 does not start run-bridge.ps1' }
-          'supervisor policy lives in exactly one file'
-      - name: Menu handlers capture their own loop variable
-        shell: powershell
-        working-directory: .
-        run: |
-          # A bare { $name } inside a foreach shares one variable across every closure, so all
-          # the "revoke" and "remove" items acted on the LAST entry in the list: clicking
-          # "phone - revoke" revoked whichever device happened to be last, and the user's phone
-          # stayed paired. Every closure built in a loop must end in .GetNewClosure().
-          $seen = @()
-          foreach ($device in @('alpha', 'beta', 'gamma')) {
-            $name = $device
-            $seen += { $name }
-          }
-          $bare = @(($seen | ForEach-Object { & $_ }))
-          Write-Output "bare closures capture: $($bare -join ', ')"
-          if ($bare[0] -ne 'gamma') { throw 'expected bare closures to share the last value; this check needs rethinking' }
-
-          $fixed = @()
-          foreach ($device in @('alpha', 'beta', 'gamma')) {
-            $name = $device
-            $fixed += { $name }.GetNewClosure()
-          }
-          $values = @(($fixed | ForEach-Object { & $_ }))
-          Write-Output "GetNewClosure captures: $($values -join ', ')"
-          if (($values -join ',') -ne 'alpha,beta,gamma') { throw 'GetNewClosure did not capture per iteration' }
-
-          # And the tray must actually use it: one per list that builds per-item handlers.
-          $tray = Get-Content 'bridge/windows/tray.ps1' -Raw
-          $closures = ([regex]::Matches($tray, 'GetNewClosure')).Count
-          Write-Output "tray.ps1 uses GetNewClosure in $closures place(s)"
-          if ($closures -lt 2) { throw 'tray.ps1 builds loop handlers without GetNewClosure' }
-          'loop handlers capture per item'
       - name: Host probes answer on real Windows
         shell: pwsh
         run: |
@@ -192,110 +67,162 @@ jobs:
           Write-Host $out
           if ($out -match 'Traceback|error:') { exit 1 }
           exit 0
-      - name: Fresh PC, as a friend would run it (PowerShell 5.1, strict policy, no uv, spaces in the path)
-        shell: powershell
+      - name: Native host answers match the Windows cmdlets (trusted networks must stay trusted)
+        shell: pwsh
+        run: |
+          # The bridge used to ask PowerShell; it now asks Win32/COM (D9). The identity of a network
+          # (route, router MAC, connection profile id) must come out the same, or a network the user
+          # trusted before the upgrade would stop being trusted. pwsh here is only the test harness.
+          $r = Get-NetRoute -DestinationPrefix '0.0.0.0/0' -AddressFamily IPv4 | ForEach-Object {
+            $i = Get-NetIPInterface -InterfaceIndex $_.InterfaceIndex -AddressFamily IPv4
+            [pscustomobject]@{ Alias = $_.InterfaceAlias; Gateway = $_.NextHop; Metric = [int]$_.RouteMetric + [int]$i.InterfaceMetric }
+          } | Where-Object { $_.Gateway -ne '0.0.0.0' } | Sort-Object Metric | Select-Object -First 1
+          $mac = (Get-NetNeighbor -IPAddress $r.Gateway -AddressFamily IPv4 -ErrorAction SilentlyContinue |
+            Where-Object { $_.State -notin 'Unreachable','Incomplete' } | Select-Object -First 1).LinkLayerAddress
+          $prof = Get-NetConnectionProfile -InterfaceAlias $r.Alias -ErrorAction SilentlyContinue | Select-Object -First 1
+          $want = @{ alias = $r.Alias; gateway = $r.Gateway; mac = "$mac".ToLower().Replace('-', ':'); profile = "$($prof.InstanceID)" }
+          $want | ConvertTo-Json | Set-Content -Encoding utf8 "$env:RUNNER_TEMP/want.json"
+          uv run python -c "
+          import json, os, time
+          from hermes_remote_bridge.host import host
+          want = json.load(open(os.path.join(os.environ['RUNNER_TEMP'], 'want.json'), encoding='utf-8-sig'))
+          h = host()
+          t = time.perf_counter(); route = h.default_route(); took = time.perf_counter() - t
+          print('cmdlets', want); print('native ', route, h.gateway_mac(route[1]) if route else None,
+                h.network_profile(route[0]) if route else None, f'route in {took*1000:.0f} ms')
+          assert route == (want['alias'], want['gateway']), route
+          if want['mac']: assert h.gateway_mac(route[1]) == want['mac'], h.gateway_mac(route[1])
+          if want['profile']:
+              prof = h.network_profile(route[0]); assert prof and prof[0] == want['profile'], prof
+          assert took < 0.5, f'default_route took {took:.2f} s (PowerShell took ~0.8 s)'
+          "
+      - name: supervise stops when its parent closes stdin, and on a port conflict
+        shell: pwsh
+        run: |
+          $confDir = Join-Path $env:LOCALAPPDATA 'hermes-remote\config'
+          New-Item -ItemType Directory -Force -Path $confDir | Out-Null
+          Set-Content -Path (Join-Path $confDir 'config.toml') -Encoding ASCII -Value "lan = true`nport = 18650"
+          $exe = (Resolve-Path '.venv/Scripts/hermes-remote-bridge.exe').Path
+          $psi = [System.Diagnostics.ProcessStartInfo]::new($exe, 'supervise')
+          $psi.RedirectStandardInput = $true; $psi.UseShellExecute = $false
+          $p = [System.Diagnostics.Process]::Start($psi)
+          $up = $false
+          for ($i = 0; $i -lt 60 -and -not $up; $i++) {
+            Start-Sleep -Seconds 1
+            try { $null = Invoke-WebRequest 'http://127.0.0.1:18650/v1/me' -UseBasicParsing -TimeoutSec 2 }
+            catch { if ($_.Exception.Response) { $up = $true } }
+          }
+          if (-not $up) { throw 'supervise did not bring the bridge up' }
+          # A second supervisor must stop on the port conflict (exit 76), not retry forever.
+          # Its stdin stays open (an empty file would read as "parent closed" and stop it for the wrong reason).
+          $psi2 = [System.Diagnostics.ProcessStartInfo]::new($exe, 'supervise')
+          $psi2.RedirectStandardInput = $true; $psi2.UseShellExecute = $false
+          $second = [System.Diagnostics.Process]::Start($psi2)
+          if (-not $second.WaitForExit(60000)) { $second.Kill(); throw 'second supervise kept retrying' }
+          if ($second.ExitCode -ne 76) { throw "second supervise exited $($second.ExitCode), want 76" }
+          # Closing stdin is how the desktop app says goodbye.
+          $p.StandardInput.Close()
+          if (-not $p.WaitForExit(30000)) { $p.Kill(); throw 'supervise ignored stdin closing' }
+          Start-Sleep -Seconds 2
+          if (Get-NetTCPConnection -LocalPort 18650 -State Listen -ErrorAction SilentlyContinue) { throw 'port still held' }
+          'supervise: up, conflict exit 76, stops on stdin close'
+          Remove-Item (Join-Path $confDir 'config.toml')
+      - name: No PowerShell in the plumbing (D1)
+        shell: bash
+        working-directory: .
+        run: |
+          if git ls-files '*.ps1' '*.cmd' | grep .; then echo "::error::scripts left"; exit 1; fi
+          # Only the phone Terminal may start a PowerShell (the user's shell, D13); migration.rs only
+          # recognises the old tray's command line. Comments and docstrings are fine.
+          hits=$(git grep -n -i -e powershell -e pwsh -- bridge/hermes_remote_bridge desktop/src-tauri/src \
+                 | grep -v -e 'terminal\.py:' -e 'migration\.rs:' \
+                 | grep -v -E '^[^:]+:[0-9]+:[[:space:]]*(#|//|"""|[A-Za-z(`])' || true)
+          if [ -n "$hits" ]; then echo "$hits"; echo "::error::PowerShell spawned outside the terminal"; exit 1; fi
+
+  # The desktop app (Tauri: Rust + Vue): Rust unit tests, Vue unit tests and a web build on both OSes,
+  # then a debug bundle so a broken bundle config shows up before a release.
+  desktop:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-latest]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: desktop
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+      - name: Linux build dependencies (WebKitGTK 4.1, AppIndicator)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2.9.3
+        with:
+          workspaces: desktop/src-tauri
+      - uses: actions/setup-node@v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+      # The Windows install check below makes the bridge venv with uv (first-run setup would download it).
+      - uses: astral-sh/setup-uv@v10.2.0
+        if: runner.os == 'Windows'
+      - run: npm ci --no-audit --no-fund
+      - run: bash test.sh
+      - name: Bundles build (unsigned, no updater artifacts)
+        run: npx tauri build --debug --bundles ${{ runner.os == 'Linux' && 'appimage,deb' || 'nsis' }} --config '{"bundle":{"createUpdaterArtifacts":false}}'
+      # D17 on a real Windows runner: install the built NSIS per-user, the app owns the bridge (Job Object),
+      # a hard kill of the app takes the bridge with it, and the uninstaller removes autostart and the old task.
+      - name: NSIS install, bridge dies with the app, uninstall cleans up
+        if: runner.os == 'Windows'
+        shell: pwsh
         working-directory: .
         run: |
           $ErrorActionPreference = 'Stop'
-          # A stock PC blocks scripts for the user. install.cmd must cope with that by itself.
-          Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy Restricted -Force
-          "policy: " + ((Get-ExecutionPolicy -List | Out-String))
-
-          # Hermes present, uv absent, repo and Hermes home under paths with spaces.
-          $root = Join-Path $env:RUNNER_TEMP 'my hermes remote'
-          New-Item -ItemType Directory -Force $root | Out-Null
-          Copy-Item -Recurse -Force "$PWD\*" $root -Exclude '.git'
-          $env:HERMES_HOME = Join-Path $env:RUNNER_TEMP 'hermes home'
-          New-Item -ItemType Directory -Force $env:HERMES_HOME | Out-Null
-          $uvDir = Split-Path (Get-Command uv).Source
-          $env:Path = ($env:Path -split ';' | Where-Object { $_ -and ($_ -ne $uvDir) }) -join ';'
-          if (Get-Command uv -ErrorAction SilentlyContinue) { throw 'test setup: uv still on PATH' }
-
-          # 1. Plain `powershell -File` is what failed for the first tester: prove it still would
-          #    without the launcher, so this test is actually testing something.
-          # (stderr is the expected output here, so don't let 'Stop' turn it into a crash)
-          $ErrorActionPreference = 'Continue'
-          $plain = (& powershell -NoProfile -File "$root\install.ps1" -Unattended 2>&1 | Out-String)
-          $ErrorActionPreference = 'Stop'
-          if ($plain -notmatch 'running scripts is disabled|cannot be loaded') { throw "expected the policy block, got: $plain" }
-
-          # 2. The launcher gets past it. Answers are piped in so `pause` cannot hang.
-          $out = (cmd /c "echo.| `"$root\install.cmd`" -Unattended" 2>&1 | Out-String)
-          Write-Host $out
-          if ($out -notmatch 'uv is required') { throw 'expected the clear uv-is-required stop' }
-
-          # 3. -InstallUv: installs uv, finds it in-session, installs, starts, and the bridge answers.
-          $out = (cmd /c "echo.| `"$root\install.cmd`" -Unattended -InstallUv" 2>&1 | Out-String)
-          Write-Host $out
-          if ($out -match 'did not start|Error:') { throw 'installer reported a failure' }
-          if ($out -match 'Apply now') { throw '-Unattended must not touch the firewall' }
-          if (Get-NetFirewallRule -DisplayName 'Hermes Mobile Remote' -ErrorAction SilentlyContinue) { throw 'a firewall rule was created unattended' }
-          if ($out -notmatch 'the tray is in the notification area') { throw 'installer did not confirm a running bridge' }
-
-          $task = Get-ScheduledTask -TaskName 'Hermes Mobile Remote'
-          "task state: $($task.State)"
-          if ($task.State -ne 'Running') { throw 'task is not running' }
-          $log = "$env:LOCALAPPDATA\hermes-remote\state\bridge.log"
-          Get-Content $log -ErrorAction SilentlyContinue | Select-Object -First 8
-          # The log must be readable text, not UTF-16 (which has NUL bytes between letters).
-          # (the bridge is still writing to it, so open it with sharing allowed)
-          $fs = [System.IO.File]::Open($log, 'Open', 'Read', 'ReadWrite')
-          $buf = New-Object byte[] ([int][Math]::Min($fs.Length, 4096)); [void]$fs.Read($buf, 0, $buf.Length); $fs.Close()
-          if ($buf.Length -eq 0) { throw 'bridge.log is empty' }
-          if ($buf -contains 0) { throw 'bridge.log is not UTF-8' }
-
-          # 3b. What the second tester did: run the .exe with nothing after it. It must explain itself
-          #     and exit cleanly, not print an argparse error.
-          $exe = "$root\bridge\.venv\Scripts\hermes-remote-bridge.exe"
-          $help = (& $exe 2>&1 | Out-String)
-          if ($LASTEXITCODE -ne 0 -or $help -notmatch 'pair phone' -or $help -notmatch 'pair.cmd') { throw "bare .exe did not explain itself: $help" }
-
-          # 3c. Pairing through the launcher. A runner has no phone, so trust its network to give
-          #     the code an address, then check a real QR picture and manual-entry details come out.
-          #     pair.cmd is the console path and is still supported; the installer no longer offers
-          #     it (it would hand the PNG to the Photos app and leave the token in a file), and
-          #     that is asserted in step 3d.
-          & $exe trust | Out-Host
-          $out = (cmd /c "echo.| `"$root\pair.cmd`"" 2>&1 | Out-String)
-          Write-Host ($out -replace 'Token: \S+', 'Token: <hidden>')
-          if ($out -notmatch 'Manual entry' -or $out -notmatch 'hrb_') { throw 'pairing printed no manual-entry details' }
-          if ($out -match 'Pairing failed|Traceback|error:') { throw 'pairing failed' }
-          $png = "$env:LOCALAPPDATA\hermes-remote\state\pairing-qr.png"
-          if (-not (Test-Path $png)) { throw 'no QR picture was written' }
-          if ([System.IO.File]::ReadAllBytes($png)[1..3] -join ',' -ne '80,78,71') { throw 'the QR file is not a PNG' }
-          Remove-Item $png -Force
-
-          # 3d. The installer must point at the tray instead of pairing. `pair` from the console
-          #     writes the QR to disk and opens it with the default image handler (the Photos app),
-          #     leaving a live token in a file; the tray pairs in its own window and deletes it.
-          $install = (cmd /c "echo.| `"$root\install.cmd`" -Unattended" 2>&1 | Out-String)
-          if ($install -match 'hrb_') { throw 'the installer paired a device; pairing belongs in the tray' }
-          if ($install -notmatch 'Pair a new device') { throw 'the installer does not point at the tray for pairing' }
-
-          # 4. Re-running over a running install is safe (an update).
-          $out = (cmd /c "echo.| `"$root\install.cmd`" -Unattended" 2>&1 | Out-String)
-          if ($out -notmatch 'the tray is in the notification area') { throw 'second run did not leave a running bridge' }
-
-          # 5. The bridge must also come back by itself: kill it and the tray has to restart it.
-          Get-Process -Name hermes-remote-bridge -ErrorAction SilentlyContinue | Stop-Process -Force
-          $back = $false
-          for ($i = 0; $i -lt 40 -and -not $back; $i++) {
+          # A script install leaves this task behind; the app must remove it (D12).
+          schtasks /Create /TN "Hermes Mobile Remote" /TR "cmd.exe /c exit 0" /SC ONLOGON /F | Out-Null
+          $setup = Get-ChildItem desktop/src-tauri/target/debug/bundle/nsis/*-setup.exe | Select-Object -First 1
+          Start-Process $setup.FullName -ArgumentList '/S' -Wait
+          $dir = Join-Path $env:LOCALAPPDATA 'Hermes Remote'
+          $app = Get-ChildItem $dir -Filter *.exe | Where-Object { $_.Name -notmatch 'uninstall' } | Select-Object -First 1
+          if (-not $app) { throw "no app exe under $dir" }
+          # First-run setup downloads uv; on the runner the venv is made from the checkout instead.
+          $data = Join-Path $env:LOCALAPPDATA 'hermes-remote'
+          $env:UV_PROJECT_ENVIRONMENT = Join-Path $data 'venv'
+          uv sync --frozen --no-dev --directory bridge | Out-Null
+          New-Item -ItemType Directory -Force (Join-Path $data 'config') | Out-Null
+          Set-Content (Join-Path $data 'config\config.toml') -Encoding ASCII -Value "lan = true"
+          $p = Start-Process $app.FullName -PassThru
+          $up = $false
+          for ($i = 0; $i -lt 60 -and -not $up; $i++) {
             Start-Sleep -Seconds 1
             try { $null = Invoke-WebRequest 'http://127.0.0.1:8650/v1/me' -UseBasicParsing -TimeoutSec 2 }
-            catch { if ($_.Exception.Response) { $back = $true } }
+            catch { if ($_.Exception.Response) { $up = $true } }
           }
-          if (-not $back) { throw 'bridge did not come back after being killed' }
-
-          # 6. Uninstall stops the tray first, then the task, and leaves no bridge process. The
-          #    tray can be running detached, so this is the step that would otherwise orphan one.
-          $out = (cmd /c "echo.| `"$root\install.cmd`" -Uninstall" 2>&1 | Out-String)
-          Write-Host $out
-          if ($out -notmatch 'Paired devices and settings are still in') { throw 'uninstall did not say what it kept' }
-          if (Get-ScheduledTask -TaskName 'Hermes Mobile Remote' -ErrorAction SilentlyContinue) { throw 'task still registered' }
-          if (Get-Process -Name hermes-remote-bridge -ErrorAction SilentlyContinue) { throw 'bridge still running' }
-          $trayLeft = @(Get-CimInstance Win32_Process -Filter "Name = 'powershell.exe'" -ErrorAction SilentlyContinue |
-              Where-Object { $_.CommandLine -and $_.CommandLine -like '*tray.ps1*' })
-          if ($trayLeft) { throw "tray still running: $($trayLeft.ProcessId -join ',')" }
+          if (-not $up) { throw 'the installed app did not bring the bridge up' }
+          & taskkill.exe /PID $p.Id /F | Out-Null
+          Start-Sleep -Seconds 4
+          if (Get-NetTCPConnection -LocalPort 8650 -State Listen -ErrorAction SilentlyContinue) { throw 'bridge outlived a hard kill of the app' }
+          $uninst = Get-ChildItem $dir -Filter uninstall*.exe | Select-Object -First 1
+          Start-Process $uninst.FullName -ArgumentList '/S' -Wait
+          Start-Sleep -Seconds 3
+          schtasks /Query /TN "Hermes Mobile Remote" 2>$null | Out-Null
+          if ($LASTEXITCODE -eq 0) { throw 'old Scheduled Task still registered after uninstall' }
+          $run = Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -ErrorAction SilentlyContinue
+          if ($run.PSObject.Properties.Name -contains 'Hermes Remote') { throw 'autostart left behind' }
+          'installed, bridge died with the app, uninstall removed autostart and the old task'
+          exit 0
+      - uses: actions/upload-artifact@v7
+        with:
+          name: hermes-remote-desktop-${{ runner.os }}
+          path: |
+            desktop/src-tauri/target/debug/bundle/appimage/*.AppImage
+            desktop/src-tauri/target/debug/bundle/deb/*.deb
+            desktop/src-tauri/target/debug/bundle/nsis/*.exe
+          if-no-files-found: error
 
   android:
     runs-on: ubuntu-latest
