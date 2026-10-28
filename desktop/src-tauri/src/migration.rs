@@ -51,6 +51,8 @@ pub struct ProcInfo {
     pub pid: u32,
     pub name: String,
     pub cmd: String,
+    /// Full path of the executable ("" when unknown).
+    pub exe: String,
 }
 
 pub trait ProcessList {
@@ -68,12 +70,13 @@ impl ProcessList for SysProcesses {
         sys.refresh_processes_specifics(
             ProcessesToUpdate::All,
             true,
-            ProcessRefreshKind::nothing().with_cmd(UpdateKind::Always),
+            ProcessRefreshKind::nothing().with_cmd(UpdateKind::Always).with_exe(UpdateKind::Always),
         );
         sys.processes()
             .iter()
             .map(|(pid, p)| ProcInfo {
                 pid: pid.as_u32(),
+                exe: p.exe().map(|e| e.to_string_lossy().into_owned()).unwrap_or_default(),
                 name: p.name().to_string_lossy().into_owned(),
                 cmd: p.cmd().iter().map(|a| a.to_string_lossy()).collect::<Vec<_>>().join(" "),
             })
@@ -134,9 +137,28 @@ pub struct Uninstall<'a> {
     pub runner: &'a dyn ProcessRunner,
     pub paths: &'a BridgePaths,
     pub remove_data: bool,
+    /// Running processes; the bridge and app of this install are ended by exe path.
+    pub procs: &'a dyn ProcessList,
+    pub own_pid: u32,
+    pub app_exe: &'a Path,
+}
+
+fn same_path(a: &str, b: &Path) -> bool {
+    !a.is_empty() && a.eq_ignore_ascii_case(&b.to_string_lossy())
 }
 
 impl Uninstall<'_> {
+    /// `uninstall` is a new process, so `child.stop` alone never reaches the bridge the app started.
+    fn end_install_processes(&self) {
+        for p in self.procs.list() {
+            if p.pid != self.own_pid
+                && (same_path(&p.exe, &self.paths.exe) || same_path(&p.exe, self.app_exe))
+            {
+                self.procs.kill(p.pid);
+            }
+        }
+    }
+
     /// Stop the bridge first, then autostart, old task, firewall rule (one UAC), and data on request.
     /// Every step is tried; the first error is returned.
     pub fn run(&self) -> Result<(), String> {
@@ -147,6 +169,7 @@ impl Uninstall<'_> {
             }
         };
         note(self.child.stop());
+        self.end_install_processes();
         let reg = ["delete", RUN_KEY, "/v", RUN_VALUE, "/f"].map(String::from);
         let _ = self.runner.run(Path::new("reg"), &reg); // absent value is fine
         delete_task(self.runner);
@@ -193,7 +216,7 @@ mod tests {
         struct Procs(Log);
         impl ProcessList for Procs {
             fn list(&self) -> Vec<ProcInfo> {
-                let p = |pid, name: &str, cmd: &str| ProcInfo { pid, name: name.into(), cmd: cmd.into() };
+                let p = |pid, name: &str, cmd: &str| ProcInfo { pid, name: name.into(), cmd: cmd.into(), exe: String::new() };
                 vec![
                     p(1, "powershell.exe", r"powershell -File C:\a\tray.ps1"),
                     p(2, "powershell.exe", r"powershell -File C:\a\tray.ps1"), // own pid
@@ -283,7 +306,17 @@ mod tests {
         };
         let child = Child(log.clone());
         let runner = Runner(log.clone(), Some(0));
-        Uninstall { child: &child, runner: &runner, paths: &paths, remove_data: false }.run().unwrap();
+        Uninstall {
+            child: &child,
+            runner: &runner,
+            paths: &paths,
+            remove_data: false,
+            procs: &NoProcs,
+            own_pid: 1,
+            app_exe: Path::new("app.exe"),
+        }
+        .run()
+        .unwrap();
         let l = log.lock().unwrap();
         assert_eq!(l[0], "child.stop");
         assert!(l[1].starts_with("reg delete HKCU"), "{l:?}");
@@ -292,5 +325,66 @@ mod tests {
         assert_eq!(uninstall_flags(&["--uninstall".into(), "--remove-data".into()]), Some(true));
         assert_eq!(uninstall_flags(&["--uninstall".into()]), Some(false));
         assert_eq!(uninstall_flags(&[]), None);
+    }
+
+    struct Running(Log, Vec<(u32, &'static str)>);
+    impl ProcessList for Running {
+        fn list(&self) -> Vec<ProcInfo> {
+            let p = |(pid, exe): &(u32, &str)| ProcInfo {
+                pid: *pid,
+                name: "x".into(),
+                cmd: String::new(),
+                exe: (*exe).into(),
+            };
+            self.1.iter().map(p).collect()
+        }
+        fn kill(&self, pid: u32) {
+            self.0.lock().unwrap().push(format!("kill {pid}"));
+        }
+    }
+
+    fn uninstall_with(procs: &Running, log: &Log) -> Result<(), String> {
+        let paths = BridgePaths {
+            config_dir: "nowhere/hermes-remote/config".into(),
+            venv: "v".into(),
+            exe: r"C:\App\bridge.exe".into(),
+        };
+        Uninstall {
+            child: &Child(log.clone()),
+            runner: &Runner(log.clone(), Some(0)),
+            paths: &paths,
+            remove_data: false,
+            procs,
+            own_pid: 9,
+            app_exe: Path::new(r"C:\App\app.exe"),
+        }
+        .run()
+    }
+
+    #[test]
+    fn uninstall_ends_this_installs_bridge_before_reg_delete_and_spares_others() {
+        let log: Log = Arc::default();
+        let procs = Running(
+            log.clone(),
+            vec![
+                (5, r"C:\App\bridge.exe"),
+                (6, r"c:\app\APP.exe"),
+                (7, r"C:\Other\bridge.exe"),
+                (9, r"C:\App\app.exe"), // the uninstall process itself
+                (8, ""),
+            ],
+        );
+        uninstall_with(&procs, &log).unwrap();
+        let l = log.lock().unwrap();
+        let reg = l.iter().position(|c| c.starts_with("reg delete")).unwrap();
+        assert_eq!(l[..reg], ["child.stop", "kill 5", "kill 6"]);
+        assert!(!l.iter().any(|c| c == "kill 7" || c == "kill 8" || c == "kill 9"), "{l:?}");
+    }
+
+    #[test]
+    fn uninstall_without_a_running_bridge_continues() {
+        let log: Log = Arc::default();
+        uninstall_with(&Running(log.clone(), vec![]), &log).unwrap();
+        assert!(log.lock().unwrap().iter().any(|c| c.starts_with("reg delete")));
     }
 }

@@ -27,6 +27,9 @@ pub fn run() {
             runner: &bridge::SystemRunner,
             paths: &paths,
             remove_data,
+            procs: &migration::SysProcesses,
+            own_pid: std::process::id(),
+            app_exe: &std::env::current_exe().unwrap_or_default(),
         })
         .run()
         {
