@@ -11,11 +11,14 @@ import {
   getInstalledList,
   getLinger,
   setLinger,
+  getRunMode,
+  setRunMode,
 } from "./api.js";
 
 defineEmits(["setup"]);
 const settings = ref({ start_at_logon: false, terminal_shell: "" });
 const linger = ref(false);
+const runMode = ref("always-on");
 const installed = ref(null);
 const checks = ref([]);
 const pending = ref(false);
@@ -53,8 +56,22 @@ onMounted(async () => {
     settings.value = { ...settings.value, ...(await getSettings()) };
     installed.value = await getInstalledList();
     linger.value = (await getLinger()) === true;
+    runMode.value = (await getRunMode()) === "app-only" ? "app-only" : "always-on";
   });
 });
+
+async function changeRunMode(event) {
+  const mode = event.target.value;
+  await guard(async () => {
+    try {
+      await setRunMode(mode);
+      runMode.value = mode;
+    } catch (e) {
+      event.target.value = runMode.value;
+      throw e;
+    }
+  });
+}
 </script>
 
 <template>
@@ -76,9 +93,20 @@ onMounted(async () => {
     <h2>General</h2>
     <button data-test="open-logs" @click="guard(openLogs)">Open log folder</button>
     <label>
+      Run mode
+      <select data-test="run-mode" :value="runMode" @change="changeRunMode">
+        <option value="always-on">Always on (systemd service)</option>
+        <option value="app-only">Only while the app is open</option>
+      </select>
+    </label>
+    <p v-if="runMode === 'app-only'" data-test="no-sandbox">
+      In this mode the bridge runs without systemd sandboxing.
+    </p>
+    <label>
       <input
         type="checkbox"
         data-test="logon"
+        :disabled="runMode === 'app-only'"
         :checked="settings.start_at_logon"
         @change="
           guard(async () => {
@@ -94,6 +122,7 @@ onMounted(async () => {
       <input
         type="checkbox"
         data-test="linger"
+        :disabled="runMode === 'app-only'"
         :checked="linger"
         @change="
           guard(async () => {

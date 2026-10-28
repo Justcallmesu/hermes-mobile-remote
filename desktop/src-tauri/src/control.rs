@@ -87,7 +87,11 @@ pub fn installed_list_in(config_dir: &Path) -> Option<String> {
 
 #[cfg(target_os = "linux")]
 fn backend() -> impl Control {
-    crate::linux_service::LinuxControl(crate::linux_service::Systemd::from_env())
+    crate::run_mode::ModeControl {
+        inner: crate::linux_service::LinuxControl(crate::linux_service::Systemd::from_env()),
+        mode: crate::run_mode::read_mode(&BridgePaths::from_env().config_dir),
+        child: crate::run_mode::app_child(),
+    }
 }
 
 #[cfg(not(target_os = "linux"))]

@@ -254,4 +254,23 @@ describe("Settings", () => {
     await flushPromises();
     expect(w.find('[data-test="linger"]').exists()).toBe(false);
   });
+
+  it("run mode control shows the no-sandbox note and disables login and linger in app-only mode", async () => {
+    answers.get_settings = { start_at_logon: true, terminal_shell: null };
+    answers.get_run_mode = "always-on";
+    const w = await open("settings");
+    expect(w.find('[data-test="logon"]').element.disabled).toBe(false);
+    expect(w.text()).not.toContain("without systemd sandboxing");
+    await w.find('[data-test="run-mode"]').setValue("app-only");
+    await flushPromises();
+    expect(invoke).toHaveBeenCalledWith("set_run_mode", { mode: "app-only" });
+    expect(w.text()).toContain("without systemd sandboxing");
+    expect(w.find('[data-test="logon"]').element.disabled).toBe(true);
+    expect(w.find('[data-test="linger"]').element.disabled).toBe(true);
+    answers.set_run_mode = new Error("port conflict: another program is already using the bridge port");
+    await w.find('[data-test="run-mode"]').setValue("always-on");
+    await flushPromises();
+    expect(w.find('[data-test="error"]').text()).toContain("port conflict");
+    expect(w.find('[data-test="run-mode"]').element.value).toBe("app-only");
+  });
 });

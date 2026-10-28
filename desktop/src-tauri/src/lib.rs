@@ -4,6 +4,7 @@
 pub mod bridge;
 pub mod control;
 pub mod linux_service;
+pub mod run_mode;
 pub mod setup;
 pub mod version;
 
@@ -18,6 +19,10 @@ pub fn run() {
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
             None,
         ))
+        .setup(|_| {
+            run_mode::on_app_start();
+            Ok(())
+        })
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
@@ -41,6 +46,8 @@ pub fn run() {
             control::get_installed_list,
             linux_service::get_linger,
             linux_service::set_linger,
+            run_mode::get_run_mode,
+            run_mode::set_run_mode,
             setup::setup_state,
             setup::setup_run
         ])
