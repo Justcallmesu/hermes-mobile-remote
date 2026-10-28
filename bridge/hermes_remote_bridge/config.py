@@ -68,6 +68,10 @@ class Config:
     # Command line the phone's Terminal opens, e.g. "cmd.exe" or "/usr/bin/fish -l". Empty = the default.
     terminal_shell: str = ""
     requests_per_minute: int = 240
+    # `GET /metrics` (Prometheus text): counts and timings, never content. Still needs a device
+    # token, or the local metrics token in this file (mode 600, made by `serve`).
+    metrics: bool = True
+    metrics_token_file: Path = CONFIG_DIR / "metrics.token"
     # Frames per minute on one live connection (the phone's RPCs, not Hermes' events).
     frames_per_minute: int = 600
 

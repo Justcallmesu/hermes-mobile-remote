@@ -76,6 +76,7 @@ for (see [Profiles](#profiles)). Without it, or with `default`, it is the defaul
 | Method | Path | Notes |
 |---|---|---|
 | GET | `/healthz` | No auth. Liveness only. |
+| GET | `/metrics?format` | Counts and timings, Prometheus text or JSON. See [Metrics](#metrics-get-metrics). |
 | GET | `/v1/me` | `{device{id,name,created_at}, peer_node, via, port, addresses{lan[],tailnet[]}, lan_scheme, network, bridge_version, protocol}`. `via` is `lan` or `tailnet`; `addresses` lists every address served right now so the app can switch; `network` is `{id, name, interface, trusted}` or null. |
 | GET | `/v1/status` | `components.{bridge, hermes, tailscale}`. `hermes` is `{status, version, port, shared_with_desktop}`, or `{status: "down", error, starts_on_connect}`. |
 | GET | `/v1/profiles` | `{profiles[]}`, each `{name, display_name, description, model, provider, is_default}`. Only profiles the phone may use. |
@@ -97,6 +98,73 @@ for (see [Profiles](#profiles)). Without it, or with `default`, it is the defaul
 
 `/v1/me` also lists `features`: any of `monitor`, `claude_usage`, `terminal`, so the app shows only
 the pages this bridge serves.
+
+## Metrics: `GET /metrics`
+
+What the bridge has done since it started, in Prometheus text format 0.0.4
+(`text/plain; version=0.0.4`); `?format=json` is the same data as JSON, which
+`hermes-remote-bridge metrics [--json]` reads. In memory only: every value resets when the bridge
+restarts. Off with `metrics = false` in config.toml (then 404 `metrics_off`, after auth).
+
+**Auth.** The same network gate as every other endpoint, then a bearer token, even on loopback:
+loopback is any local user on a shared machine, and the metrics say when someone is using the
+phone. Either token works:
+
+- the **metrics token**, `~/.config/hermes-remote/metrics.token` (mode 600; `serve` creates it once
+  and keeps it). It opens `/metrics` and nothing else, so it is the one to give a scraper;
+- a paired device's token. Works, but a device token can drive Hermes: don't put one in a
+  Prometheus config.
+
+**What is never in it.** Labels come from closed sets only: route templates
+(`/v1/sessions/{session_id}`, never the path or query), allowlisted RPC method names, fixed
+reasons and outcomes. No session ids or titles, prompts, message text, file paths, device names or
+tokens. Paths no route serves count as `unmatched`, requests refused before routing (network,
+body size) as `refused`.
+
+| Metric | Type | Labels | Meaning |
+|---|---|---|---|
+| `bridge_info` | gauge | `version`, `protocol` | Always 1. |
+| `process_start_time_seconds` | gauge | | Bridge start, Unix time. |
+| `bridge_paired_devices` | gauge | | Paired devices not revoked. |
+| `bridge_live_devices` | gauge | | Distinct devices with a live socket open now. |
+| `bridge_http_requests_total` | counter | `route`, `method`, `status` | REST requests answered. |
+| `bridge_http_request_seconds` | histogram | `route` | REST request duration. |
+| `bridge_ws_connections` | gauge | `endpoint` (`live`, `terminal`) | Open sockets. |
+| `bridge_ws_connections_total` | counter | `endpoint` | Sockets accepted. |
+| `bridge_ws_rejected_total` | counter | `endpoint`, `reason` (`network`, `unauthorized`, `hermes_unavailable`, `disabled`) | Upgrades refused. |
+| `bridge_relay_frames_forwarded_total` | counter | `method` (allowlisted, or `response` for an answer to a question) | Phone→Hermes frames forwarded. |
+| `bridge_relay_frames_refused_total` | counter | `reason` (`method`, `profile`, `config_key`, `too_large`, `not_json`, `not_jsonrpc`, `stray_response`, `rate_limited`) | Phone→Hermes frames refused. |
+| `bridge_relay_frames_from_hermes_total` | counter | | Hermes→phone frames relayed. |
+| `bridge_hermes_rpc_seconds` | histogram | `method` | Phone RPC round trip: forwarded to its response relayed. |
+| `bridge_hermes_rpc_errors_total` | counter | `method` | RPCs Hermes answered with an error. |
+| `bridge_questions_total` | counter | `method` (`approval`, `clarify`, `sudo`, `secret`, `vault.*`) | Questions Hermes asked on a live socket. |
+| `bridge_questions_open` | gauge | | Seen and not yet settled. |
+| `bridge_questions_ended_total` | counter | `method`, `outcome` (`answered`, `declined` from a phone; `resolved`, `timeout`, `interrupted`, `shutdown`, `other` from Hermes' `request.cancel`; `unobserved`) | Questions settled. |
+| `bridge_question_wait_seconds` | histogram | `method` | Seen to first settlement (any screen). Buckets 1 s to 1 h. |
+| `bridge_turns_started_total` | counter | | `message.start` events. |
+| `bridge_turns_completed_total` | counter | `status` (`complete`, `interrupted`, `error`, `other`) | `message.complete` events. |
+
+Latency buckets are 5 ms to 30 s. Relay figures come from what crosses a phone's socket: questions
+and turns are only counted while at least one phone is connected, an event two phones both receive
+counts once, and a question still open when the last socket that saw it closes ends as
+`unobserved` (not timed).
+
+Scraping from Prometheus on the same PC:
+
+```yaml
+scrape_configs:
+  - job_name: hermes-remote-bridge
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["127.0.0.1:8650"]
+    authorization:
+      type: Bearer
+      credentials_file: /home/you/.config/hermes-remote/metrics.token
+    # older Prometheus: bearer_token_file: /home/you/.config/hermes-remote/metrics.token
+```
+
+From another machine, scrape the bridge's Tailscale address (the Tailscale identity check still
+applies, so the scraper's node must be an allowed login) with a copy of the metrics token.
 
 ## Terminal: `GET /v1/terminal?cols&rows` (WebSocket)
 

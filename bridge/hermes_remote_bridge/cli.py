@@ -129,6 +129,9 @@ def cmd_serve(cfg: Config, _: argparse.Namespace) -> None:
                  "trusted, serving the local network" if lan else
                  "not trusted, local network off" if net else "offline")
 
+    if cfg.metrics:
+        from .metrics import ensure_metrics_token
+        ensure_metrics_token(cfg.metrics_token_file)
     app = create_app(cfg, owner_login=owner, trust=trust)
     servers = [uvicorn.Server(uvicorn.Config(app, access_log=False, log_level="info",
                                              timeout_graceful_shutdown=5, proxy_headers=False))]
@@ -452,6 +455,43 @@ def cmd_doctor(cfg: Config, args: argparse.Namespace) -> None:
     sys.exit(doctor.run(cfg))
 
 
+def _fetch_metrics(cfg: Config) -> dict:
+    """The running bridge's metrics, over loopback with the local metrics token."""
+    import urllib.error
+    import urllib.request
+
+    from .metrics import read_metrics_token
+
+    if not cfg.metrics:
+        raise SystemExit("Metrics are off (metrics = false in config.toml).")
+    token = read_metrics_token(cfg.metrics_token_file)
+    if token is None:
+        raise SystemExit(f"No metrics token at {cfg.metrics_token_file}; start the bridge once to create it.")
+    loopback = next((h for h in cfg.listen if h != "tailscale" and ipaddress.ip_address(h).is_loopback), None)
+    if loopback is None:
+        raise SystemExit("The bridge does not listen on loopback (see listen in config.toml).")
+    host_part = f"[{loopback}]" if ":" in loopback else loopback
+    req = urllib.request.Request(f"http://{host_part}:{cfg.port}/metrics?format=json",
+                                 headers={"Authorization": f"Bearer {token}"})
+    try:
+        with urllib.request.urlopen(req, timeout=5) as r:
+            return json.loads(r.read())
+    except urllib.error.HTTPError as exc:
+        raise SystemExit(f"The bridge refused the metrics request (HTTP {exc.code}).")
+    except OSError as exc:
+        raise SystemExit(f"The bridge is not answering on {loopback}:{cfg.port} ({exc}).")
+
+
+def cmd_metrics(cfg: Config, args: argparse.Namespace) -> None:
+    from .metrics import summarize
+
+    data = _fetch_metrics(cfg)
+    if getattr(args, "json", False):
+        print(json.dumps(data, indent=2))
+        return
+    print(summarize(data))
+
+
 def cmd_firewall(cfg: Config, args: argparse.Namespace) -> None:
     from . import firewall
     port = args.port or cfg.port
@@ -531,6 +571,8 @@ def main(argv: list[str] | None = None) -> None:
     t.add_argument("--json", action="store_true", help="Machine-readable output, with --list")
     doc = sub.add_parser("doctor", help="Check why the phone can't connect")
     doc.add_argument("--json", action="store_true", help="Machine-readable checks (for the tray app)")
+    m = sub.add_parser("metrics", help="Show what the running bridge has done since it started")
+    m.add_argument("--json", action="store_true", help="Every metric as JSON")
     f = sub.add_parser("firewall", help="Allow the bridge port from the local network (asks first)")
     f.add_argument("action", nargs="?", choices=("add", "remove"), default="add",
                    help="add (default) or remove the Windows rule")
@@ -545,7 +587,7 @@ def main(argv: list[str] | None = None) -> None:
     cfg = Config.load(args.config)
     handler = {"serve": cmd_serve, "pair": cmd_pair, "revoke": cmd_revoke, "devices": cmd_devices,
                "trust": cmd_trust, "doctor": cmd_doctor, "firewall": cmd_firewall,
-               "supervise": cmd_supervise}[args.command]
+               "supervise": cmd_supervise, "metrics": cmd_metrics}[args.command]
     try:
         handler(cfg, args)
     except ValueError as exc:

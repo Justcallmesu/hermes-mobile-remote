@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import contextlib
+import hmac
 import json
 import logging
 import logging.handlers
@@ -27,7 +28,7 @@ from typing import Any
 import httpx
 from fastapi import Depends, FastAPI, Request, WebSocket
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 from pydantic import BaseModel, Field
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
@@ -40,6 +41,8 @@ from .local_api import devices_doc, pairing_payload, pairing_uri, qr_png, trust_
 from .network import TrustStore, current_network, network_info, serving_lan_ips
 from .chat_files import referenced_file
 from .folders import FolderError, list_dirs, make_dir
+from .metrics import CONTENT_TYPE as METRICS_CONTENT_TYPE
+from .metrics import BridgeMetrics, read_metrics_token
 from .project_notes import IDEA_MAX_BYTES, NoFolder, read_idea, write_idea
 from .profiles import ProfileRefused, is_visible, media_roots, profile_home, resolve_profile
 from .monitor import RANGES, ClaudeUsage, Monitor
@@ -200,6 +203,8 @@ def create_app(cfg: Config, *, locator: BackendLocator | None = None, tailnet: T
     allowed_logins = set(cfg.allowed_logins) or ({owner_login} if owner_login else set())
     audit = _audit_logger(cfg)
     limiter = RateLimiter()
+    metrics = BridgeMetrics(__version__, PROTOCOL)
+    metrics_token = read_metrics_token(cfg.metrics_token_file) if cfg.metrics else None
 
     def audit_event(entry: dict) -> None:
         audit.info(json.dumps({"ts": round(time.time(), 3), **entry}))
@@ -287,20 +292,34 @@ def create_app(cfg: Config, *, locator: BackendLocator | None = None, tailnet: T
         request.state.device = None
         node, rejected = await peer_verdict(peer, request.url.scheme == "https")
         if rejected:
-            return _err(*rejected)
+            return counted(request, start, _err(*rejected), "refused")
         request.state.peer_node = node
         if request.method in ("POST", "PATCH", "PUT"):
             length = request.headers.get("content-length")
             if length is None and request.headers.get("transfer-encoding"):
-                return _err(411, "length_required", "Chunked request bodies are not accepted")
+                return counted(request, start, _err(411, "length_required", "Chunked request bodies are not accepted"),
+                               "refused")
             if length is not None and (not length.isdigit() or int(length) > cfg.max_body_bytes):
-                return _err(413, "body_too_large", "Request body too large")
-        response = await call_next(request)
+                return counted(request, start, _err(413, "body_too_large", "Request body too large"), "refused")
+        try:
+            response = counted(request, start, await call_next(request))
+        except Exception:
+            counted(request, start, JSONResponse({}, status_code=500))
+            raise
         if request.url.path != "/healthz":
             device: Device | None = request.state.device
             audit_event({"peer": node, "device": device.name if device else None, "method": request.method,
                          "path": request.url.path, "status": response.status_code,
                          "ms": round((time.monotonic() - start) * 1000)})
+        return response
+
+    def counted(request: Request, start: float, response, route: str | None = None):
+        """Count a REST answer under its route template (`/v1/sessions/{session_id}`), never the raw
+        path: ids, file paths and query strings stay out of the metrics. Requests refused before
+        routing are `refused`; paths no route serves are `unmatched`."""
+        matched = request.scope.get("route")
+        route = route or getattr(matched, "path", None) or "unmatched"
+        metrics.http_request(route, request.method, response.status_code, time.monotonic() - start)
         return response
 
     # ------------------------------------------------------------ device auth
@@ -343,6 +362,25 @@ def create_app(cfg: Config, *, locator: BackendLocator | None = None, tailnet: T
     @app.get("/healthz")
     async def healthz():
         return {"ok": True}
+
+    async def metrics_auth(request: Request) -> None:
+        """A paired device's token, or the local metrics token (read-only, this endpoint only)."""
+        token = _bearer(request.headers.get("authorization", ""))
+        if metrics_token and token and hmac.compare_digest(token.encode(), metrics_token.encode()):
+            if not limiter.allow("req:metrics-token", cfg.requests_per_minute):
+                raise ApiError(429, "rate_limited", "Too many requests")
+            return
+        await device_auth(request)
+
+    @app.get("/metrics")
+    async def get_metrics(format: str = "text", _: None = Depends(metrics_auth)):
+        """Prometheus text format 0.0.4; `?format=json` is the same data for the CLI."""
+        if not cfg.metrics:
+            raise ApiError(404, "metrics_off", "Metrics are turned off in the bridge's config.toml")
+        metrics.paired_devices.set(sum(d.active for d in await asyncio.to_thread(devices.list)))
+        if format == "json":
+            return metrics.registry.snapshot()
+        return Response(metrics.registry.render(), media_type=METRICS_CONTENT_TYPE)
 
     async def _tailnet_ips() -> list[str]:
         try:
@@ -777,11 +815,12 @@ def create_app(cfg: Config, *, locator: BackendLocator | None = None, tailnet: T
 
     # ------------------------------------------------------------ live sockets
 
-    async def ws_device(ws: WebSocket) -> tuple[str | None, Device | None]:
+    async def ws_device(ws: WebSocket, endpoint: str) -> tuple[str | None, Device | None]:
         """Same gate as HTTP: network, then the device token from the upgrade request's header."""
         peer = ws.client.host if ws.client else ""
         node, rejected = await peer_verdict(peer, ws.url.scheme == "wss")
         if rejected:
+            metrics.ws_rejected.inc(endpoint=endpoint, reason="network")
             await ws.close(code=4403, reason=rejected[2])
             return None, None
         # The token rides in the Authorization header (OkHttp sets it on the upgrade request),
@@ -790,33 +829,40 @@ def create_app(cfg: Config, *, locator: BackendLocator | None = None, tailnet: T
         device = devices.authenticate(token) if token else None
         if device is None:
             audit_event({"event": "ws_unauthorized", "peer": node, "path": ws.url.path})
+            metrics.ws_rejected.inc(endpoint=endpoint, reason="unauthorized")
             await ws.close(code=4401, reason="Missing, invalid or revoked device token")
             return node, None
         return node, device
 
     @app.websocket("/v1/terminal")
     async def terminal(ws: WebSocket, cols: int = 80, rows: int = 24):
-        node, device = await ws_device(ws)
+        node, device = await ws_device(ws, "terminal")
         if device is None:
             return
         if not cfg.terminal:
+            metrics.ws_rejected.inc(endpoint="terminal", reason="disabled")
             await ws.close(code=4404, reason="The terminal is turned off in the bridge's config.toml")
             return
         await ws.accept()
         shell = shell_factory(cols=max(10, min(cols, 500)), rows=max(4, min(rows, 300)))
-        await serve_terminal(ws, shell, audit=lambda e: audit_event({**e, "peer": node, "device": device.name}))
+        metrics.socket_opened("terminal")
+        try:
+            await serve_terminal(ws, shell, audit=lambda e: audit_event({**e, "peer": node, "device": device.name}))
+        finally:
+            metrics.socket_closed("terminal")
 
     @app.websocket("/v1/ws")
     async def live(ws: WebSocket):
-        node, device = await ws_device(ws)
+        node, device = await ws_device(ws, "live")
         if device is None:
             return
         frames_key = f"frames:{device.id}:{id(ws)}"
         relay = Relay(locator, max_frame_bytes=cfg.max_frame_bytes,
                       allow_frame=lambda: limiter.allow(frames_key, cfg.frames_per_minute),
                       audit=lambda e: audit_event({**e, "peer": node}),
-                      allowed_profiles=cfg.allowed_profiles)
-        await relay.run(ws, device.name)
+                      allowed_profiles=cfg.allowed_profiles, metrics=metrics)
+        await relay.run(ws, device.name, device.id)
 
     app.state.locator = locator
+    app.state.metrics = metrics
     return app

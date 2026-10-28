@@ -209,6 +209,7 @@ $B trust                   # trust the current network
 $B trust --list            # ...which networks are trusted
 $B trust --remove ID       # ...stop trusting one
 $B firewall                # allow the port from private networks (asks first)
+$B metrics                 # requests, live sockets, Hermes latency, approval wait since start
 
 journalctl --user -u hermes-remote-bridge -f    # live log
 ```
@@ -273,11 +274,16 @@ requests_per_minute = 240
 frames_per_minute = 600         # per live connection
 terminal_shell = ""             # the shell the phone's Terminal opens; empty means the platform
                                 #   default (Windows: pwsh, then powershell, then cmd)
+metrics = true                  # GET /metrics (Prometheus); token in ~/.config/hermes-remote/metrics.token
 ```
 
 `terminal_shell` can be any command on your PATH, with arguments, for example
 `terminal_shell = "\"C:\\Program Files\\Git\\bin\\bash.exe\" -l"` on Windows. If the command is not
 found, the default is used and a warning is logged.
+
+`GET /metrics` needs a token even on loopback. For Prometheus, point `credentials_file` (or
+`bearer_token_file`) at `~/.config/hermes-remote/metrics.token`, which opens the metrics and nothing
+else. Every metric is listed in [BRIDGE_API.md](BRIDGE_API.md#metrics-get-metrics).
 
 An unknown key is an error, not a silently ignored typo. Keys from 0.x (`hermes_url`,
 `hermes_env`, `krdp_unit`, `krdp_port`, `runs_per_minute`, `run_buffer_events`,
