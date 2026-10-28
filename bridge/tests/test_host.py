@@ -201,6 +201,20 @@ def test_elevated_firewall_cli_writes_the_rule_through_the_host(monkeypatch):
     assert seen == [("add", 8650), ("remove",)]
 
 
+def test_firewall_add_port_flag_is_used_for_state_and_elevation(monkeypatch, tmp_path):
+    from hermes_remote_bridge import cli
+    seen, checked = [], []
+    fake = type("H", (), {
+        "name": "windows", "firewall_active": lambda s: True,
+        "firewall_rule_present": lambda s, p: checked.append(p) or False,
+        "elevate_cli": lambda s, a: seen.append(a) or True})()
+    monkeypatch.setattr(firewall, "host", lambda: fake)
+    monkeypatch.setattr(cli, "host", lambda: fake)
+    cli.main(["--config", str(tmp_path / "config.toml"), "firewall", "add", "--port", "9999", "--yes"])
+    assert checked == [9999]
+    assert seen == [["firewall", "add", "--port", "9999", "--elevated"]]
+
+
 def test_windows_host_firewall_add_and_remove_use_rule_name_and_private_ranges(fake_winapi):
     rec = []
     fake_winapi.firewall_add_rule = lambda *a: rec.append(("add",) + a) or True

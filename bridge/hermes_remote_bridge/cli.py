@@ -459,21 +459,21 @@ def cmd_firewall(cfg: Config, args: argparse.Namespace) -> None:
         print("Removed." if host().elevate_cli(["firewall", "remove", "--port", str(port), "--elevated"])
               else "Not removed (cancelled or failed).")
         return
-    s = firewall.state(cfg.port)
+    s = firewall.state(port)
     if s.kind == "none" or not s.active:
-        print(f"No active firewall; port {cfg.port} is reachable.")
+        print(f"No active firewall; port {port} is reachable.")
         return
     if s.port_open:
-        print(f"{s.kind}: port {cfg.port} is already allowed from private networks.")
+        print(f"{s.kind}: port {port} is already allowed from private networks.")
         return
-    if s.kind == "unknown" or not firewall.open_commands(s.kind, cfg.port):
-        print(f"Can't manage this firewall automatically. Allow TCP {cfg.port} from your local network yourself.")
+    if s.kind == "unknown" or not firewall.open_commands(s.kind, port):
+        print(f"Can't manage this firewall automatically. Allow TCP {port} from your local network yourself.")
         return
     if args.if_needed and s.port_open is None and not sys.stdin.isatty():
         return
     print(f"{s.kind} is active. To let your phone reach the bridge over Wi-Fi, this will be added")
     print("(private networks only; the bridge only listens on Wi-Fi you trusted):")
-    for c in firewall.open_commands(s.kind, cfg.port):
+    for c in firewall.open_commands(s.kind, port):
         print("  " + " ".join(c))
     if not args.yes:
         try:
@@ -482,7 +482,7 @@ def cmd_firewall(cfg: Config, args: argparse.Namespace) -> None:
                 return
         except EOFError:
             return
-    print("Done." if firewall.open_port(s.kind, cfg.port) else "Not applied (cancelled or failed).")
+    print("Done." if firewall.open_port(s.kind, port) else "Not applied (cancelled or failed).")
 
 
 def _no_command_help(parser: argparse.ArgumentParser) -> None:

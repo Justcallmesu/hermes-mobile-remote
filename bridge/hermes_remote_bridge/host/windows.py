@@ -1,5 +1,6 @@
 """Windows 10/11: routes, neighbours, network profile and firewall through ctypes/COM (winapi.py);
-PowerShell only in run_elevated (until ticket 31). Scheduled Task, Windows Defender Firewall.
+no PowerShell for the firewall (elevation re-runs the CLI via ShellExecuteExW runas; run_elevated
+is unused). Scheduled Task, Windows Defender Firewall.
 
 Written against Microsoft's documented APIs and unit-tested with their output replaced, and
 exercised for real on a Windows 11 machine (tray start, bridge up, tray quit). See
