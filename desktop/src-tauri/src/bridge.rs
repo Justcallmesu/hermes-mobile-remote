@@ -249,6 +249,24 @@ pub fn creation_flags(os: Os) -> u32 {
     }
 }
 
+/// Variables an AppImage runtime exports that point into its own mount. A child (uv, the
+/// bridge's Python, systemctl) must not inherit them, or it loads the bundle's libraries and Python.
+pub const APPIMAGE_LEAKS: [&str; 6] =
+    ["PYTHONHOME", "PYTHONPATH", "LD_LIBRARY_PATH", "GTK_PATH", "GIO_MODULE_DIR", "GDK_PIXBUF_MODULE_FILE"];
+
+/// Remove the AppImage's leaked variables from `cmd` (only when running from an AppImage).
+pub fn scrub_appimage_env(cmd: &mut std::process::Command, in_appimage: bool) {
+    if in_appimage {
+        for k in APPIMAGE_LEAKS {
+            cmd.env_remove(k);
+        }
+    }
+}
+
+pub fn in_appimage() -> bool {
+    std::env::var_os("APPIMAGE").is_some()
+}
+
 pub struct SystemRunner;
 
 impl ProcessRunner for SystemRunner {
@@ -260,6 +278,7 @@ impl ProcessRunner for SystemRunner {
         cwd: Option<&Path>,
     ) -> std::io::Result<CliOutput> {
         let mut cmd = std::process::Command::new(exe);
+        scrub_appimage_env(&mut cmd, in_appimage());
         cmd.args(args).envs(env.iter().map(|(k, v)| (k, v)));
         if let Some(c) = cwd {
             cmd.current_dir(c);
@@ -634,5 +653,18 @@ mod tests {
         assert_eq!(p.exe, PathBuf::from("/d/hermes-remote/venv/bin/hermes-remote-bridge"));
         let p = BridgePaths::resolve(Os::Linux, &env_of(&[("HOME", "/home/u"), ("XDG_DATA_HOME", "")]));
         assert_eq!(p.venv, PathBuf::from("/home/u/.local/share/hermes-remote/venv"));
+    }
+
+    #[test]
+    fn appimage_leaked_env_is_removed_from_children() {
+        let mut cmd = std::process::Command::new("x");
+        scrub_appimage_env(&mut cmd, true);
+        let removed: Vec<_> = cmd.get_envs().filter(|(_, v)| v.is_none()).map(|(k, _)| k.to_owned()).collect();
+        for k in APPIMAGE_LEAKS {
+            assert!(removed.iter().any(|r| r == k), "{k} not removed");
+        }
+        let mut plain = std::process::Command::new("x");
+        scrub_appimage_env(&mut plain, false);
+        assert_eq!(plain.get_envs().count(), 0);
     }
 }

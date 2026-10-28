@@ -158,6 +158,7 @@ impl Spawner for OsSpawner {
         use std::os::unix::process::CommandExt;
         use std::process::{Command, Stdio};
         let mut cmd = Command::new(exe);
+        crate::bridge::scrub_appimage_env(&mut cmd, crate::bridge::in_appimage());
         cmd.args(args).stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::null());
         if pdeathsig {
             // SAFETY: prctl is async-signal-safe and touches no memory of ours.
