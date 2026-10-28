@@ -3,6 +3,7 @@
 
 pub mod bridge;
 pub mod control;
+pub mod desktop_entry;
 pub mod flyout;
 pub mod linux_service;
 pub mod migration;
@@ -48,6 +49,8 @@ pub fn run() {
         ))
         .setup(|app| {
             run_mode::on_app_start();
+            #[cfg(target_os = "linux")]
+            desktop_entry::on_app_start();
             #[cfg(any(target_os = "linux", windows))]
             tray::install(app)?;
             #[cfg(windows)]
