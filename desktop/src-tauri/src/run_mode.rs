@@ -14,7 +14,6 @@ use std::time::{Duration, Instant};
 pub const PORT_CONFLICT_CODE: i32 = 76;
 pub const PORT_CONFLICT: &str =
     "port conflict: another program is already using the bridge port, so the bridge did not start";
-pub const NO_SANDBOX_NOTE: &str = "Only while the app is open: the bridge runs without systemd sandboxing.";
 const CONFIG_FILE: &str = "desktop.toml";
 
 #[derive(Debug, Clone, Copy, PartialEq)]
