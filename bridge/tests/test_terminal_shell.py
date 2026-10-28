@@ -61,3 +61,27 @@ def test_non_windows_default_unchanged(monkeypatch):
     assert terminal.default_shell(Config()) == ["/x/bash", "-l"]
     monkeypatch.setattr(terminal.shutil, "which", _fake_which(set()))
     assert terminal.default_shell(Config()) == ["/bin/sh", "-l"]
+
+
+def test_pipe_shell_reads_from_an_unbuffered_pipe():
+    # Windows runs the shell with pipes and bufsize=0, so stdout is a raw FileIO with no read1().
+    # The first read raised, and the phone's terminal closed (and killed the shell) at once.
+    import asyncio
+    import os as _os
+    import types
+
+    from hermes_remote_bridge.terminal import Shell
+
+    r, w = _os.pipe()
+    stdout = _os.fdopen(r, "rb", buffering=0)
+    assert not hasattr(stdout, "read1")
+    sh = Shell(argv=["x"])
+    sh.proc = types.SimpleNamespace(stdout=stdout)
+    _os.write(w, b"PS C:\\> ")
+    _os.close(w)
+    try:
+        assert asyncio.run(sh.read()) == b"PS C:\\> "
+        assert asyncio.run(sh.read()) == b""  # EOF once the shell is gone
+    finally:
+        stdout.close()
+

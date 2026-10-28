@@ -134,7 +134,11 @@ class Shell:
             except OSError:
                 return b""  # EIO: the slave side closed
         assert self.proc and self.proc.stdout
-        return await loop.run_in_executor(None, self.proc.stdout.read1, READ_CHUNK)  # type: ignore[attr-defined]
+        # bufsize=0 makes stdout a raw FileIO, which has no read1(); its read(n) already returns
+        # whatever the pipe has (up to n), b"" at EOF. read1 raised here, so the Windows terminal
+        # closed itself (and killed the shell) on its first read.
+        stdout = self.proc.stdout
+        return await loop.run_in_executor(None, getattr(stdout, "read1", stdout.read), READ_CHUNK)
 
     def interrupt(self) -> None:
         if self.proc and os.name != "nt":
