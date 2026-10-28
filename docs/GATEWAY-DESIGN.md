@@ -133,3 +133,55 @@ confirmed; the app must not rely on it.
 - **Vault is not bridge-only:** it is Hermes' own `vault.list/sources/add/remove` RPC (`tui_gateway/methods_vault.py`); the bridge only allowlists it. A direct socket has it, so a gateway host shows Vault. **Cron** has gateway routes too (`/api/cron/jobs`, which the bridge wraps); ticket 08 serves the Scheduled page from them, so gateway hosts have it.
 - **Version skew:** source claims are from v0.22.5, WorkLab runs 0.22.2. Re-check W10-W13 against WorkLab once signed in.
 
+
+## Background-work signals
+
+What the phone can learn about work a session still owns, so the foreground service knows when to stay up
+(`docs/fix-background-work-dies-on-app-close.md`). Source: Hermes `tui_gateway/` at the version on the
+planner's PC (0.22.x), read with `rg`; no live gateway call was made, so every entry is **source-verified,
+not run**. "Bridge" says whether `bridge/hermes_remote_bridge/relay.py` `ALLOWED_METHODS` lets the phone call it.
+
+### What Hermes itself keeps alive (so the phone need not)
+
+`session_lifecycle.py:937-940`: when the 20 s orphan-reap timer fires, a detached session is kept (re-checked
+every grace) if it has live async delegations (`_session_has_active_delegations`, `:772`) or an active
+`/loop` or `/heartbeat` that only this process fires (`session_notifications.py:273`
+`_session_owns_live_wakeup_schedule`). A running turn is deferred while its activity clock is fresh
+(`_ws_orphan_turn_activity_is_fresh`), else interrupted once. **Plain background processes
+(`terminal background=true`) are in neither list**: an idle detached session with only those is reaped, which
+is what the 2026-10-28 test showed. So the phone must keep its socket for: a turn that looks quiet, and
+background processes. Delegations and loops survive a detach on the server, but the phone still wants to know
+for the notification and to resume.
+
+### Signals per kind
+
+| Kind | Method / event | Fields | Bridge | Status |
+|---|---|---|---|---|
+| Running turn | `session.active_list` (`methods_session.py:1143`) | per live session `status` = idle / starting / waiting / working / streaming / resuming (`contracts/sessions.py:64`, computed by `server.py:3041` `_session_live_status`: waiting = a question is open, working = `running`), `session_key`, `last_active` | yes (`relay.py:35`) | source-verified |
+| Running turn (push) | events `message.start`, `message.complete` (already used by `LiveLink`) | runtime `session_id` | n/a (event) | in use today |
+| Live children of `delegate_task` | `subagent.list` (`methods_subagents.py`, `contracts/profiles_vault_complete_foreign_subagents.py:666`) | `subagents[]` live children owned by the session | yes (`relay.py:47`) | source-verified |
+| Async delegations | **no live signal found.** `subagent.list` `delegations` holds only recently *failed* tasks; async completion units "are not agents" (`tui_gateway/AGENTS.md`). `has_live_for_session` (`tools/async_delegation.py:694`) is server-internal | none | none | **cannot detect** |
+| `/loop`, `/heartbeat` | `session.control.read` (`contracts/config_free_tier_control.py:700`): `control.loop` / `control.heartbeat` with `status`, `interval_seconds`, `ticks_fired`; push event `session.control.update` (`contracts/events.py:450`); `status.update` with `kind` loop/heartbeat | `status` (active vs paused/stopped) | **no**: `session.control.read` is not in `ALLOWED_METHODS`; the push event reaches the phone only while attached | source-verified; needs a bridge allowlist entry |
+| Background processes | `process.list` (`methods_tools.py:281`), rows with `status`, `uptime_seconds`, `output_tail`, `exit_code` (`contracts/tools_commands.py:91`); `status.update` `kind=process` | per session, scoped by Hermes | yes (`relay.py:50`) | source-verified |
+
+### Recommendation for tickets 03 and 04
+
+- **Busy = any of:** `session.active_list` status other than `idle` for a watched session; a non-empty
+  `subagent.list.subagents`; a `process.list` row with `status == "running"`; a loop or heartbeat whose
+  `status` is active when `session.control.update` has been seen.
+- **Poll** `session.active_list` plus `process.list` for watched sessions every 30 s while backgrounded and
+  attached. The 10 s `ping` of ticket 04 already proves the socket is alive; these two calls are in-memory reads
+  on the Hermes side (not measured). Events cover the gaps between polls.
+- **Loop/heartbeat over a bridge:** the phone cannot call `session.control.read` today. Either ticket 03 relies
+  on the pushed `session.control.update` only, or the bridge allowlist gains `session.control.read` (one line in
+  `relay.py`, read-only). Prefer the allowlist line; it is a separate small change in ticket 05's file.
+- **Resume** replays running state: `session.resume` returns `running` and `status` (`contracts/sessions.py:86-89`),
+  so a reattach recovers "busy" without a separate call.
+
+### Cannot detect
+
+- Live async delegations (no RPC). Mitigation: Hermes keeps such a session alive on its own; the phone treats
+  "a watched session was working before the drop" as busy for the linger time, then resumes it.
+- A turn that is `working` but silent for a long time (the Claude subscription provider waits 30 s+): the phone
+  sees `working`, but Hermes' own stale-activity check may still interrupt it once the socket is gone, which is
+  why the socket must stay up (ticket 03) rather than rely on the server's keep-alive.
