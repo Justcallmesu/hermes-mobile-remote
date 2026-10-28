@@ -480,7 +480,17 @@ def parkable_hermes():
             frame = json.loads(raw)
             if "method" in frame:
                 conn.send(json.dumps({"jsonrpc": "2.0", "id": frame["id"], "result": {"conn": conns.index(conn)}}))
+                if frame["method"] == "prompt.submit":  # keep streaming until the connection ends
+                    threading.Thread(target=stream, args=(conn,), daemon=True).start()
         closed.append(conn)
+
+    def stream(conn):
+        try:
+            while True:
+                conn.send(json.dumps({"jsonrpc": "2.0", "method": "event", "params": {"type": "message.delta"}}))
+                time.sleep(0.002)
+        except Exception:
+            pass
 
     server = serve(handler, "127.0.0.1", 0)
     threading.Thread(target=server.serve_forever, daemon=True).start()
@@ -586,6 +596,86 @@ def test_different_devices_never_share_a_parked_socket(tmp_path, parkable_hermes
         _wait(lambda: _log(cfg).count('"ws_park"') == 2, "second park")
         ready, reply = _connect_and_drop(c, tokens["phone"])
         assert len(conns) == 2 and reply["result"] == {"conn": 0}
+
+
+def test_same_device_connecting_again_replaces_its_live_connection(tmp_path, parkable_hermes):
+    port, conns, closed = parkable_hermes
+    app, tokens, _, cfg = _park_app(tmp_path, port)
+    with client(app, PHONE) as c:
+        with c.websocket_connect("/v1/ws", headers=auth(tokens["phone"])) as first:
+            ready = first.receive_json()
+            with c.websocket_connect("/v1/ws", headers=auth(tokens["phone"])) as second:
+                assert second.receive_json() == ready  # the stored gateway.ready comes first
+                with pytest.raises(WebSocketDisconnect):
+                    first.receive_json()  # the old phone side was closed
+                second.send_text(json.dumps({"jsonrpc": "2.0", "id": 2, "method": "ping"}))
+                assert second.receive_json()["result"] == {"conn": 0}
+        assert len(conns) == 1 and closed == []
+
+
+def test_a_phone_that_drops_mid_stream_returns_to_a_working_upstream(tmp_path, parkable_hermes):
+    port, conns, closed = parkable_hermes
+    app, tokens, _, cfg = _park_app(tmp_path, port)
+    with client(app, PHONE) as c:
+        with c.websocket_connect("/v1/ws", headers=auth(tokens["phone"])) as ws:
+            ws.receive_json()
+            ws.send_text(json.dumps({"jsonrpc": "2.0", "id": 1, "method": "prompt.submit",
+                                     "params": {"session_id": "a", "text": "hi"}}))
+            ws.receive_json()
+        _wait(lambda: '"ws_park"' in _log(cfg), "ws_park")
+        time.sleep(0.3)  # Hermes keeps streaming into the parked socket
+        with c.websocket_connect("/v1/ws", headers=auth(tokens["phone"])) as ws:
+            ws.receive_json()
+            ws.send_text(json.dumps({"jsonrpc": "2.0", "id": 2, "method": "ping"}))
+            while (frame := ws.receive_json()).get("id") != 2:
+                pass
+            assert frame["result"] == {"conn": 0}
+        assert len(conns) == 1 and closed == []
+
+
+def test_a_discarded_parked_socket_is_closed_to_the_end():
+    async def scenario():
+        finished = []
+
+        class Upstream:
+            def __aiter__(self):
+                return self
+
+            async def __anext__(self):
+                await asyncio.sleep(3600)
+
+            async def close(self):
+                await asyncio.sleep(0.05)
+                finished.append(True)
+
+        async def instant(_):
+            pass
+
+        from hermes_remote_bridge.relay import ParkedUpstreams
+        parked = ParkedUpstreams(300, sleep=instant)
+        parked.park("phone", Upstream(), "ready")
+        import gc
+        for _ in range(20):  # nothing else holds the close task: it must survive collection
+            gc.collect()
+            await asyncio.sleep(0.01)
+        return finished
+
+    assert asyncio.run(scenario()) == [True]
+
+
+def test_a_different_device_connecting_does_not_close_a_live_connection(tmp_path, parkable_hermes):
+    port, conns, closed = parkable_hermes
+    app, tokens, _, cfg = _park_app(tmp_path, port)
+    with client(app, PHONE) as c:
+        with c.websocket_connect("/v1/ws", headers=auth(tokens["phone"])) as phone:
+            phone.receive_json()
+            with c.websocket_connect("/v1/ws", headers=auth(tokens["tablet"])) as tablet:
+                assert tablet.receive_json()["params"]["payload"] == {"n": 2}
+                phone.send_text(json.dumps({"jsonrpc": "2.0", "id": 3, "method": "ping"}))
+                assert phone.receive_json()["result"] == {"conn": 0}  # still live, still its own upstream
+                tablet.send_text(json.dumps({"jsonrpc": "2.0", "id": 4, "method": "ping"}))
+                assert tablet.receive_json()["result"] == {"conn": 1}
+        assert len(conns) == 2
 
 
 def test_bridge_shutdown_closes_every_parked_socket(tmp_path, parkable_hermes):

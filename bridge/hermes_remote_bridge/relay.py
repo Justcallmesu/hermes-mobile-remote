@@ -130,6 +130,7 @@ class ParkedUpstreams:
         self._audit = audit
         self._parked: dict[str, tuple[Any, str, list[asyncio.Task]]] = {}
         self.live: dict[str, _Live] = {}
+        self._closing: set[asyncio.Task] = set()
 
     @property
     def enabled(self) -> bool:
@@ -164,7 +165,9 @@ class ParkedUpstreams:
         if entry is not None:
             for t in entry[2]:
                 t.cancel()
-            asyncio.get_running_loop().create_task(_close_quietly(entry[0]))
+            task = asyncio.get_running_loop().create_task(_close_quietly(entry[0]))
+            self._closing.add(task)  # keep a reference until it is done
+            task.add_done_callback(self._closing.discard)
 
     async def close_all(self) -> None:
         entries, self._parked = list(self._parked.values()), {}
@@ -285,6 +288,9 @@ class Relay:
             self.audit({"event": "ws_close", "device": device_name, "reason": reason, "methods": methods})
             keep = (parked.enabled and ready is not None
                     and not reason.startswith("hermes") and reason != "bridge shutting down")
+            # The reader task must have ended before the parked drain reads the same socket.
+            with contextlib.suppress(BaseException):
+                await asyncio.gather(*tasks, return_exceptions=True)
             if keep:
                 parked.park(device_name, upstream, ready)
                 self.audit({"event": "ws_park", "device": device_name})
@@ -292,7 +298,6 @@ class Relay:
                 del parked.live[device_name]
             live.done.set()
             with contextlib.suppress(BaseException):
-                await asyncio.gather(*tasks, return_exceptions=True)
                 if not keep:
                     await upstream.close()
                 if (phone.application_state != WebSocketState.DISCONNECTED
