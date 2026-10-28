@@ -515,6 +515,7 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
         refreshProfiles()
         refreshSessions()
         settings.refresh()
+        cron.refresh()
         discoverEndpoints()
     }
 
@@ -548,6 +549,7 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
                 refreshProfiles()
                 refreshSessions()
                 settings.refresh()
+                cron.refresh()
             }
             HostConnection.NeedsSignIn -> {
                 _gatewayHost.value = GatewayHostState(pr.id, pr.name.ifBlank { "Gateway" }, null, signedOut = true)
@@ -683,6 +685,7 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
                         refreshProfiles()
                         refreshSessions()
                         settings.refresh()
+                        cron.refresh()
                         discoverEndpoints()
                         return true
                     } catch (t: Throwable) {
@@ -944,6 +947,7 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
         refreshProfiles()
         refreshSessions()
         settings.refresh()
+        cron.refresh()
         val g = gateway ?: return
         if (g.state.value != GatewayState.OPEN) return // the reopen emits Incoming.Open, which resumes
         viewModelScope.launch {
@@ -1325,6 +1329,7 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
         vault.clear()
         refreshSessions()
         settings.refresh()
+        cron.refresh()
     }
 
     /** The paired PC and the Hermes profile on it that requests are for right now. */

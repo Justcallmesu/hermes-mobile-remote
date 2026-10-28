@@ -419,7 +419,7 @@ class MainActivity : ComponentActivity() {
         if (wide) {
             Row(Modifier.fillMaxSize()) {
                 Surface(color = MaterialTheme.colorScheme.surfaceContainerLow, modifier = Modifier.width(320.dp).fillMaxHeight()) {
-                    SessionsPane(sessions, chat.sessionId, sessionActions, pcs = pcs, profiles = hermesProfiles, view = sessionView, update = update, onOpenUpdate = openUpdate, groupOrder = groupOrder)
+                    SessionsPane(sessions, chat.sessionId, sessionActions, pcs = pcs, profiles = hermesProfiles, view = sessionView, update = update, onOpenUpdate = openUpdate, groupOrder = groupOrder, scheduledCount = cron.jobs.count { it.state == "scheduled" })
                 }
                 VerticalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f))
                 Box(Modifier.weight(1f)) { content() }
@@ -427,7 +427,7 @@ class MainActivity : ComponentActivity() {
         } else {
             ModalNavigationDrawer(drawerState = drawer, gesturesEnabled = page == Page.CHAT || drawer.isOpen, drawerContent = {
                 ModalDrawerSheet(drawerContainerColor = MaterialTheme.colorScheme.surfaceContainerLow, modifier = Modifier.width(320.dp)) {
-                    SessionsPane(sessions, chat.sessionId, sessionActions, pcs = pcs, profiles = hermesProfiles, view = sessionView, update = update, onOpenUpdate = openUpdate, groupOrder = groupOrder)
+                    SessionsPane(sessions, chat.sessionId, sessionActions, pcs = pcs, profiles = hermesProfiles, view = sessionView, update = update, onOpenUpdate = openUpdate, groupOrder = groupOrder, scheduledCount = cron.jobs.count { it.state == "scheduled" })
                 }
             }) { content() }
         }
