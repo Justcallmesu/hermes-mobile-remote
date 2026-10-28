@@ -71,14 +71,13 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("error while building Hermes Remote")
         .run(|app, event| {
-            // Quit stops the bridge cleanly first; a hard kill is covered by the Job Object.
+            // Quit stops the bridge cleanly before the process ends; a hard kill is covered by the
+            // Job Object. `Exit` fires once, after the exit is decided. Preventing `ExitRequested`
+            // and calling `app.exit` again would raise `ExitRequested` again, so the app never quit.
             #[cfg(windows)]
-            if let tauri::RunEvent::ExitRequested { api, .. } = &event {
-                api.prevent_exit();
-                let app = app.clone();
-                win_child::quit(run_mode::app_child(), &move || app.exit(0));
+            if let tauri::RunEvent::Exit = &event {
+                win_child::quit(run_mode::app_child(), &|| {});
             }
-            #[cfg(not(windows))]
             let _ = (app, event);
         });
 }
