@@ -32,12 +32,18 @@ class ReattachPolicyTest {
         assertEquals(listOf(0L, 1_000L, 2_000L, 5_000L, 5_000L, 5_000L), (0..5).map { ReattachPolicy.retryDelayMs(it) })
     }
 
-    @Test fun switchingHostsResumesEveryWatchedSessionOnTheNewSocket() = runBlocking {
-        val link = FakeLink()
+    @Test fun linkedSwitchQueuesEveryWatchedSessionAndTheNextOpenResumesThem() = runBlocking {
         val watched = mapOf("r1" to LiveLink.Watched("s1", "One", "work"), "r2" to LiveLink.Watched("s2", "Two"))
-        val moved = ReattachPolicy.resumeAfterSwitch(link, watched)
+        val queued = ReattachPolicy.queuedOnSwap(linkedSwitch = true, watched.keys)
+        assertEquals(setOf("r1", "r2"), queued)
+        val link = FakeLink()
+        val moved = ReattachPolicy.resumeWatched(link, watched, queued)
         assertEquals(listOf("s1", "s2"), link.calls.filter { it.first == "session.resume" }.map { it.second.getString("session_id") }.sorted())
         assertEquals(mapOf("r1" to "new-s1", "r2" to "new-s2"), moved)
+    }
+
+    @Test fun replacingTheSocketOfAnUnlinkedHostQueuesNothing() {
+        assertEquals(emptySet<String>(), ReattachPolicy.queuedOnSwap(linkedSwitch = false, setOf("r1", "r2")))
     }
 
     @Test fun resumesOnlyRunningOrWaitingSessions() = runBlocking {

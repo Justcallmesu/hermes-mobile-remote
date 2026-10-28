@@ -574,12 +574,12 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
         }
     }
 
-    private fun start(p: Pairing) {
+    private fun start(p: Pairing, linkedSwitch: Boolean = false) {
         bridgeAddresses = store.bridgeAddresses
         val savedMode = runCatching { TransportMode.valueOf(store.transportMode.uppercase()) }.getOrDefault(TransportMode.AUTO)
         _conn.update { it.copy(activeUrl = p.url, mode = savedMode, needsRepairForLan = p.pin == null,
             transport = EndpointResolver.transportOf(EndpointResolver.hostOf(p.url).orEmpty())) }
-        useClient(BridgeClient(p))
+        useClient(BridgeClient(p), linkedSwitch)
         _features.value = store.bridgeFeatures
         loadCachedDrawer()
         store.lastSessionId?.let { openSession(it) }
@@ -591,10 +591,10 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
     }
 
     /** Point the app (REST and the live socket) at [c]. */
-    private fun useClient(c: BridgeClient) {
+    private fun useClient(c: BridgeClient, linkedSwitch: Boolean = false) {
         client = c
         source = c
-        attach(LiveLink.connect(app, c))
+        attach(LiveLink.connect(app, c, linkedSwitch))
     }
 
     /** Make the active host (bridge or gateway) go live: [decideConnection] picks how, from its kind and tokens. */
@@ -665,12 +665,12 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
                         _gatewayHost.value = GatewayHostState(l.gatewayId, profiles.active().name.ifBlank { GatewayUrl.hostName(c.baseUrl) }, c.baseUrl, signedOut = false)
                         _conn.update { it.copy(activeUrl = c.baseUrl) }
                         source = GatewayRestClient(c.baseUrl, auth, OkHttpTransport()) { _gatewayHost.update { it?.copy(signedOut = true) } }
-                        attach(LiveLink.connectGateway(app, c, auth))
+                        attach(LiveLink.connectGateway(app, c, auth, linkedSwitch = true))
                     }
                     else -> {
                         _gatewayHost.value = null
                         _pairing.value = pairing
-                        start(pairing)
+                        start(pairing, linkedSwitch = true)
                     }
                 }
                 _conn.update { it.copy(via = viaLabel(on)) }

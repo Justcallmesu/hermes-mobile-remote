@@ -72,20 +72,20 @@ object LiveLink {
     }
 
     /** Reuse the live socket when it already points at [client]'s address; otherwise replace it. */
-    fun connect(context: Context, client: BridgeClient): Gateway = adopt(context, client.gateway())
+    fun connect(context: Context, client: BridgeClient, linkedSwitch: Boolean = false): Gateway = adopt(context, client.gateway(), linkedSwitch)
 
     /** The same for a gateway host: its socket takes a fresh ticket from [auth] on every connect. */
-    fun connectGateway(context: Context, creds: GatewayCredentials, auth: GatewayAuth): Gateway =
-        adopt(context, buildGateway(SharedHttp.client, creds.baseUrl, auth))
+    fun connectGateway(context: Context, creds: GatewayCredentials, auth: GatewayAuth, linkedSwitch: Boolean = false): Gateway =
+        adopt(context, buildGateway(SharedHttp.client, creds.baseUrl, auth), linkedSwitch)
 
-    private fun adopt(context: Context, fresh: Gateway): Gateway {
+    private fun adopt(context: Context, fresh: Gateway, linkedSwitch: Boolean): Gateway {
         gateway?.let { g ->
             if (g.url == fresh.url && g.state.value != GatewayState.CLOSED && g.state.value != GatewayState.UNAUTHORIZED) return g
         }
         // A switch to the other way of a linked host: the new socket's first Open resumes every watched session.
-        val switched = gateway != null
+        val switched = gateway != null && linkedSwitch
         close()
-        if (switched) toResume += watched.keys
+        toResume += ReattachPolicy.queuedOnSwap(switched, watched.keys)
         gateway = fresh
         fresh.start()
         val app = context.applicationContext
