@@ -35,6 +35,16 @@ pub fn render_unit(template: &str, bin: &Path) -> String {
     template.replace("@BIN@", &bin.to_string_lossy())
 }
 
+/// The unit's `ReadWritePaths=` directories with `%h` replaced by `home`.
+pub fn read_write_paths(unit_text: &str, home: &Path) -> Vec<PathBuf> {
+    unit_text
+        .lines()
+        .filter_map(|l| l.trim().strip_prefix("ReadWritePaths="))
+        .flat_map(|v| v.split_whitespace())
+        .map(|p| PathBuf::from(p.replace("%h", &home.to_string_lossy())))
+        .collect()
+}
+
 /// `$XDG_CONFIG_HOME/systemd/user`, default `~/.config/systemd/user`.
 pub fn unit_dir(env: &dyn Fn(&str) -> Option<String>) -> PathBuf {
     let get = |k: &str| env(k).filter(|v| !v.is_empty());
@@ -124,8 +134,14 @@ impl ServiceControl for Systemd<'_> {
     }
     fn write_unit(&self, bin: &Path) -> Result<(), String> {
         std::fs::create_dir_all(&self.unit_dir).map_err(|e| format!("{}: {e}", self.unit_dir.display()))?;
+        let text = render_unit(UNIT_TEMPLATE, bin);
+        // systemd refuses to start the sandboxed unit (226/NAMESPACE) when a ReadWritePaths dir is missing.
+        let home = std::env::var("HOME").unwrap_or_default();
+        for dir in read_write_paths(&text, Path::new(&home)) {
+            std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+        }
         let path = self.unit_dir.join(UNIT_NAME);
-        std::fs::write(&path, render_unit(UNIT_TEMPLATE, bin)).map_err(|e| format!("{}: {e}", path.display()))?;
+        std::fs::write(&path, text).map_err(|e| format!("{}: {e}", path.display()))?;
         self.systemctl_ok(&["daemon-reload"])
     }
 }
@@ -305,6 +321,15 @@ mod tests {
         assert_eq!(
             sd(&denied, dir.path()).linger_on().unwrap_err(),
             "needs your password: run `loginctl enable-linger` in a terminal"
+        );
+    }
+
+    #[test]
+    fn the_unit_sandbox_dirs_are_read_from_the_template() {
+        let dirs = read_write_paths(&render_unit(UNIT_TEMPLATE, Path::new("/v/bin/b")), Path::new("/home/u"));
+        assert_eq!(
+            dirs,
+            [PathBuf::from("/home/u/.config/hermes-remote"), PathBuf::from("/home/u/.local/state/hermes-remote")]
         );
     }
 }
