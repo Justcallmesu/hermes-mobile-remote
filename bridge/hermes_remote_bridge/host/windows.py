@@ -87,6 +87,9 @@ class WindowsHost(Host):
         from ..config import Config  # config imports this package
         return "active" if winapi.bridge_reachable(Config.load().port) else "inactive"
 
+    def process_snapshot(self) -> list[dict] | None:
+        return winapi.process_snapshot()
+
     # ------------------------------------------------------------------ interactive use
 
     def launched_by_double_click(self) -> bool:

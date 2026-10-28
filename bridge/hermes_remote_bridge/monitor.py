@@ -18,6 +18,8 @@ from pathlib import Path
 
 import psutil
 
+from .host import host
+
 log = logging.getLogger(__name__)
 
 SAMPLE_SECONDS = 10
@@ -160,6 +162,8 @@ class Monitor:
         self.latest: dict = {}
         self.cores: list[float] = []
         self._procs: dict[int, psutil.Process] = {}
+        self._times: dict[int, tuple[int, float]] = {}  # pid -> (created, cpu seconds), snapshot path
+        self._times_at = 0.0
         self._lock = threading.Lock()  # db + sampler state
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
@@ -232,14 +236,57 @@ class Monitor:
 
         CPU% needs two readings, so Process objects are kept between calls; the first call after
         start shows 0% for processes it has not seen before.
+
+        Only name, memory and CPU are read for every process. User, status and command line are
+        each a separate per-process kernel query on Windows (status alone was ~11 ms x 380
+        processes), so they are filled in only for the rows returned, or when a search needs the
+        command line. Reading them all made /v1/monitor/now take 9-16 s on Windows.
         """
         sort = sort if sort in SORTS else "cpu"
         ncpu = psutil.cpu_count() or 1
         q = query.strip().lower()
+        snapshot = host().process_snapshot()
+        rows = self._rows_from_snapshot(snapshot, ncpu, q) if snapshot is not None else self._rows_from_psutil(ncpu, q)
+        key = {"cpu": lambda x: (-x["cpu"], -x["mem_mb"]), "mem": lambda x: (-x["mem_mb"], -x["cpu"]),
+               "name": lambda x: (x["name"].lower(), x["pid"]), "pid": lambda x: x["pid"]}[sort]
+        rows.sort(key=lambda r: key(r[2]))
         out = []
+        for p, cmd, row in rows[:max(1, min(limit, 500))]:
+            out.append({**row, **_details(p, cmd)})
+        return {"total": len(rows), "sort": sort, "processes": out}
+
+    def _rows_from_snapshot(self, snapshot: list[dict], ncpu: int, q: str) -> list:
+        """CPU% from the change in each process's CPU seconds since the previous snapshot."""
+        now = time.monotonic()
+        dt = now - self._times_at if self._times_at else 0.0
+        rows, times = [], {}
+        with self._lock:
+            for s in snapshot:
+                pid = s["pid"]
+                if pid == 0:  # "System Idle Process": idle time, not a process
+                    continue
+                times[pid] = (s["created"], s["cpu_s"])
+                prev = self._times.get(pid)
+                cpu = 0.0
+                if dt > 0 and prev and prev[0] == s["created"]:
+                    cpu = max(0.0, (s["cpu_s"] - prev[1]) / dt * 100 / ncpu)
+                name = s["name"] or ("System" if pid == 4 else "?")
+                p = _LazyProcess(pid)
+                cmd = None
+                if q and q not in name.lower() and q != str(pid):
+                    cmd = _cmdline(p)
+                    if q not in cmd.lower():
+                        continue
+                rows.append((p, cmd, {"pid": pid, "name": name, "cpu": round(cpu, 1),
+                                      "mem_mb": round(s["rss"] / 1048576)}))
+            self._times, self._times_at = times, now
+        return rows
+
+    def _rows_from_psutil(self, ncpu: int, q: str) -> list:
+        rows = []
         with self._lock:
             seen: dict[int, psutil.Process] = {}
-            for p in psutil.process_iter(["name", "username", "memory_info", "status", "cmdline"]):
+            for p in psutil.process_iter(["name", "memory_info"]):
                 proc = self._procs.get(p.pid)
                 if proc is None or proc.create_time() != p.create_time():
                     proc = p
@@ -247,21 +294,19 @@ class Monitor:
                 try:
                     cpu = proc.cpu_percent()
                     info = p.info
-                    cmd = " ".join(info.get("cmdline") or [])[:300]
                     name = info.get("name") or "?"
-                    if q and q not in name.lower() and q not in cmd.lower() and q != str(p.pid):
-                        continue
+                    cmd = None
+                    if q and q not in name.lower() and q != str(p.pid):
+                        cmd = _cmdline(p)
+                        if q not in cmd.lower():
+                            continue
                     rss = info["memory_info"].rss if info.get("memory_info") else 0
-                    out.append({"pid": p.pid, "name": name, "user": (info.get("username") or "").split("\\")[-1],
-                                "cpu": round(cpu / ncpu, 1), "mem_mb": round(rss / 1048576), "status": info.get("status") or "",
-                                "cmd": cmd})
+                    rows.append((p, cmd, {"pid": p.pid, "name": name, "cpu": round(cpu / ncpu, 1),
+                                          "mem_mb": round(rss / 1048576)}))
                 except (psutil.Error, OSError):
                     continue
             self._procs = seen
-        key = {"cpu": lambda x: (-x["cpu"], -x["mem_mb"]), "mem": lambda x: (-x["mem_mb"], -x["cpu"]),
-               "name": lambda x: (x["name"].lower(), x["pid"]), "pid": lambda x: x["pid"]}[sort]
-        out.sort(key=key)
-        return {"total": len(out), "sort": sort, "processes": out[:max(1, min(limit, 500))]}
+        return rows
 
     def top(self, n: int = 8) -> list[dict]:
         return [{k: p[k] for k in ("pid", "name", "cpu", "mem_mb")} for p in self.processes("cpu", n)["processes"]]
@@ -411,3 +456,44 @@ def _hostname() -> str:
     import socket
 
     return socket.gethostname()
+
+
+class _LazyProcess:
+    """A psutil.Process opened only if one of its expensive fields is actually asked for."""
+
+    def __init__(self, pid: int) -> None:
+        self.pid = pid
+        self._p: psutil.Process | None = None
+
+    def _proc(self) -> psutil.Process:
+        if self._p is None:
+            self._p = psutil.Process(self.pid)
+        return self._p
+
+    def cmdline(self):
+        return self._proc().cmdline()
+
+    def username(self):
+        return self._proc().username()
+
+    def status(self):
+        return self._proc().status()
+
+
+def _cmdline(p) -> str:
+    try:
+        return " ".join(p.cmdline() or [])[:300]
+    except (psutil.Error, OSError):
+        return ""
+
+
+def _details(p, cmd: str | None) -> dict:
+    """The per-process fields that are expensive on Windows; "" when the process denies them."""
+    def get(fn):
+        try:
+            return fn() or ""
+        except (psutil.Error, OSError):
+            return ""
+    return {"user": get(p.username).split("\\")[-1], "status": get(p.status),
+            "cmd": cmd if cmd is not None else _cmdline(p)}
+

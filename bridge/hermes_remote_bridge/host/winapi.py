@@ -309,3 +309,54 @@ def bridge_reachable(port: int = BRIDGE_PORT) -> bool:
     """The bridge answers on its loopback port: that is what the supervisor/app reports as running."""
     with socket.create_connection(("127.0.0.1", port), timeout=1.0):
         return True
+
+
+SYSTEM_PROCESS_INFORMATION = 5
+STATUS_INFO_LENGTH_MISMATCH = 0xC0000004
+# SYSTEM_PROCESS_INFORMATION (x64) offsets, from the Windows SDK / winternl.h layout.
+_SPI_NEXT, _SPI_CREATE, _SPI_USER, _SPI_KERNEL, _SPI_NAME_LEN, _SPI_NAME_BUF = 0, 32, 40, 48, 56, 64
+_SPI_PID, _SPI_WORKING_SET = 80, 144
+
+
+def parse_process_snapshot(buf: bytes, read_name) -> list[dict]:
+    """Walk a SystemProcessInformation buffer. ``read_name(ptr, nbytes)`` decodes an ImageName."""
+    import struct
+    out, off = [], 0
+    while True:
+        nxt = struct.unpack_from("<I", buf, off + _SPI_NEXT)[0]
+        create, user, kernel = struct.unpack_from("<qqq", buf, off + _SPI_CREATE)
+        name_len = struct.unpack_from("<H", buf, off + _SPI_NAME_LEN)[0]
+        name_ptr = struct.unpack_from("<Q", buf, off + _SPI_NAME_BUF)[0]
+        pid = struct.unpack_from("<Q", buf, off + _SPI_PID)[0]
+        rss = struct.unpack_from("<Q", buf, off + _SPI_WORKING_SET)[0]
+        out.append({"pid": pid, "name": read_name(name_ptr, name_len) if name_ptr else "",
+                    "cpu_s": (user + kernel) / 1e7, "rss": rss, "created": create})
+        if not nxt:
+            return out
+        off += nxt
+
+
+@_safe(None)
+def process_snapshot() -> list[dict] | None:
+    """Every process's name, CPU seconds, working set and start time, in ONE kernel call.
+
+    psutil asks per process, and for every process a normal user may not open (services, other
+    sessions) it falls back to this same system-wide query once per field: ~13 ms each, 7+ s for a
+    process list. One query answers for all of them in milliseconds.
+    """
+    import ctypes as c
+    ntdll = c.WinDLL("ntdll")
+    ntdll.NtQuerySystemInformation.restype = c.c_uint32
+    size = 1 << 20
+    for _ in range(8):
+        buf = c.create_string_buffer(size)
+        needed = c.c_uint32()
+        status = ntdll.NtQuerySystemInformation(SYSTEM_PROCESS_INFORMATION, buf, size, c.byref(needed))
+        if status == STATUS_INFO_LENGTH_MISMATCH:
+            size = max(size * 2, needed.value + (64 << 10))
+            continue
+        if status != 0:
+            return None
+        raw = buf.raw  # copy; ImageName pointers point into buf, which stays alive below
+        return parse_process_snapshot(raw, lambda ptr, n: c.wstring_at(ptr, n // 2))
+    return None

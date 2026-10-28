@@ -158,6 +158,10 @@ class Host:
     def firewall_remove(self) -> bool:
         return False
 
+    def process_snapshot(self) -> list[dict] | None:
+        """Every process's {pid, name, cpu_s, rss, created} in one call, or None to use psutil."""
+        return None
+
     def elevate_cli(self, args: list[str]) -> bool:
         """Relaunch the bridge CLI with ``args`` after a UAC prompt; False where that doesn't exist."""
         return False
