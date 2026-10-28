@@ -498,7 +498,7 @@ def _no_command_help(parser: argparse.ArgumentParser) -> None:
     print("  hermes-remote-bridge devices        list paired phones")
     print("  hermes-remote-bridge trust          trust the Wi-Fi network you are on now")
     if host().name == "windows":
-        print("\nEasiest: double-click  pair.cmd  in the project folder.")
+        print("\nEasiest: open Hermes Remote from the Start menu and choose Pair a device.")
     print("\nAll commands: hermes-remote-bridge --help")
     if host().launched_by_double_click():
         input("\nPress Enter to close this window...")

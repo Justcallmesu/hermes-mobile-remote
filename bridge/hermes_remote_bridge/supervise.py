@@ -1,6 +1,6 @@
 """The supervisor: run ``serve`` as a child and keep it running, the same on every OS.
 
-Policy (formerly bridge/windows/supervise.ps1):
+Policy (ported from the old PowerShell supervisor):
   exit 75  the addresses to serve changed: restart after 2 s, forget earlier quick failures
   exit 76  port conflict: another bridge owns the port, stop (retrying would only fill the log)
   other    a run shorter than 20 s is a quick failure; wait max(3, min(60, 5 * failures)) s

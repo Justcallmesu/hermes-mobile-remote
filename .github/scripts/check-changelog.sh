@@ -12,7 +12,7 @@ base=${1:?base ref}
 head=${2:-HEAD}
 
 # What users get: the app, the bridge and the installers. Tests, docs, demo and CI are not listed.
-shipped='^(android/app/src/main/|bridge/hermes_remote_bridge/|bridge/windows/|bridge/pyproject\.toml|install\.(sh|ps1|cmd)$|pair\.cmd$|tray\.cmd$)'
+shipped='^(android/app/src/main/|bridge/hermes_remote_bridge/|bridge/pyproject\.toml|install\.sh$|desktop/src/|desktop/src-tauri/(src/|tauri\.conf\.json|windows/))'
 
 files=$(git diff --name-only "$base" "$head")
 code=$(grep -E "$shipped" <<<"$files" || true)

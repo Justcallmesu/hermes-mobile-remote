@@ -1,15 +1,12 @@
 """Windows 10/11: routes, neighbours, network profile and firewall through ctypes/COM (winapi.py);
-no PowerShell for the firewall (elevation re-runs the CLI via ShellExecuteExW runas; run_elevated
-is unused). The old Scheduled Task is only read for migration and removed by the desktop app.
+no PowerShell anywhere (elevation re-runs the CLI via ShellExecuteExW runas). The old Scheduled
+Task of a script install is removed by the desktop app (migration).
 
-Written against Microsoft's documented APIs and unit-tested with their output replaced, and
-exercised for real on a Windows 11 machine (tray start, bridge up, tray quit). See
-docs/PLATFORMS.md#what-is-verified-on-windows for what that does and does not prove.
+Written against Microsoft's documented APIs and unit-tested with their output replaced; the
+ctypes/COM calls have not yet run on a real Windows machine (see docs/PLATFORMS.md).
 """
 from __future__ import annotations
 
-import base64
-import json
 import os
 import shutil
 import subprocess
@@ -21,50 +18,10 @@ from .base import Host
 
 TASK_NAME = "Hermes Mobile Remote"
 FIREWALL_RULE = "Hermes Mobile Remote"
-_NO_WINDOW = 0x08000000  # CREATE_NO_WINDOW: don't flash a console when run from the task
 
 
 def _local_appdata() -> Path:
     return Path(os.environ.get("LOCALAPPDATA") or Path.home() / "AppData" / "Local")
-
-
-def powershell() -> str | None:
-    return shutil.which("powershell") or shutil.which("pwsh")
-
-
-def encode_script(script: str) -> str:
-    """Base64 of the UTF-16LE script, the form ``powershell -EncodedCommand`` takes."""
-    return base64.b64encode(script.encode("utf-16-le")).decode("ascii")
-
-
-def ps(script: str, timeout: float = 15.0) -> str:
-    """Run a PowerShell snippet and return stdout; "" when PowerShell is missing or it fails."""
-    exe = powershell()
-    if not exe:
-        return ""
-    try:
-        r = subprocess.run([exe, "-NoProfile", "-NonInteractive", "-EncodedCommand", encode_script(script)],
-                           capture_output=True, text=True, timeout=timeout,
-                           creationflags=_NO_WINDOW if os.name == "nt" else 0)
-    except (OSError, subprocess.SubprocessError):
-        return ""
-    return r.stdout if r.returncode == 0 else ""
-
-
-def ps_json(script: str) -> list[dict]:
-    """Run a snippet that ends in ``ConvertTo-Json`` and always return a list of objects.
-
-    ConvertTo-Json emits a bare object for one result and an array for several; callers should not
-    care which.
-    """
-    out = ps(script).strip()
-    if not out:
-        return []
-    try:
-        data = json.loads(out)
-    except ValueError:
-        return []
-    return data if isinstance(data, list) else [data]
 
 
 def parse_default_routes(rows: list[dict]) -> tuple[str, str] | None:
@@ -176,17 +133,3 @@ class WindowsHost(Host):
         own = Path(sys.executable).with_name("hermes-remote-bridge.exe")
         exe = str(own) if own.exists() else sys.argv[0]
         return winapi.run_elevated(exe, subprocess.list2cmdline(args)) == 0
-
-    def run_elevated(self, script: str) -> bool:
-        """Run ``script`` in an elevated PowerShell (one UAC prompt); True when it exits 0."""
-        exe = powershell()
-        if not exe:
-            return False
-        wrapper = ("$p = Start-Process -FilePath '%s' -Verb RunAs -Wait -PassThru -ArgumentList "
-                   "'-NoProfile','-NonInteractive','-EncodedCommand','%s'; exit $p.ExitCode"
-                   % (exe.replace("'", "''"), encode_script(script)))
-        try:
-            return subprocess.run([exe, "-NoProfile", "-EncodedCommand", encode_script(wrapper)],
-                                  timeout=180).returncode == 0
-        except (OSError, subprocess.SubprocessError):
-            return False

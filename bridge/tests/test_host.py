@@ -1,4 +1,4 @@
-"""Per-OS behaviour. The Windows host is exercised with PowerShell's output replaced, so these run
+"""Per-OS behaviour. The Windows host is exercised with its Win32/COM answers replaced, so these run
 (and gate CI) on every platform; they prove the parsing and command construction, not that
 Windows itself behaves as documented."""
 import json
@@ -58,20 +58,6 @@ def test_default_route_prefers_lowest_metric_and_skips_onlink():
     ("00-00-00-00-00-00", None), ("", None), ("not a mac", None)])
 def test_mac_normalisation(raw, want):
     assert normalise_mac(raw) == want
-
-
-def test_ps_json_accepts_one_object_or_a_list(monkeypatch):
-    monkeypatch.setattr(windows, "ps", lambda s, timeout=15.0: json.dumps({"a": 1}))
-    assert windows.ps_json("x") == [{"a": 1}]
-    monkeypatch.setattr(windows, "ps", lambda s, timeout=15.0: json.dumps([{"a": 1}, {"a": 2}]))
-    assert len(windows.ps_json("x")) == 2
-    monkeypatch.setattr(windows, "ps", lambda s, timeout=15.0: "garbage")
-    assert windows.ps_json("x") == []
-
-
-def test_encoded_command_is_utf16le_base64():
-    import base64
-    assert base64.b64decode(windows.encode_script("Get-Date")).decode("utf-16-le") == "Get-Date"
 
 
 class FakeWinapi:

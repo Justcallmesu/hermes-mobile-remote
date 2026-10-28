@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Hermes Mobile Remote - Linux tray app.
 
-The Linux counterpart of bridge/windows/tray.ps1. It mirrors that menu: status, the doctor
+The Linux tray from before the desktop app (kept until D23's follow-up). Its menu: status, the doctor
 checks, start/stop/restart, network trust, devices (pair / revoke), logs, firewall, start at
 login, quit.
 
