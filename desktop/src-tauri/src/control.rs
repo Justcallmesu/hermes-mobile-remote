@@ -86,7 +86,7 @@ pub fn installed_list_in(config_dir: &Path) -> Option<String> {
 }
 
 #[cfg(target_os = "linux")]
-fn backend() -> impl Control {
+pub fn backend() -> impl Control {
     crate::run_mode::ModeControl {
         inner: crate::linux_service::LinuxControl(crate::linux_service::Systemd::from_env()),
         mode: crate::run_mode::read_mode(&BridgePaths::from_env().config_dir),
@@ -95,7 +95,7 @@ fn backend() -> impl Control {
 }
 
 #[cfg(not(target_os = "linux"))]
-fn backend() -> impl Control {
+pub fn backend() -> impl Control {
     Unsupported
 }
 

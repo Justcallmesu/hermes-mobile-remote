@@ -6,6 +6,7 @@ pub mod control;
 pub mod linux_service;
 pub mod run_mode;
 pub mod setup;
+pub mod tray;
 pub mod version;
 
 #[tauri::command]
@@ -19,9 +20,19 @@ pub fn run() {
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
             None,
         ))
-        .setup(|_| {
+        .setup(|app| {
             run_mode::on_app_start();
+            #[cfg(target_os = "linux")]
+            tray::install(app)?;
+            #[cfg(not(target_os = "linux"))]
+            let _ = app;
             Ok(())
+        })
+        .on_window_event(|window, event| {
+            #[cfg(target_os = "linux")]
+            tray::on_window_event(window, event);
+            #[cfg(not(target_os = "linux"))]
+            let _ = (window, event);
         })
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_shell::init())
