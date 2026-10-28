@@ -150,7 +150,7 @@ def cmd_serve(cfg: Config, _: argparse.Namespace) -> None:
     mdns = _advertise(cfg, pin, sorted(lan)) if lan and cfg.mdns else None
     if lan and cfg.mdns and mdns is None:
         log.warning("mDNS unavailable on this PC; the app can't follow an IP change by itself")
-    if cfg.lan and net and not lan:
+    if cfg.lan and net and not lan and not os.environ.get(NO_PROMPT_ENV):
         _ask_to_trust(trust, net)
     try:
         changed = asyncio.run(_serve_until_network_changes(servers, sockets, cfg, trust,
@@ -232,6 +232,10 @@ def _advertise(cfg: Config, pin: str | None, lan_ips: list[str]):
     lists the addresses we actually serve, so a resolver never hands the phone a Docker bridge.
     """
     return host().advertise_mdns(cfg.port, pin, lan_ips)
+
+
+# Set by the desktop app (its unit and its child): the app asks about new networks itself (D44).
+NO_PROMPT_ENV = "HERMES_REMOTE_NO_TRUST_PROMPT"
 
 
 def _ask_to_trust(trust: TrustStore, net) -> None:

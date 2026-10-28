@@ -33,7 +33,10 @@ pub trait ServiceControl {
 
 /// The unit text: the template with `@BIN@` replaced.
 pub fn render_unit(template: &str, bin: &Path) -> String {
-    template.replace("@BIN@", &bin.to_string_lossy())
+    // The app asks about new networks itself, so the bridge must not prompt too (D44).
+    template
+        .replace("@BIN@", &bin.to_string_lossy())
+        .replacen("[Service]\n", &format!("[Service]\nEnvironment={}=1\n", crate::bridge::NO_PROMPT_ENV), 1)
 }
 
 /// The unit's `ReadWritePaths=` directories with `%h` replaced by `home`.
@@ -169,10 +172,40 @@ impl<S: ServiceControl> Control for LinuxControl<S> {
         }
     }
     fn firewall_fix(&self) -> Result<(), String> {
-        Err(UNSUPPORTED.into())
+        firewall_fix_with(&SystemRunner, &BridgePaths::from_env().exe)
     }
     fn open_logs(&self) -> Result<(), String> {
-        Err(UNSUPPORTED.into())
+        let home = std::env::var("HOME").unwrap_or_default();
+        let dir = std::env::var("XDG_STATE_HOME")
+            .ok()
+            .filter(|v| !v.is_empty())
+            .map(PathBuf::from)
+            .unwrap_or_else(|| Path::new(&home).join(".local/state"))
+            .join("hermes-remote");
+        let _ = std::fs::create_dir_all(&dir);
+        SystemRunner
+            .run(Path::new("xdg-open"), &[dir.to_string_lossy().into_owned()])
+            .map(|_| ())
+            .map_err(|e| format!("xdg-open: {e}"))
+    }
+}
+
+/// `hermes-remote-bridge firewall --yes`: the bridge finds ufw/firewalld and asks for the password
+/// through polkit (pkexec). Its last line ("Done.", "Not applied ...", "No active firewall ...") is
+/// the answer; anything but success comes back as the error the app shows.
+pub fn firewall_fix_with(runner: &dyn ProcessRunner, bin: &Path) -> Result<(), String> {
+    let out = runner
+        .run(bin, &["firewall".into(), "--yes".into()])
+        .map_err(|e| format!("bridge could not start: {e}"))?;
+    let last = out.stdout.lines().rev().find(|l| !l.trim().is_empty()).unwrap_or("").trim().to_string();
+    let ok = out.code == Some(0)
+        && (last == "Done." || last.contains("already allowed") || last.starts_with("No active firewall"));
+    if ok {
+        Ok(())
+    } else if last.is_empty() {
+        Err(format!("firewall fix failed: {}", out.stderr.trim()))
+    } else {
+        Err(last)
     }
 }
 
@@ -260,7 +293,12 @@ mod tests {
             Path::new(env!("CARGO_MANIFEST_DIR")).join("../../bridge/systemd/hermes-remote-bridge.service"),
         )
         .unwrap();
-        assert_eq!(text, template.replace("@BIN@", "/v/bin/hermes-remote-bridge"));
+        assert_eq!(
+            text,
+            template
+                .replace("@BIN@", "/v/bin/hermes-remote-bridge")
+                .replacen("[Service]\n", "[Service]\nEnvironment=HERMES_REMOTE_NO_TRUST_PROMPT=1\n", 1)
+        );
         assert!(text.contains("ExecStart=/v/bin/hermes-remote-bridge serve"));
         assert_eq!(
             f.calls(),
@@ -337,5 +375,26 @@ mod tests {
             dirs,
             [PathBuf::from("/home/u/.config/hermes-remote"), PathBuf::from("/home/u/.local/state/hermes-remote")]
         );
+    }
+
+    #[test]
+    fn the_unit_tells_the_bridge_not_to_prompt() {
+        let t = render_unit(UNIT_TEMPLATE, Path::new("/v/bin/b"));
+        assert!(t.contains("[Service]\nEnvironment=HERMES_REMOTE_NO_TRUST_PROMPT=1\n"), "{t}");
+        assert!(t.contains("ExecStart=/v/bin/b serve"));
+    }
+
+    #[test]
+    fn firewall_fix_runs_the_bridge_and_reports_its_answer() {
+        let bin = Path::new("/v/bin/b");
+        let ok = Fake::new(vec![("/v/bin/b firewall --yes", 0, "ufw is active. ...\n  ufw allow ...\nDone.\n")]);
+        assert_eq!(firewall_fix_with(&ok, bin), Ok(()));
+        assert_eq!(ok.calls(), ["/v/bin/b firewall --yes"]);
+        let none = Fake::new(vec![("/v/bin/b", 0, "No active firewall; port 8650 is reachable.\n")]);
+        assert_eq!(firewall_fix_with(&none, bin), Ok(()));
+        let cancelled = Fake::new(vec![("/v/bin/b", 0, "ufw is active.\nNot applied (cancelled or failed).\n")]);
+        assert_eq!(firewall_fix_with(&cancelled, bin).unwrap_err(), "Not applied (cancelled or failed).");
+        let unknown = Fake::new(vec![("/v/bin/b", 0, "Can't manage this firewall automatically. Allow TCP 8650 yourself.\n")]);
+        assert!(firewall_fix_with(&unknown, bin).unwrap_err().starts_with("Can't manage"));
     }
 }

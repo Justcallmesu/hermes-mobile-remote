@@ -267,6 +267,9 @@ pub fn in_appimage() -> bool {
     std::env::var_os("APPIMAGE").is_some()
 }
 
+/// Tells the bridge not to show its own "trust this network?" prompt; the app shows one (D44).
+pub const NO_PROMPT_ENV: &str = "HERMES_REMOTE_NO_TRUST_PROMPT";
+
 pub struct SystemRunner;
 
 impl ProcessRunner for SystemRunner {

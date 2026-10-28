@@ -1,6 +1,6 @@
 <script setup>
 import { ref, computed, onMounted } from "vue";
-import { bridgeStatus, bridgeStart, bridgeStop } from "./api.js";
+import { bridgeStatus, bridgeStart, bridgeStop, bridgeTrust } from "./api.js";
 
 const answer = ref(null);
 const error = ref("");
@@ -29,6 +29,16 @@ async function toggle() {
   error.value = "";
   try {
     await (running.value ? bridgeStop() : bridgeStart());
+  } catch (e) {
+    error.value = String(e?.message ?? e);
+  }
+  await refresh();
+}
+
+async function trust() {
+  error.value = "";
+  try {
+    await bridgeTrust();
   } catch (e) {
     error.value = String(e?.message ?? e);
   }
@@ -112,6 +122,21 @@ defineEmits(["pair"]);
           <span class="v">{{ tailnet ?? "not reachable" }}</span>
         </li>
       </ul>
+    </div>
+    <div
+      v-if="running && net && !net.trusted"
+      class="card row"
+      data-test="trust-card"
+    >
+      <div style="flex: 1">
+        <strong>Use this Wi-Fi without Tailscale?</strong>
+        <div class="muted small">
+          Only for networks you control, like home or office.
+        </div>
+      </div>
+      <button class="primary" data-test="trust" @click="trust">
+        Trust {{ net.name }}
+      </button>
     </div>
     <div class="row">
       <button class="primary" @click="$emit('pair')">Pair a device</button>

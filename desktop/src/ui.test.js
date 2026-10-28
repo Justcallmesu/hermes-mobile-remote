@@ -96,6 +96,24 @@ describe("Home", () => {
     );
   });
 
+  it("an untrusted network offers a Trust button that trusts it", async () => {
+    answers.bridge_status = {
+      via: "http",
+      data: {
+        running: true,
+        port: 8650,
+        listen: ["127.0.0.1"],
+        network: { id: "n2", name: "Office", trusted: false },
+      },
+    };
+    answers.bridge_trust = { via: "http", data: {} };
+    const w = await open("home");
+    expect(w.find('[data-test="trust"]').text()).toBe("Trust Office");
+    await w.find('[data-test="trust"]').trigger("click");
+    await flushPromises();
+    expect(invoke.mock.calls.map((c) => c[0])).toContain("bridge_trust");
+  });
+
   it("status line shows trusted network and each reachability path", async () => {
     const w = await open();
     const t = w.find('[data-test="status-line"]').text();

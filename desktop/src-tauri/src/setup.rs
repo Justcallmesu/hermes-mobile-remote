@@ -27,6 +27,9 @@ pub trait Downloader {
     fn get(&self, url: &str) -> Result<Vec<u8>, String>;
 }
 
+/// Written once when there is no config yet (an existing config is never changed).
+pub const DEFAULT_CONFIG: &str = "# See bridge/hermes_remote_bridge/config.py for all keys.\nlan = true\n";
+
 pub trait Fs {
     fn create_dir_all(&self, p: &Path) -> Result<(), String>;
     fn write(&self, p: &Path, bytes: &[u8]) -> Result<(), String>;
@@ -228,7 +231,13 @@ impl Setup<'_> {
         self.step("change-list", "Saving the list of changes", || {
             let text = self.change_list().join("\n") + "\n";
             self.fs.create_dir_all(&self.paths.config_dir)?;
-            self.fs.write(&self.paths.config_dir.join("INSTALLED.txt"), text.as_bytes())
+            self.fs.write(&self.paths.config_dir.join("INSTALLED.txt"), text.as_bytes())?;
+            // Same default as install.sh: serve the LAN, but only on networks the user trusts.
+            let conf = self.paths.config_dir.join("config.toml");
+            if !self.fs.exists(&conf) {
+                self.fs.write(&conf, DEFAULT_CONFIG.as_bytes())?;
+            }
+            Ok(())
         })?;
         if update {
             self.step("stop", "Stopping the bridge", || self.os_step.stop_bridge())?;
@@ -691,5 +700,15 @@ mod tests {
         let last = ev.last().unwrap();
         assert_eq!((last.step.as_str(), last.state.as_str()), ("wait", "done"));
         assert!(last.message.starts_with("warning"));
+    }
+
+    #[test]
+    fn setup_writes_a_default_config_only_when_there_is_none() {
+        let b = FakeBridge(true);
+        let report = |_| {};
+        let r = rig(Some("/usr/bin/uv"), true);
+        setup(&r, &b, &report).run(false).unwrap();
+        let log = r.log.lock().unwrap().clone();
+        assert!(log.iter().any(|l| l.starts_with("write /home/u/.config/hermes-remote/config.toml ") && l.contains("lan = true")), "{log:?}");
     }
 }
