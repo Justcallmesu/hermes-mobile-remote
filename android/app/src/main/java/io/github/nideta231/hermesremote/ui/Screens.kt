@@ -403,7 +403,7 @@ private fun PcSheet(pcs: List<PairedPc>, actions: SessionActions, onDismiss: () 
                         Text(pc.name, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         Text(if (pc.active) "In use · ${hostOf(pc.url)}" else hostOf(pc.url), style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        if (pc.linked) Text("Gateway + Bridge", style = MaterialTheme.typography.labelSmall, color = Gold)
+                        if (linkMenu(pcs, pc).tag) Text("Gateway + Bridge", style = MaterialTheme.typography.labelSmall, color = Gold)
                     }
                     RadioMark(pc.active)
                     IconButton(onClick = { menuFor = pc }) { Icon(Glyphs.More, "Options for ${pc.name}", modifier = Modifier.size(18.dp)) }
@@ -441,9 +441,10 @@ private fun PcSheet(pcs: List<PairedPc>, actions: SessionActions, onDismiss: () 
                     onClick = { menuFor = null; onDismiss(); actions.switchPc(pc.id) })
                 if (pc.active && !pc.gateway) PanelRow("Re-pair", "Scan a fresh code; chats and drafts stay", icon = Glyphs.Refresh,
                     onClick = { menuFor = null; onDismiss(); actions.repairPc() })
-                if (pc.linked) PanelRow("Unlink", "No longer the same PC as its gateway/bridge entry", icon = Glyphs.Refresh,
+                val lm = linkMenu(pcs, pc)
+                if (lm.unlink) PanelRow("Unlink", "No longer the same PC as its gateway/bridge entry", icon = Glyphs.Refresh,
                     onClick = { menuFor = null; actions.unlinkPc(pc.id) })
-                else if (pcs.any { it.gateway != pc.gateway }) PanelRow("Link with...", icon = Glyphs.Plus, onClick = { menuFor = null; linking = pc })
+                else if (lm.linkWith) PanelRow("Link with...", icon = Glyphs.Plus, onClick = { menuFor = null; linking = pc })
                 PanelRow("Rename", icon = Glyphs.Edit, onClick = { menuFor = null; renaming = pc })
                 PanelRow("Forget this PC", icon = Glyphs.Trash, iconTint = Bad, titleColor = Bad, onClick = { menuFor = null; forgetting = pc })
             }
@@ -454,7 +455,7 @@ private fun PcSheet(pcs: List<PairedPc>, actions: SessionActions, onDismiss: () 
         AlertDialog(onDismissRequest = { linking = null }, title = { Text("Link ${pc.name} with...") },
             text = {
                 Column {
-                    pcs.filter { it.gateway != pc.gateway && !it.linked }.forEach { other ->
+                    linkCandidates(pcs, pc).forEach { other ->
                         TextButton(onClick = { linking = null; actions.linkPcs(pc.id, other.id) }) { Text(other.name) }
                     }
                 }

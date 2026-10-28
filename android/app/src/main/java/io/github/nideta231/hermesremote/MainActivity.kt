@@ -257,15 +257,12 @@ class MainActivity : ComponentActivity() {
         }
         val offer by vm.linkOffer.collectAsState()
         offer?.let { o ->
-            val pairBridge = o.bridgeId == null
+            val t = io.github.nideta231.hermesremote.ui.offerText(o)
             androidx.compose.material3.AlertDialog(onDismissRequest = vm::declineLinkOffer,
-                title = { androidx.compose.material3.Text(if (pairBridge) "Pair this PC's bridge too" else "Same PC?") },
-                text = {
-                    androidx.compose.material3.Text(if (pairBridge) "A bridge answers on ${o.name}. Pair it to link it with this gateway; you'll scan its QR code."
-                        else "${o.name} and this gateway look like the same PC. Link them? Each keeps its own sign-in and chats.")
-                },
-                confirmButton = { androidx.compose.material3.TextButton(onClick = vm::acceptLinkOffer) { androidx.compose.material3.Text(if (pairBridge) "Pair" else "Link") } },
-                dismissButton = { androidx.compose.material3.TextButton(onClick = vm::declineLinkOffer) { androidx.compose.material3.Text("Not now") } })
+                title = { androidx.compose.material3.Text(t.title) },
+                text = { androidx.compose.material3.Text(t.body) },
+                confirmButton = { androidx.compose.material3.TextButton(onClick = vm::acceptLinkOffer) { androidx.compose.material3.Text(t.confirm) } },
+                dismissButton = { androidx.compose.material3.TextButton(onClick = vm::declineLinkOffer) { androidx.compose.material3.Text(t.dismiss) } })
         }
     }
 
