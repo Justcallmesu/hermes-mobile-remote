@@ -9,6 +9,7 @@ pub mod setup;
 pub mod tray;
 pub mod updates;
 pub mod version;
+pub mod win_child;
 
 #[tauri::command]
 fn app_version() -> String {
@@ -25,7 +26,9 @@ pub fn run() {
             run_mode::on_app_start();
             #[cfg(target_os = "linux")]
             tray::install(app)?;
-            #[cfg(not(target_os = "linux"))]
+            #[cfg(windows)]
+            win_child::set_app_handle(app.handle().clone());
+            #[cfg(not(any(target_os = "linux", windows)))]
             let _ = app;
             Ok(())
         })
@@ -65,6 +68,17 @@ pub fn run() {
             updates::update_check,
             updates::update_install
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running Hermes Remote");
+        .build(tauri::generate_context!())
+        .expect("error while building Hermes Remote")
+        .run(|app, event| {
+            // Quit stops the bridge cleanly first; a hard kill is covered by the Job Object.
+            #[cfg(windows)]
+            if let tauri::RunEvent::ExitRequested { api, .. } = &event {
+                api.prevent_exit();
+                let app = app.clone();
+                win_child::quit(run_mode::app_child(), &move || app.exit(0));
+            }
+            #[cfg(not(windows))]
+            let _ = (app, event);
+        });
 }

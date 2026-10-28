@@ -291,7 +291,10 @@ impl<C: Control> Control for ModeControl<'_, C> {
     }
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(windows)]
+pub use crate::win_child::OsSpawner;
+
+#[cfg(any(target_os = "linux", windows))]
 pub fn app_child() -> &'static ProcessSupervisor<OsSpawner> {
     static CHILD: std::sync::OnceLock<ProcessSupervisor<OsSpawner>> = std::sync::OnceLock::new();
     CHILD.get_or_init(|| {
@@ -312,7 +315,13 @@ pub fn on_app_start() {
     }
 }
 
-#[cfg(not(target_os = "linux"))]
+/// On Windows there is no run mode: the app always owns the bridge.
+#[cfg(windows)]
+pub fn on_app_start() {
+    let _ = app_child().spawn();
+}
+
+#[cfg(not(any(target_os = "linux", windows)))]
 pub fn on_app_start() {}
 
 #[tauri::command]

@@ -77,7 +77,7 @@ pub fn set_terminal_shell_in(
 
 pub fn settings_in(config_dir: &Path, control: &dyn Control) -> Value {
     let text = std::fs::read_to_string(config_dir.join("config.toml")).unwrap_or_default();
-    json!({"start_at_logon": control.start_at_logon(),"terminal_shell": read_terminal_shell(&text)})
+    json!({"start_at_logon": control.start_at_logon(),"terminal_shell": read_terminal_shell(&text),"platform": std::env::consts::OS})
 }
 
 /// `<config_dir>/INSTALLED.txt`, or None when setup has not run.
@@ -94,7 +94,12 @@ pub fn backend() -> impl Control {
     }
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(windows)]
+pub fn backend() -> impl Control {
+    crate::win_child::WindowsControl { autostart: &crate::win_child::TauriAutostart, child: crate::run_mode::app_child() }
+}
+
+#[cfg(not(any(target_os = "linux", windows)))]
 pub fn backend() -> impl Control {
     Unsupported
 }

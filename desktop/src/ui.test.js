@@ -286,6 +286,18 @@ describe("Settings", () => {
     expect(w.find('[data-test="linger"]').exists()).toBe(false);
   });
 
+  it("on Windows the start at logon toggle calls its command and the crash note shows", async () => {
+    answers.get_settings = { start_at_logon: false, terminal_shell: null, platform: "windows" };
+    const w = await open("settings");
+    expect(w.find('[data-test="crash-note"]').text()).toContain("If the app crashes the bridge stops too");
+    await w.find('[data-test="logon"]').setValue(true);
+    await flushPromises();
+    expect(invoke).toHaveBeenCalledWith("set_start_at_logon", { on: true });
+    answers.get_settings = { start_at_logon: false, terminal_shell: null, platform: "linux" };
+    const l = await open("settings");
+    expect(l.find('[data-test="crash-note"]').exists()).toBe(false);
+  });
+
   it("run mode control shows the no-sandbox note and disables login and linger in app-only mode", async () => {
     answers.get_settings = { start_at_logon: true, terminal_shell: null };
     answers.get_run_mode = "always-on";

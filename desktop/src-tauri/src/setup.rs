@@ -331,7 +331,9 @@ fn with_real<R>(resource: PathBuf, report: &dyn Fn(Progress), f: impl FnOnce(&Se
     let bridge = LocalHttp::from_paths(&paths);
     #[cfg(target_os = "linux")]
     let os_step = crate::linux_service::real_os_step();
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(windows)]
+    let os_step = crate::win_child::WindowsOsStep { autostart: &crate::win_child::TauriAutostart, child: crate::run_mode::app_child() };
+    #[cfg(not(any(target_os = "linux", windows)))]
     let os_step = NoOsStep;
     let s = Setup {
         os: Os::current(),

@@ -118,6 +118,9 @@ async function changeRunMode(event) {
       />
       Start at logon
     </label>
+    <p v-if="settings.platform === 'windows'" data-test="crash-note">
+      If the app crashes the bridge stops too; start Hermes Remote from the Start menu again.
+    </p>
     <label v-if="settings.start_at_logon">
       <input
         type="checkbox"
