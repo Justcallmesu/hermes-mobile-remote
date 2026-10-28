@@ -1,5 +1,6 @@
 package io.github.nideta231.hermesremote
 
+import io.github.nideta231.hermesremote.data.BackgroundWork
 import io.github.nideta231.hermesremote.data.KeepAlive
 import io.github.nideta231.hermesremote.data.KeepAlivePrefs
 import org.junit.Assert.assertEquals
@@ -15,7 +16,13 @@ class KeepAliveTest {
         assertTrue(KeepAlive.stayUp(emptySet(), setOf("loop"), 10 * linger, true, linger))
         assertTrue(KeepAlive.stayUp(emptySet(), emptySet(), linger - 1, true, linger))
         assertFalse(KeepAlive.stayUp(emptySet(), emptySet(), linger, true, linger))
-        assertTrue(KeepAlive.stayUp(emptySet(), emptySet(), 10 * linger, true, linger, force = true))
+    }
+
+    @Test fun sessionWorkingAtSocketDropKeepsTheServiceUpForTheLingerOnly() {
+        val (busy, toResume) = BackgroundWork.afterDrop(setOf("r1"), emptySet())
+        assertEquals(setOf("r1"), toResume)
+        assertTrue(KeepAlive.stayUp(busy, emptySet(), linger - 1, true, linger))
+        assertFalse(KeepAlive.stayUp(busy, emptySet(), linger, true, linger))
     }
 
     @Test fun plainFinishingTurnStopsAfterTheShortLingerWhenTheSettingIsOff() {

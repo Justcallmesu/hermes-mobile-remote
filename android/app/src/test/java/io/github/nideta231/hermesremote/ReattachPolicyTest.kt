@@ -82,4 +82,20 @@ class ReattachPolicyTest {
         prefs.map["watched"] = "{not json["
         assertTrue(WatchedStore(prefs).load().isEmpty())
     }
+
+    @Test fun restoreYieldsWhatWillBeResumedAndCorruptFileYieldsNone() {
+        val prefs = MemPrefs()
+        val data = mapOf("r1" to LiveLink.Watched("s1", "One", "work"), "r2" to LiveLink.Watched("s2", null))
+        WatchedStore(prefs).save(data)
+        val watched = mutableMapOf<String, LiveLink.Watched>()
+        val toResume = mutableSetOf<String>()
+        WatchedStore(prefs).restoreInto(watched, toResume)
+        assertEquals(data, watched)
+        assertEquals(setOf("r1", "r2"), toResume)
+        prefs.map["watched"] = "{not json["
+        val w2 = mutableMapOf<String, LiveLink.Watched>()
+        val r2 = mutableSetOf<String>()
+        WatchedStore(prefs).restoreInto(w2, r2)
+        assertTrue(w2.isEmpty() && r2.isEmpty())
+    }
 }

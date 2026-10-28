@@ -3,19 +3,20 @@ package io.github.nideta231.hermesremote.data
 import android.content.Context
 import android.net.ConnectivityManager
 import android.net.Network
-import kotlinx.coroutines.delay
-import org.json.JSONObject
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.ProcessLifecycleOwner
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import org.json.JSONObject
 import java.util.concurrent.ConcurrentHashMap
 
 /**
@@ -43,6 +44,7 @@ object LiveLink {
     private val toResume = ConcurrentHashMap.newKeySet<String>()
     private var store: WatchedStore? = null
     private var heartbeat: Job? = null
+    private var poller: Job? = null
     private var networkCallback: ConnectivityManager.NetworkCallback? = null
 
     /** Runtime ids with a turn running or a question waiting: what keeps [WatchService] up. */
@@ -60,8 +62,7 @@ object LiveLink {
         if (gateway != null) return
         val app = context.applicationContext
         // The process was killed: whatever the phone was watching is resumed on the first Open.
-        val saved = store(app).load()
-        if (saved.isNotEmpty()) { watched.putAll(saved); toResume += saved.keys }
+        store(app).restoreInto(watched, toResume)
         val pr = ProfileStore(app).active()
         val store = if (pr.kind == HostKind.GATEWAY) GatewayCredentialStore(app, pr.id) else null
         when (val how = decideConnection(pr.kind, store?.load())) {
@@ -95,6 +96,22 @@ object LiveLink {
                 ReattachPolicy.heartbeat(link(fresh), background = !visible())
             }
         }
+        poller = scope.launch {
+            var wasOpen = false
+            fresh.state.collectLatest { s ->
+                val open = s == GatewayState.OPEN
+                if (wasOpen && !open) {
+                    val (b, r) = BackgroundWork.afterDrop(_busy.value, toResume)
+                    _busy.value = b
+                    toResume += r
+                }
+                wasOpen = open
+                while (open) {
+                    _backgroundWork.value = BackgroundWork.poll(link(fresh), watched.keys.toList(), _backgroundWork.value)
+                    delay(BackgroundWork.POLL_MS)
+                }
+            }
+        }
         if (networkCallback == null) {
             networkCallback = object : ConnectivityManager.NetworkCallback() {
                 override fun onAvailable(network: Network) { scope.launch { reattach() } }
@@ -126,6 +143,8 @@ object LiveLink {
         collector = null
         heartbeat?.cancel()
         heartbeat = null
+        poller?.cancel()
+        poller = null
         gateway?.close()
         gateway = null
         _busy.value = emptySet()
@@ -172,6 +191,8 @@ object LiveLink {
                                 inc.payload.str("text") ?: inc.payload.str("error"))
                         }
                     }
+                    "session.control.update" ->
+                        if (watched.containsKey(sid)) setBackgroundWork("$sid:loop", BackgroundWork.controlActive(inc.payload.optJSONObject("control") ?: inc.payload))
                     "session.title" -> inc.payload.str("title")?.let { retitle(sid, it) }
                     "request.cancel" -> inc.payload.str("id")?.let { Notifier.clearQuestion(app, it) }
                 }

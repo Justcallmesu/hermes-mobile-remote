@@ -8,16 +8,15 @@ object KeepAlive {
     /** Without "Keep connected in the background": the old wait for the "finished" notification to post. */
     const val SHORT_LINGER_MS = 1_000L
 
-    /** [sinceLastBusyMs]: time since a turn or background work was last live. [force] keeps the service up regardless. */
+    /** [sinceLastBusyMs]: time since a turn or background work was last live. */
     fun stayUp(
         busy: Set<String>,
         backgroundWork: Set<String>,
         sinceLastBusyMs: Long,
         keepConnected: Boolean,
         lingerMs: Long,
-        force: Boolean = false,
     ): Boolean =
-        force || busy.isNotEmpty() || backgroundWork.isNotEmpty() ||
+        busy.isNotEmpty() || backgroundWork.isNotEmpty() ||
             sinceLastBusyMs < (if (keepConnected) lingerMs else SHORT_LINGER_MS)
 
     /** A sticky restart arrives with no intent and a fresh process, so no socket: open it again. */
