@@ -403,6 +403,11 @@ mod tests {
 
     type Log = Arc<Mutex<Vec<String>>>;
 
+    /// Paths as the tests spell them: forward slashes on every OS (Windows joins with `\`).
+    fn sl(p: &Path) -> String {
+        p.display().to_string().replace('\\', "/")
+    }
+
     struct FakeDl {
         log: Log,
         archive: Vec<u8>,
@@ -421,22 +426,22 @@ mod tests {
     }
     impl Fs for FakeFs {
         fn create_dir_all(&self, p: &Path) -> Result<(), String> {
-            self.log.lock().unwrap().push(format!("mkdir {}", p.display()));
+            self.log.lock().unwrap().push(format!("mkdir {}", sl(p)));
             Ok(())
         }
         fn write(&self, p: &Path, bytes: &[u8]) -> Result<(), String> {
-            self.log.lock().unwrap().push(format!("write {} {}", p.display(), String::from_utf8_lossy(bytes)));
+            self.log.lock().unwrap().push(format!("write {} {}", sl(p), String::from_utf8_lossy(bytes)));
             Ok(())
         }
         fn exists(&self, _p: &Path) -> bool {
             false
         }
         fn copy_dir(&self, from: &Path, to: &Path, skip: &[&str]) -> Result<(), String> {
-            self.log.lock().unwrap().push(format!("copy {} {} {}", from.display(), to.display(), skip.join(",")));
+            self.log.lock().unwrap().push(format!("copy {} {} {}", sl(from), sl(to), skip.join(",")));
             Ok(())
         }
         fn set_executable(&self, p: &Path) -> Result<(), String> {
-            self.log.lock().unwrap().push(format!("chmod {}", p.display()));
+            self.log.lock().unwrap().push(format!("chmod {}", sl(p)));
             Ok(())
         }
         fn which(&self, _name: &str) -> Option<PathBuf> {
@@ -566,7 +571,7 @@ mod tests {
         let b = FakeBridge(true);
         let report = |p| r.events.lock().unwrap().push(p);
         let s = setup(&r, &b, &report);
-        let list = s.change_list().join("\n");
+        let list = s.change_list().join("\n").replace('\\', "/");
         assert!(r.log.lock().unwrap().is_empty(), "listing must not change anything");
         for want in [
             "/home/u/.local/share/hermes-remote/uv",
@@ -627,10 +632,8 @@ mod tests {
         let calls = r.runner.calls.lock().unwrap();
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].1, ["sync", "--frozen", "--no-dev"]);
-        assert_eq!(
-            calls[0].2,
-            [("UV_PROJECT_ENVIRONMENT".to_string(), "/home/u/.local/share/hermes-remote/venv".to_string())]
-        );
+        let env: Vec<_> = calls[0].2.iter().map(|(k, v)| (k.clone(), v.replace('\\', "/"))).collect();
+        assert_eq!(env, [("UV_PROJECT_ENVIRONMENT".to_string(), "/home/u/.local/share/hermes-remote/venv".to_string())]);
         assert_eq!(calls[0].3, Some(PathBuf::from("/home/u/.local/share/hermes-remote/bridge")));
         let log = r.log.lock().unwrap();
         assert!(log.contains(

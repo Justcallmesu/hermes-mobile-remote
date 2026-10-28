@@ -34,7 +34,10 @@ pub trait ServiceControl {
 /// The unit text: the template with `@BIN@` replaced.
 pub fn render_unit(template: &str, bin: &Path) -> String {
     // The app asks about new networks itself, so the bridge must not prompt too (D44).
+    // A Windows checkout gives the included template CRLF line endings; systemd units are LF, and
+    // the [Service] anchor below only matches LF.
     template
+        .replace("\r\n", "\n")
         .replace("@BIN@", &bin.to_string_lossy())
         .replacen("[Service]\n", &format!("[Service]\nEnvironment={}=1\n", crate::bridge::NO_PROMPT_ENV), 1)
 }
@@ -296,6 +299,7 @@ mod tests {
         assert_eq!(
             text,
             template
+                .replace("\r\n", "\n")
                 .replace("@BIN@", "/v/bin/hermes-remote-bridge")
                 .replacen("[Service]\n", "[Service]\nEnvironment=HERMES_REMOTE_NO_TRUST_PROMPT=1\n", 1)
         );

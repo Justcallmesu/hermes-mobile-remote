@@ -61,7 +61,12 @@ pub fn should_detach(appimage: bool, stdin_tty: bool, already: bool, args: &[Str
     appimage && stdin_tty && !already && !args.iter().any(|a| a == "--foreground")
 }
 
+/// AppImages exist only on Linux; elsewhere there is nothing to detach.
+#[cfg(not(unix))]
+pub fn detach_if_in_terminal(_args: &[String]) {}
+
 /// Re-launch `$APPIMAGE` in its own session with no terminal, then exit this process.
+#[cfg(unix)]
 pub fn detach_if_in_terminal(args: &[String]) {
     use std::os::unix::process::CommandExt;
     use std::process::{Command, Stdio};
