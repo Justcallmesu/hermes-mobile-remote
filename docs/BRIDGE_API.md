@@ -169,6 +169,16 @@ same one the desktop app uses. The bridge adds only:
    background delegations. `subagent.interrupt {session_id, subagent_id}` stops one (`{found}`); the
    chat's own turn goes on. Hermes answers both only for sessions this socket is attached to.
    Steering a child (`subagent.steer`) and reading its transcript (`subagent.tail`) stay on the PC.
+8. **Loop and heartbeat state:** `session.control.read {session_id}` returns `{control: {goal, loop, heartbeat,
+   revision, updated_at}}`; `loop` and `heartbeat` are `null` when none is set, else carry `status`
+   (`active | paused | done | cleared`). Read-only; the phone cannot change them. The same object arrives
+   pushed as a `session.control.update` event while the socket is attached.
+9. **Dropped sockets are parked:** when a phone's socket closes, the bridge keeps its Hermes socket open for
+   `park_seconds` (config, default 300, `0` = off) so Hermes does not start its 20 s reap of the chat. The same
+   device connecting again inside that time gets the parked socket: the bridge sends it the stored
+   `gateway.ready` first, then relays as usual, and the app should `session.resume` its open chats. Events
+   Hermes emits while no phone is attached are dropped, not replayed. A second live connection from the same
+   device closes the first. Audit events: `ws_park`, `ws_reattach`, `ws_park_expired`.
 
 ### Events the app renders
 
