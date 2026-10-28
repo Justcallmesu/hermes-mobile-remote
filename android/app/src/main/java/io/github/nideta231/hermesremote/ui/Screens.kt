@@ -11,6 +11,7 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.border
+import io.github.nideta231.hermesremote.data.KeepAlivePrefs
 import io.github.nideta231.hermesremote.data.ModelCatalog
 import io.github.nideta231.hermesremote.data.ModelOption
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -875,6 +876,9 @@ fun SettingsScreen(
                 SettingsSection("Appearance", "Only changes this phone.") {
                     ThemePanel()
                 }
+                SettingsSection("Background", "What happens when you close or swipe away the app.") {
+                    KeepAlivePanel()
+                }
                 SettingsSection("Chat list", "How the drawer lists your chats.") {
                     DrawerPanel()
                 }
@@ -1158,6 +1162,32 @@ private fun DrawerPanel() {
             else "Each date or project shows $current chats; \"Show more\" adds $current at a time. The open chat always shows.",
             style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.padding(start = 16.dp, end = 16.dp, bottom = 14.dp))
+    }
+}
+
+/** "Keep connected in the background" and how long to linger after the last work ends; both persist in [KeepAlivePrefs]. */
+@Composable
+private fun KeepAlivePanel() {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val prefs = remember { KeepAlivePrefs(context.applicationContext) }
+    var on by remember { mutableStateOf(prefs.keepConnected) }
+    var minutes by remember { mutableStateOf(prefs.lingerMinutes) }
+    val choices = KeepAlivePrefs.LINGER_CHOICES
+    Panel {
+        PanelRow("Keep connected in the background", "Keeps chats, delegations and loops running after you leave the app") {
+            androidx.compose.material3.Switch(checked = on, onCheckedChange = { on = it; prefs.keepConnected = it })
+        }
+        if (on) {
+            Text("Stay connected after the last work ends", style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(start = 16.dp, top = 4.dp))
+            Segmented(
+                options = choices.map { "$it min" },
+                selected = choices.indexOf(minutes).coerceAtLeast(0),
+                enabled = choices.map { true },
+                onSelect = { minutes = choices[it]; prefs.lingerMinutes = choices[it] },
+                modifier = Modifier.padding(16.dp),
+            )
+        }
     }
 }
 

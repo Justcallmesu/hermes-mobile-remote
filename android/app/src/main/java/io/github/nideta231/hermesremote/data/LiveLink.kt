@@ -39,6 +39,26 @@ object LiveLink {
     private val _busy = MutableStateFlow<Set<String>>(emptySet())
     val busy: StateFlow<Set<String>> = _busy.asStateFlow()
 
+    /** Keys of background work a session still owns (delegation, loop, heartbeat): also keeps [WatchService] up. */
+    private val _backgroundWork = MutableStateFlow<Set<String>>(emptySet())
+    val backgroundWork: StateFlow<Set<String>> = _backgroundWork.asStateFlow()
+
+    fun setBackgroundWork(key: String, on: Boolean) = _backgroundWork.update { if (on) it + key else it - key }
+
+    /** After the system killed the process: open the socket again for the active host, from its saved login. */
+    fun restore(context: Context) {
+        if (gateway != null) return
+        val app = context.applicationContext
+        val pr = ProfileStore(app).active()
+        val store = if (pr.kind == HostKind.GATEWAY) GatewayCredentialStore(app, pr.id) else null
+        when (val how = decideConnection(pr.kind, store?.load())) {
+            HostConnection.BridgePairing -> CredentialStore(app, ProfileStore.pairingFile(pr.id)).load()?.let { connect(app, BridgeClient(it)) }
+            is HostConnection.GatewayLogin ->
+                connectGateway(app, how.credentials, gatewayAuthFor(how.credentials, store!!, OkHttpTransport()))
+            HostConnection.NeedsSignIn -> {}
+        }
+    }
+
     /** Reuse the live socket when it already points at [client]'s address; otherwise replace it. */
     fun connect(context: Context, client: BridgeClient): Gateway = adopt(context, client.gateway())
 
@@ -64,6 +84,7 @@ object LiveLink {
         gateway?.close()
         gateway = null
         _busy.value = emptySet()
+        _backgroundWork.value = emptySet()
     }
 
     fun watch(runtimeId: String, storedId: String, title: String?, profile: String? = null) {

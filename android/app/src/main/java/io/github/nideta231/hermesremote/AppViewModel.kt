@@ -363,7 +363,7 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
             activeJob?.cancel()
             // A turn still running: keep the process (and the socket) up so its end or its
             // question can be notified. The service stops by itself once nothing runs.
-            if (_chat.value.busy || LiveLink.busy.value.isNotEmpty()) WatchService.start(app)
+            if (_chat.value.busy || LiveLink.busy.value.isNotEmpty() || LiveLink.backgroundWork.value.isNotEmpty()) WatchService.start(app)
         }
     }
 

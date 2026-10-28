@@ -6,6 +6,7 @@ import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
+import android.os.SystemClock
 import androidx.core.app.ServiceCompat
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -34,18 +35,45 @@ class WatchService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         Notifier.ensureChannels(this)
         startForegroundCompat()
+        // A sticky restart arrives with no intent and a fresh process: open the socket again.
+        if (KeepAlive.needsReopen(intent == null, LiveLink.gateway != null)) LiveLink.restore(this)
         if (!started) {
             started = true
             scope.launch {
+                val prefs = KeepAlivePrefs(this@WatchService)
                 // Give a just-sent prompt a moment to register as running, then hold until idle.
                 withTimeoutOrNull(START_GRACE_MS) { LiveLink.busy.first { it.isNotEmpty() } }
-                withTimeoutOrNull(MAX_WATCH_MS) { LiveLink.busy.first { it.isEmpty() } }
-                delay(1_000) // let the "finished" notification post before the process may go
+                var lastBusy = SystemClock.elapsedRealtime()
+                while (true) {
+                    val busy = LiveLink.busy.value
+                    val work = LiveLink.backgroundWork.value
+                    if (busy.isNotEmpty() || work.isNotEmpty()) lastBusy = SystemClock.elapsedRealtime()
+                    // The linger also lets the "finished" notification post before the process may go.
+                    if (!KeepAlive.stayUp(busy, work, SystemClock.elapsedRealtime() - lastBusy, prefs.keepConnected, prefs.lingerMs)) break
+                    delay(POLL_MS)
+                }
                 stopNow()
             }
         }
-        // A restart arrives without the socket; nothing to resume.
-        return START_NOT_STICKY
+        return START_STICKY
+    }
+
+    /** Swiping the app from recents must not end work the session still owns. */
+    override fun onTaskRemoved(rootIntent: Intent?) {}
+
+    // Android 14 calls the first, Android 15 the second.
+    override fun onTimeout(startId: Int) = timedOut()
+    override fun onTimeout(startId: Int, fgsType: Int) = timedOut()
+
+    private fun timedOut() {
+        when (KeepAlive.onTimeout(restartedAfterTimeout)) {
+            KeepAlive.OnTimeout.RESTART -> {
+                restartedAfterTimeout = true
+                ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
+                start(this)
+            }
+            KeepAlive.OnTimeout.STOP -> stopNow()
+        }
     }
 
     override fun onDestroy() {
@@ -54,6 +82,7 @@ class WatchService : Service() {
     }
 
     private fun stopNow() {
+        restartedAfterTimeout = false
         ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
         stopSelf()
     }
@@ -69,7 +98,8 @@ class WatchService : Service() {
 
     companion object {
         private const val START_GRACE_MS = 15_000L
-        private const val MAX_WATCH_MS = 6 * 60 * 60 * 1000L
+        private const val POLL_MS = 1_000L
+        @Volatile private var restartedAfterTimeout = false
 
         /** Call when the app goes to the background with a turn running (Android 12+: while still allowed). */
         fun start(context: Context) {
