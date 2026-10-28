@@ -5,6 +5,8 @@ same Hermes backend the desktop app uses (`hermes serve`): the bridge authentica
 relays one WebSocket to that backend's own JSON-RPC socket. A few REST endpoints remain for the
 session list and settings. `/v1/me` and `/v1/status` report `protocol: 2`.
 
+The `/v1/local/*` routes (see [Local control API](#local-control-api-desktop-app)) are for the desktop app on the same PC, not for the phone.
+
 Old app versions (0.x) spoke a different API (`/v1/runs`, SSE, `/sync`) and do not work with a 1.x
 bridge. Update the app from its System tab.
 
@@ -12,7 +14,7 @@ bridge. Update the app from its System tab.
 
 The bridge answers on up to three kinds of address, all on the same port (default `8650`):
 
-- **Loopback** (`127.0.0.1`): plain HTTP, for local tools. No network checks.
+- **Loopback** (`127.0.0.1`): plain HTTP, for local tools. The phone's routes make no network checks here. `/v1/local/*` is loopback-only and also needs the local secret.
 - **Tailscale** (e.g. `http://100.64.0.10:8650`): plain HTTP. The traffic travels inside Tailscale's
   WireGuard tunnel, which encrypts and authenticates both ends. Android needs a
   `network_security_config` cleartext exception scoped to those addresses only.
@@ -52,6 +54,7 @@ On the PC, run `hermes-remote-bridge pair phone`. It prints a QR code containing
 - On Android, store the token in EncryptedSharedPreferences / Keystore.
 - To revoke a device: `hermes-remote-bridge revoke phone`. It takes effect on the device's next
   request or connection; no restart needed.
+- The desktop app's *Pair a device* does the same and shows the QR code inline, with a Copy button.
 
 On a trusted network the bridge also advertises `_hermesremote._tcp` over mDNS (Avahi). The TXT record
 carries `pin=` (the first 12 characters of the pin, enough to recognise the bridge; the full pin is
@@ -97,10 +100,12 @@ the pages this bridge serves.
 
 ## Terminal: `GET /v1/terminal?cols&rows` (WebSocket)
 
-A shell on the PC as the bridge's user (`$SHELL -l`; PowerShell on Windows), one per connection,
+A shell on the PC as the bridge's user (`$SHELL -l` on Linux, see below for Windows), one per connection,
 killed when it closes. Same gate as the live socket: tailnet or pinned LAN, device token in the
 upgrade request's `Authorization` header. Turn it off with `terminal = false` in config.toml
 (closes with 4404).
+
+On Windows the shell is `pwsh`, else `powershell`, else `cmd`. Set `terminal_shell` in config.toml to use another, e.g. `terminal_shell = "\"C:\\Program Files\\Git\\bin\\bash.exe\" -l"`.
 
 The bridge runs the terminal emulator (pyte), so it answers the shell's queries (fish waits for
 them) and the phone only draws rows. Frames are JSON text:
@@ -198,6 +203,26 @@ same one the desktop app uses. The bridge adds only:
 - Models: `model.options`. Switch the chat's model with `config.set {session_id, key: "model",
   value: "<model> --provider <slug> --session"}`, and its reasoning effort with `key: "reasoning"`.
 
+## Local control API (desktop app)
+
+The desktop app manages the bridge through these routes. They are not for the phone and are never in the relay's allowlist.
+
+- **Who:** only a loopback peer that sends `X-Hermes-Local: <secret>`. Any other request gets `403 forbidden_local`, including a tailnet or LAN peer that has the secret.
+- **Secret:** `<config_dir>/local-secret`, 32 random bytes in hex, mode 0600 on Linux, created on first start and created again if it is deleted. Deleting it revokes every local client.
+- **No device token and no device rate limit** apply to these routes.
+- **Bodies and answers:** the JSON shapes are the same as the CLI's `--json` output, since both call the same functions. The exact fields of each answer are not listed here (unchecked).
+
+| Method | Path | Notes |
+|---|---|---|
+| GET | `/v1/local/status` | What the app's status line shows: network trusted, firewall, LAN, tailnet. |
+| GET | `/v1/local/devices` | Paired devices (`devices --json`). |
+| POST | `/v1/local/pair` | Body `{name, replace?}`. Pairs a device, as `pair` does. |
+| POST | `/v1/local/revoke` | Body `{name}`. Revokes that device. |
+| GET | `/v1/local/trust` | Trusted networks (`trust --list --json`). |
+| POST | `/v1/local/trust` | Trusts the network the PC is on (`trust`). |
+| POST | `/v1/local/untrust` | Body `{id}`. Removes that trusted network. |
+| GET | `/v1/local/doctor` | Doctor report (`doctor --json`). |
+
 ## Known limitations
 
 - **Smart approval mostly decides on its own.** With `approvals.mode: smart`, an approval request
@@ -207,3 +232,4 @@ same one the desktop app uses. The bridge adds only:
 - **The PC must be on with the bridge running.** There is no relay in the cloud.
 - **Secret and sudo prompts are answered on the PC.** The phone is told one is waiting but is never
   asked to type a password.
+- **Two trust prompts on Linux.** Until the bridge's own `notify-send` trust prompt is removed, a Linux desktop can show two "Trust this network?" prompts: one from the desktop app and one from the bridge.

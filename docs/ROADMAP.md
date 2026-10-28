@@ -18,7 +18,7 @@ Roughly, in the order the pieces landed:
 - 1.0: the phone shares the desktop app's Hermes backend over one WebSocket. Live streaming in both
   directions, approvals and clarify answerable on either screen, every slash command (including
   `/retry`, `/undo`, `/btw`), background notifications for finished turns and questions.
-- Windows support (experimental): a host layer, `install.ps1`, a Scheduled Task and a Windows CI
+- Windows support (experimental): a host layer, the Hermes Remote desktop app and a Windows CI
   job. See [PLATFORMS.md](PLATFORMS.md).
 - A demo stack with a synthetic backend, so the app can be tried and recorded without a real
   Hermes.

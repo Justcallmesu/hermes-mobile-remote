@@ -15,6 +15,7 @@ networks you chose, and pass on only what the desktop app itself does.
 | Device tokens | Shown once at pairing; only their SHA-256 is stored | The paired phone, in its Keystore |
 | Session content | Hermes' own store | Anything that can talk to Hermes |
 | TLS private key | `~/.config/hermes-remote/tls/`, mode 600 | The PC user |
+| Local control secret | `~/.config/hermes-remote/local-secret` (Linux) or `%LOCALAPPDATA%\hermes-remote\config\local-secret` (Windows); 32 random bytes in hex | Processes of your user on the PC |
 
 ## Guarantees
 
@@ -47,6 +48,8 @@ your Wi-Fi name is a different network, and stays untrusted.
 hash. Revoking one device takes effect on its next request and does not affect the others. On the
 phone the token is encrypted with an Android Keystore key and excluded from backup.
 
+**The desktop app's control API is local only.** The desktop app manages the bridge through `/v1/local/*`. A request is served only if it comes from a loopback address and carries the local secret in the `X-Hermes-Local` header. Anything else gets `403 forbidden_local`, including a tailnet or LAN peer that has the secret. The secret is 32 random bytes in hex, created on first start and created again if it is deleted; on Linux it is mode 0600. Deleting it revokes every local client. These routes are never in the relay's method allowlist, and they use no device token and no device rate limit.
+
 **Tailscale requests need both.** A request from a tailnet address must come from your own
 Tailscale identity *and* carry a valid device token. Being on the tailnet is not enough.
 
@@ -72,8 +75,10 @@ check, and it carries no token. The APK's SHA-256 is compared with the digest Gi
 and Android itself refuses to install an update signed with a different key. A self-built APK
 therefore cannot be replaced by a release build, by design.
 
+The desktop app downloads two things. The first-run setup fetches `uv` 0.13.6 from GitHub Releases only when it is not already on the PATH, and checks its SHA-256 before using it. Desktop updates use the Tauri updater for the AppImage and the Windows installer; the `.deb` and dev builds only show a link to the release page. The updater checks signatures against the public key in `tauri.conf.json`, and the signing key has to be in place before the first desktop release.
+
 **Firewall changes are narrow and confirmed.** Only private address ranges are opened, only on
-request, and never automatically.
+request, and never automatically. On Windows the rule covers the Private network profile only, and each change asks for elevation (one UAC prompt). Cancelling the prompt changes nothing.
 
 ## Gateway hosts
 
@@ -105,7 +110,8 @@ Stated plainly, because a security document that only lists wins is not useful.
   on a network you *did* trust is watching. Use Tailscale when that matters.
 - **A stolen PC while it is unlocked and on.** The token store and the key are readable by your
   user account.
-- **A paired phone is a shell on your PC.** The Terminal page runs `$SHELL` as your user, and the
+- **Another program running as your user.** It can read the local secret and call `/v1/local/*`: pair a new device, revoke one, or trust a network. A device it pairs gets the same access as any other paired phone. On Windows the 0600 mode does not apply; the file gets your user profile's permissions (unchecked: whether that is tight enough).
+- **A paired phone is a shell on your PC.** The Terminal page runs your shell as your user (`$SHELL` on Linux; on Windows `pwsh`, `powershell` or `cmd`, or `terminal_shell`), and the
   process list can stop your processes. That is no more than Hermes itself can do, but it is
   direct. Revoke a lost phone at once, or set `terminal = false` (and `monitor = false`) in
   config.toml if you don't want either.
