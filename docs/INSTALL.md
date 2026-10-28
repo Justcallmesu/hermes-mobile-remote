@@ -78,6 +78,12 @@ How it runs:
 on start at logon. Paired devices and trusted networks stay. The old `install.cmd`, `install.ps1`,
 `pair.cmd` and `tray.cmd` are gone.
 
+**Upgrading from `install.sh` on Linux.** Setup takes over the existing `hermes-remote-bridge.service`:
+it rewrites the unit to point at the app's venv (`~/.local/share/hermes-remote/venv`) and restarts the
+service, so the bridge from the repo's `.venv` stops. Paired devices and trusted networks stay (same
+config folder). The old Python tray keeps its autostart entry; if you now see two tray icons, remove it:
+`rm ~/.config/autostart/hermes-remote-tray.desktop ~/.local/share/applications/hermes-remote-tray.desktop`.
+
 ### Linux
 
 1. Download the `.AppImage` or the `.deb` from the desktop release. For the AppImage, make it
