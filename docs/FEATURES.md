@@ -43,6 +43,11 @@ for a moment after two or more characters and it also asks Hermes on the PC, whi
 text of every message (the desktop sidebar's search). Chats found only that way appear under
 *In messages* with the matching line; tap one to open it. An older bridge keeps the title filter.
 
+**Background work strip.** When the open chat has background work (running processes, subagents
+it started, an active `/loop` or `/heartbeat`), a one-line strip sits above the composer, for
+example *2 running · 1 subagent*. Tap it to open the process and subagent panels with Stop and
+steer; tap again to close. It hides while an approval or a question is waiting.
+
 **Pinned sessions.** Pins are shared with the Hermes desktop app; pin on either surface.
 
 **Hermes profiles.** If the PC has more than one Hermes profile (`hermes profile list`), the drawer
@@ -177,6 +182,12 @@ on that page, never in the app.
 **One session, many surfaces.** Sessions, pins and titles are Hermes' own, so a chat started on
 the phone appears on the desktop and vice versa. If the desktop app is closed, the bridge starts
 Hermes itself; open the desktop later and it joins the same backend.
+
+**Work keeps running when the phone leaves.** On a bridge host, when the app closes or loses its
+connection, the bridge keeps the chat attached to Hermes for as long as it still has work (a
+turn, a subagent, a loop or heartbeat, a background process) and for `park_seconds` (10 min)
+after that, up to `park_max_seconds` (24 h). Reopen the app and the chat catches up. The PC page
+lists these *Held chats*, and Restart or Update asks first when one is still working.
 
 **Tablet layout.** On a screen 720 dp wide or more, the session list sits next to the chat instead
 of behind a drawer.
