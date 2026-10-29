@@ -287,6 +287,18 @@ same one the desktop app uses. The bridge adds only:
 - Models: `model.options`. Switch the chat's model with `config.set {session_id, key: "model",
   value: "<model> --provider <slug> --session"}`, and its reasoning effort with `key: "reasoning"`.
 
+## Notes
+
+Keep-style notes, one Markdown file each in `notes_dir` (default `~/.config/hermes-remote/notes/`): a
+`---` header of `key: <json>` lines (`title, color, pinned, archived, labels, created, updated`), then the
+body; `- [ ]` / `- [x]` lines are checklist items. Hermes reads and edits the same files through
+`hermes-remote-bridge notes ...` (the `personal-notes` skill, installed by install.sh). Listed as
+`notes` in `/v1/me`.
+
+- `GET /v1/notes?q=&archived=false&label=` → `{notes: [...], labels, colors}`, pinned first, newest next.
+- `POST /v1/notes` `{title?, body?, color?, pinned?, labels?}` → the note.
+- `GET|PATCH|DELETE /v1/notes/{id}`: PATCH takes any of those fields plus `archived`; last write wins.
+
 ## Bridge update
 
 `GET /v1/bridge/update[?refresh=true]` (device token): `{current, commit, latest, available, can_update,

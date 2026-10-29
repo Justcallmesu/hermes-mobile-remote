@@ -17,6 +17,21 @@ request number.
   subagents (#12), share to Hermes (#15), message search (#16), subagent output and steer (#17)
   and bridge metrics (#18).
 
+## v1.30.0
+
+- Notes, like Google Keep, for braindumps and planning (drawer > three-dot menu > Notes). A grid of
+  coloured cards with pinned notes on top, search, labels and an archive. Tap a card to edit; the
+  three-dot menu in a note turns it into a checklist and back, and items tick right on the card.
+  The *Note* button starts a text note and the check button a list. Empty notes are dropped when
+  you leave them.
+- Hermes can use your notes too: they are Markdown files on the PC (`~/.config/hermes-remote/notes/`),
+  and the new `personal-notes` skill teaches it to list, read, add, append to and tick them
+  (`hermes-remote-bridge notes ...`). Say "save this in my notes" or "what's on my plan list", or
+  use *Ask Hermes about this* in a note. Changes Hermes makes show up in the app within seconds.
+- Needs the updated bridge: Settings > Bridge > Update (or `hermes-remote-bridge update`). Run
+  `./install.sh` once more to install the skill, or copy `bridge/skills/personal-notes` into
+  `~/.hermes/skills/productivity/`. Turn notes off with `notes = false` in config.toml.
+
 ## v1.29.0
 
 - Bridge updates from the phone: Settings > Hermes on your PC shows the bridge's version, and when a

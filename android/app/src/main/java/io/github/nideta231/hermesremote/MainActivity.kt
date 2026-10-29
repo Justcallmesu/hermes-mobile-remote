@@ -71,6 +71,8 @@ import io.github.nideta231.hermesremote.ui.PcActions
 import io.github.nideta231.hermesremote.ui.PcScreen
 import io.github.nideta231.hermesremote.ui.TerminalScreen
 import io.github.nideta231.hermesremote.ui.GraphScreen
+import io.github.nideta231.hermesremote.ui.NotesScreen
+import io.github.nideta231.hermesremote.ui.NotesActions
 import io.github.nideta231.hermesremote.ui.BridgeUpdateActions
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.TextButton
@@ -104,7 +106,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 /** Chat is home; the others are pages pushed on top of it. */
-enum class Page { CHAT, SCHEDULED, PC, TERMINAL, VAULT, GRAPH, SETTINGS }
+enum class Page { CHAT, SCHEDULED, PC, TERMINAL, VAULT, GRAPH, NOTES, SETTINGS }
 
 class MainActivity : ComponentActivity() {
     private val vm: AppViewModel by viewModels()
@@ -311,6 +313,7 @@ class MainActivity : ComponentActivity() {
         val claudeUsage by vm.claudeUsage.collectAsState()
         val pcState by vm.monitor.state.collectAsState()
         val bridgeUpdateState by vm.bridgeUpdate.state.collectAsState()
+        val notesState by vm.notes.state.collectAsState()
         val features by vm.features.collectAsState()
         val unauthorized by vm.unauthorized.collectAsState()
         val pendingShare by vm.pendingShare.collectAsState()
@@ -373,6 +376,7 @@ class MainActivity : ComponentActivity() {
             openScheduled = { go(Page.SCHEDULED) },
             openVault = { go(Page.VAULT) },
             openGraph = { go(Page.GRAPH) },
+            openNotes = if ("notes" in features) ({ go(Page.NOTES) }) else null,
             openPc = if (hasMonitor) ({ go(Page.PC) }) else null,
             openTerminal = if (hasTerminal) ({ go(Page.TERMINAL) }) else null,
             repairPc = vm::startRepair,
@@ -435,6 +439,12 @@ class MainActivity : ComponentActivity() {
                         Page.SCHEDULED -> CronScreen(cron, hermesProfiles.active.takeIf { hermesProfiles.items.size > 1 }, cronActions, onBack = { page = Page.CHAT })
                         Page.PC -> PcScreen(pcState, pcActions, onBack = { page = Page.CHAT })
                         Page.TERMINAL -> TerminalScreen(open = vm::openTerminal, onBack = { page = Page.CHAT })
+                        Page.NOTES -> NotesScreen(notesState, NotesActions(watch = vm.notes::watch, unwatch = vm.notes::stop,
+                            setQuery = vm.notes::setQuery, setLabel = vm.notes::setLabel, setArchived = vm.notes::setArchived,
+                            create = { list, done -> vm.notes.create(list, done) }, edit = { id, f -> vm.notes.edit(id) { f(it) } },
+                            closed = vm.notes::closed, delete = { vm.notes.delete(it) },
+                            askHermes = { n -> vm.newChat(); vm.setDraft("Look at my note \"${n.title.ifBlank { n.id }}\" (id ${n.id}, personal-notes skill) and ") ; page = Page.CHAT }),
+                            onBack = { page = Page.CHAT })
                         Page.GRAPH -> GraphScreen(sessions.items, sessions.projects, onOpenChat = { vm.openSession(it); page = Page.CHAT },
                             onBack = { page = Page.CHAT })
                         Page.VAULT -> VaultScreen(vaultState, VaultActions(refresh = vm.vault::refresh, save = vm.vault::save,

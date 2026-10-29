@@ -134,6 +134,7 @@ private fun DrawerMoreMenu(actions: SessionActions) {
             @Composable fun item(label: String, icon: androidx.compose.ui.graphics.vector.ImageVector, onClick: () -> Unit) =
                 androidx.compose.material3.DropdownMenuItem(text = { Text(label) },
                     leadingIcon = { Icon(icon, null, Modifier.size(18.dp)) }, onClick = { open = false; onClick() })
+            actions.openNotes?.let { item("Notes", Glyphs.Doc, it) }
             actions.openPc?.let { item("PC monitor", Glyphs.Chip, it) }
             actions.openTerminal?.let { item("Terminal", Glyphs.Terminal, it) }
             item("Graph", Glyphs.Graph, actions.openGraph)
@@ -162,6 +163,8 @@ class SessionActions(
     val openVault: () -> Unit = {},
     /** The Obsidian-style map of chats, projects and topics. */
     val openGraph: () -> Unit = {},
+    /** Keep-style notes Hermes can read and edit; null when the bridge has none. */
+    val openNotes: (() -> Unit)? = null,
     /** The PC page (stats, processes, Claude usage) and the terminal; null hides the button
      *  (the bridge doesn't serve it). */
     val openPc: (() -> Unit)? = null,

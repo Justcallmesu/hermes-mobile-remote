@@ -94,6 +94,12 @@ class BridgeClient(
 
     suspend fun me() = call("GET", "/v1/me")
 
+    suspend fun notes(query: String = "", archived: Boolean = false, label: String? = null) =
+        call("GET", "/v1/notes", mapOf("q" to query.ifBlank { null }, "archived" to archived, "label" to label))
+    suspend fun createNote(body: JSONObject) = call("POST", "/v1/notes", body = body)
+    suspend fun updateNote(id: String, body: JSONObject) = call("PATCH", "/v1/notes/${enc(id)}", body = body)
+    suspend fun deleteNote(id: String) = call("DELETE", "/v1/notes/${enc(id)}")
+
     /** The bridge's release and the newest one (`/v1/bridge/update`). */
     suspend fun bridgeUpdateCheck(refresh: Boolean = false) = call("GET", "/v1/bridge/update", mapOf("refresh" to refresh), readTimeoutS = 40)
 
