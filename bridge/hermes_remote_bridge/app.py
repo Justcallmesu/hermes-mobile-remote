@@ -38,6 +38,7 @@ from .config import Config
 from .devices import Device, DeviceStore
 from . import local_secret
 from . import selfupdate
+from . import notes as notes_mod
 from .local_api import devices_doc, pairing_payload, pairing_uri, qr_png, trust_doc
 from .network import TrustStore, current_network, network_info, serving_lan_ips
 from .chat_files import referenced_file
@@ -451,8 +452,53 @@ def create_app(cfg: Config, *, locator: BackendLocator | None = None, tailnet: T
                                               ("terminal", cfg.terminal),
                                               ("speedtest", monitor is not None),
                                               ("folders", True),
-                                              ("bridge_update", cfg.self_update)) if on],
+                                              ("bridge_update", cfg.self_update),
+                                              ("notes", cfg.notes)) if on],
                 "bridge_version": __version__, "protocol": PROTOCOL}
+
+    note_store = notes_mod.NoteStore(cfg.notes_dir)
+
+    def _notes_on() -> None:
+        if not cfg.notes:
+            raise ApiError(404, "notes_off", "Notes are off (notes = false)")
+
+    def _note(note_id: str):
+        try:
+            return note_store.get(note_id)
+        except KeyError:
+            raise ApiError(404, "note_not_found", "No such note")
+
+    @app.get("/v1/notes")
+    async def list_notes(q: str = "", archived: bool = False, label: str | None = None, _: Device = Depends(device_auth)):
+        _notes_on()
+        items = await asyncio.to_thread(note_store.list, q, archived, label)
+        return {"notes": [n.to_dict() for n in items], "labels": await asyncio.to_thread(note_store.labels),
+                "colors": list(notes_mod.COLORS)}
+
+    @app.post("/v1/notes")
+    async def create_note(request: Request, _: Device = Depends(device_auth)):
+        _notes_on()
+        body = await request.json()
+        return (await asyncio.to_thread(note_store.create, **(body if isinstance(body, dict) else {}))).to_dict()
+
+    @app.get("/v1/notes/{note_id}")
+    async def get_note(note_id: str, _: Device = Depends(device_auth)):
+        _notes_on()
+        return _note(note_id).to_dict()
+
+    @app.patch("/v1/notes/{note_id}")
+    async def update_note(note_id: str, request: Request, _: Device = Depends(device_auth)):
+        _notes_on()
+        _note(note_id)
+        body = await request.json()
+        return (await asyncio.to_thread(note_store.update, note_id, **(body if isinstance(body, dict) else {}))).to_dict()
+
+    @app.delete("/v1/notes/{note_id}")
+    async def delete_note(note_id: str, _: Device = Depends(device_auth)):
+        _notes_on()
+        _note(note_id)
+        await asyncio.to_thread(note_store.delete, note_id)
+        return {"deleted": True}
 
     update_check = selfupdate.CachedCheck()
 

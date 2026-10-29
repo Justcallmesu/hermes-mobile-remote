@@ -7,6 +7,7 @@ import ipaddress
 import json
 import logging
 import os
+import re
 import socket
 import sys
 import threading
@@ -492,6 +493,84 @@ def cmd_metrics(cfg: Config, args: argparse.Namespace) -> None:
     print(summarize(data))
 
 
+def cmd_notes(cfg: Config, args: argparse.Namespace) -> None:
+    """The notes the phone shows, for Hermes and scripts: list, show, add, append, edit, check, rm."""
+    from .notes import NoteStore
+
+    store = NoteStore(cfg.notes_dir)
+    js = getattr(args, "json", False)
+    # `add` and `list` take no id: argparse put their first word in the id slot.
+    if args.action in ("add", "list", "path") and args.id is not None:
+        args.text = [args.id, *(args.text or [])]
+        args.id = None
+    if args.action == "list" and args.text and not args.query:
+        args.query = " ".join(args.text)
+
+    def out(n) -> None:
+        if js:
+            print(json.dumps(n.to_dict(), ensure_ascii=False, indent=2)); return
+        flags = " ".join(x for x in ("📌" if n.pinned else "", "[archived]" if n.archived else "",
+                                      " ".join("#" + l for l in n.labels)) if x)
+        print(f"# {n.title or '(untitled)'}  [{n.id}] {flags}".rstrip())
+        print(n.body.rstrip())
+
+    def text_arg() -> str:
+        t = " ".join(args.text or [])
+        return sys.stdin.read() if t == "-" else t.replace("\\n", "\n")
+
+    try:
+        a = args.action
+        if a == "list":
+            items = store.list(args.query or "", None if args.all else False, args.label)
+            if js:
+                print(json.dumps([n.to_dict() for n in items], ensure_ascii=False, indent=2)); return
+            for n in items:
+                first = next((l.strip() for l in n.body.splitlines() if l.strip()), "")
+                print(f"{n.id}  {'📌 ' if n.pinned else ''}{n.title or first[:60] or '(empty)'}"
+                      + (f"  #{' #'.join(n.labels)}" if n.labels else "") + ("  [archived]" if n.archived else ""))
+            if not items:
+                print("No notes.")
+        elif a == "show":
+            out(store.get(args.id))
+        elif a == "add":
+            out(store.create(title=args.title or "", body=text_arg(), labels=args.label_add or [],
+                             color=args.color or "default", pinned=args.pin))
+        elif a == "append":
+            out(store.append(args.id, text_arg()))
+        elif a == "edit":
+            fields = {"title": args.title, "color": args.color}
+            if args.text:
+                fields["body"] = text_arg()
+            if args.pin or args.unpin:
+                fields["pinned"] = bool(args.pin)
+            if args.archive or args.unarchive:
+                fields["archived"] = bool(args.archive)
+            if args.label_add or args.label_remove:
+                cur = store.get(args.id).labels
+                fields["labels"] = [x for x in cur + (args.label_add or []) if x not in (args.label_remove or [])]
+            out(store.update(args.id, **fields))
+        elif a == "check":
+            n = store.get(args.id)
+            needle = " ".join(args.text or []).lower()
+            lines, hit = n.body.splitlines(), False
+            for i, l in enumerate(lines):
+                m = re.match(r"^(\s*[-*] \[)([ xX])(\] )(.*)$", l)
+                if m and needle in m[4].lower():
+                    lines[i] = m[1] + (" " if args.uncheck else "x") + m[3] + m[4]
+                    hit = True
+                    break
+            if not hit:
+                sys.exit(f"No checklist item matching {needle!r} in {args.id}")
+            out(store.update(args.id, body="\n".join(lines) + "\n"))
+        elif a == "rm":
+            store.delete(args.id)
+            print(f"Deleted {args.id}")
+        elif a == "path":
+            print(cfg.notes_dir)
+    except KeyError:
+        sys.exit(f"No note {getattr(args, 'id', '')!r}; `hermes-remote-bridge notes list` shows the ids.")
+
+
 def cmd_update(cfg: Config, args: argparse.Namespace) -> None:
     """Check for a newer release and update to it. Pairings and settings are kept."""
     from . import selfupdate
@@ -600,6 +679,23 @@ def main(argv: list[str] | None = None) -> None:
     t.add_argument("--json", action="store_true", help="Machine-readable output, with --list")
     doc = sub.add_parser("doctor", help="Check why the phone can't connect")
     doc.add_argument("--json", action="store_true", help="Machine-readable checks (for the tray app)")
+    nt = sub.add_parser("notes", help="Read and edit the notes the phone shows (for Hermes and scripts)")
+    nt.add_argument("action", choices=("list", "show", "add", "append", "edit", "check", "rm", "path"))
+    nt.add_argument("id", nargs="?", help="Note id (from list); not for list/add/path")
+    nt.add_argument("text", nargs="*", help="Body text; '-' reads stdin; \\n is a newline. For check: words of the item")
+    nt.add_argument("--title")
+    nt.add_argument("--color")
+    nt.add_argument("--label", help="list: only this label")
+    nt.add_argument("--add-label", dest="label_add", action="append")
+    nt.add_argument("--remove-label", dest="label_remove", action="append")
+    nt.add_argument("--pin", action="store_true")
+    nt.add_argument("--unpin", action="store_true")
+    nt.add_argument("--archive", action="store_true")
+    nt.add_argument("--unarchive", action="store_true")
+    nt.add_argument("--uncheck", action="store_true", help="check: untick instead")
+    nt.add_argument("--query", "-q", help="list: search title, text and labels")
+    nt.add_argument("--all", action="store_true", help="list: include archived")
+    nt.add_argument("--json", action="store_true")
     u = sub.add_parser("update", help="Update the bridge to the newest release (keeps pairings)")
     u.add_argument("--check", action="store_true", help="Only say whether an update is available")
     u.add_argument("--yes", action="store_true", help="Don't ask for confirmation")
@@ -621,7 +717,8 @@ def main(argv: list[str] | None = None) -> None:
     cfg = Config.load(args.config)
     handler = {"serve": cmd_serve, "pair": cmd_pair, "revoke": cmd_revoke, "devices": cmd_devices,
                "trust": cmd_trust, "doctor": cmd_doctor, "firewall": cmd_firewall,
-               "supervise": cmd_supervise, "metrics": cmd_metrics, "update": cmd_update}[args.command]
+               "supervise": cmd_supervise, "metrics": cmd_metrics, "update": cmd_update,
+               "notes": cmd_notes}[args.command]
     try:
         handler(cfg, args)
     except ValueError as exc:

@@ -79,6 +79,9 @@ class Config:
     park_seconds: float = 300
     # Let a paired phone update a source-installed bridge (git checkout) to the newest release.
     self_update: bool = True
+    # Personal notes (the app's Notes page; Hermes reads and edits the same Markdown files).
+    notes: bool = True
+    notes_dir: Path = CONFIG_DIR / "notes"
 
     @classmethod
     def load(cls, path: Path | None = None) -> "Config":
