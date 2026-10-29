@@ -75,6 +75,8 @@ data class PcNow(
     val top: List<PcProcess> = emptyList(),
     val claude: ClaudeUsage = ClaudeUsage(),
     val alerts: List<String> = emptyList(),
+    /** From a gateway host (Hermes' own stats): no temperature, swap, network, history, processes or Claude usage. */
+    val basic: Boolean = false,
 )
 
 /** A metric over time; [values] lines up with [ts] (epoch seconds), null = no sample there. */
@@ -93,6 +95,19 @@ fun parseStats(o: JSONObject?): PcStats {
         memUsedGb = o.optDouble("mem_used_gb", 0.0), memTotalGb = o.optDouble("mem_total_gb", 0.0),
         swapUsedGb = o.optDouble("swap_used_gb", 0.0), diskUsedGb = o.dbl("disk_used_gb"), diskTotalGb = o.dbl("disk_total_gb"),
         uptimeS = o.optLong("uptime_s"), cores = o.optInt("cores"))
+}
+
+/** Hermes' `GET /api/system/stats` (a gateway host has no bridge monitor): the numbers it has. */
+fun parseHermesSystemStats(o: JSONObject): PcNow {
+    val gb = 1024.0 * 1024 * 1024
+    val mem = o.optJSONObject("memory"); val disk = o.optJSONObject("disk")
+    return PcNow(host = o.str("hostname").orEmpty(), stats = PcStats(
+        cpu = o.optDouble("cpu_percent", 0.0), mem = mem?.optDouble("percent", 0.0) ?: 0.0,
+        disk = disk?.dbl("percent"), load1 = o.optJSONArray("load_avg")?.optDouble(0)?.takeUnless { it.isNaN() },
+        memUsedGb = (mem?.optDouble("used", 0.0) ?: 0.0) / gb, memTotalGb = (mem?.optDouble("total", 0.0) ?: 0.0) / gb,
+        diskUsedGb = disk?.dbl("used")?.div(gb), diskTotalGb = disk?.dbl("total")?.div(gb),
+        uptimeS = o.optLong("uptime_seconds"), cores = o.optInt("cpu_count")),
+        basic = true)
 }
 
 fun parseProcess(o: JSONObject) = PcProcess(o.optInt("pid"), o.str("name") ?: "?", o.optDouble("cpu", 0.0), o.optLong("mem_mb"),
@@ -206,6 +221,8 @@ class PcMonitor(
     private val client: () -> BridgeClient?,
     private val describe: (Throwable) -> String,
     private val say: (String) -> Unit,
+    /** A gateway host's Hermes stats, used when there is no bridge. */
+    private val gateway: () -> GatewayRestClient? = { null },
 ) {
     private val _state = MutableStateFlow(PcState())
     val state: StateFlow<PcState> = _state.asStateFlow()
@@ -237,7 +254,14 @@ class PcMonitor(
     fun stop() { loop?.cancel(); loop = null }
 
     suspend fun refreshNow(live: Boolean = false) {
-        val c = client() ?: return
+        val c = client() ?: run {
+            val g = gateway() ?: return
+            try {
+                val now = g.systemStats()
+                _state.update { it.copy(now = now, loading = false, error = null, unsupported = false) }
+            } catch (t: Throwable) { fail(t) }
+            return
+        }
         val s = _state.value
         try {
             val now = c.monitorNow(live)

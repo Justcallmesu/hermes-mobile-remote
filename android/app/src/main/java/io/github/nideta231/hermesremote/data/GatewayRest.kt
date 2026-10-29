@@ -102,6 +102,9 @@ class GatewayRestClient(
 
     override suspend fun status(): List<ComponentStatus> = parseGatewayStatus(call("GET", "/api/status"))
 
+    /** Hermes' own host stats (CPU, RAM, disk, load, uptime): the PC page of a gateway host. */
+    suspend fun systemStats(): PcNow = parseHermesSystemStats(call("GET", "/api/system/stats"))
+
     override suspend fun setPinned(id: String, pinned: Boolean, profile: String?): Any? = patch(id, JSONObject().put("pinned", pinned), profile)
 
     override suspend fun renameSession(id: String, title: String, profile: String?): Any? = patch(id, JSONObject().put("title", title), profile)

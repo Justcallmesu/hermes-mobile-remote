@@ -332,7 +332,9 @@ class MainActivity : ComponentActivity() {
         BackHandler(enabled = !drawer.isOpen && page != Page.CHAT) { page = if (page == Page.VAULT) Page.SETTINGS else Page.CHAT }
         // Opened from a home-screen widget.
         if (openPage.value != null) { page = openPage.value!!; openPage.value = null; scope.launch { drawer.close() } }
-        val hasMonitor = "monitor" in features
+        val gatewayHost by vm.gatewayHost.collectAsState()
+        // A gateway host has no bridge monitor, but Hermes serves its own basic stats.
+        val hasMonitor = "monitor" in features || gatewayHost != null
         val hasTerminal = "terminal" in features
 
         val projectActions = remember(vm) {

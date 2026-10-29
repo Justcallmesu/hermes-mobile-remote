@@ -128,7 +128,20 @@ private fun PcContent(state: PcState, actions: PcActions, onStop: (PcProcess) ->
     Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
         Gauge("CPU", s.cpu, "%.0f%%".format(s.cpu), "${s.cores} cores" + (s.load1?.let { " · load %.2f".format(it) } ?: ""), CpuColor, Modifier.weight(1f))
         Gauge("RAM", s.mem, "%.0f%%".format(s.mem), "%.1f / %.1f GB".format(s.memUsedGb, s.memTotalGb), MemColor, Modifier.weight(1f))
-        Gauge("Temp", s.temp?.coerceIn(0.0, 100.0) ?: 0.0, s.temp?.let { "%.0f°C".format(it) } ?: "--", "CPU package", TempColor, Modifier.weight(1f))
+        if (now.basic) Gauge("Disk", s.disk ?: 0.0, s.disk?.let { "%.0f%%".format(it) } ?: "--",
+            "%.0f / %.0f GB".format(s.diskUsedGb ?: 0.0, s.diskTotalGb ?: 0.0), TempColor, Modifier.weight(1f))
+        else Gauge("Temp", s.temp?.coerceIn(0.0, 100.0) ?: 0.0, s.temp?.let { "%.0f°C".format(it) } ?: "--", "CPU package", TempColor, Modifier.weight(1f))
+    }
+    if (now.basic) {
+        Panel {
+            StatRow("Up", fmtUptime(s.uptimeS))
+            StatRow("Load", s.load1?.let { "%.2f".format(it) } ?: "--")
+        }
+        Panel {
+            PanelRow("Basic stats over the gateway", "History, temperature, network, processes, Claude usage and the terminal " +
+                "need the Hermes Remote bridge on this PC. Pair it and link it with this gateway host.", Glyphs.Chip)
+        }
+        return
     }
     Panel {
         StatRow("Up", fmtUptime(s.uptimeS))

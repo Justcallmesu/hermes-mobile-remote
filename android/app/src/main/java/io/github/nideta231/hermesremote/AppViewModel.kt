@@ -423,7 +423,8 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
         describe = ::describe, say = { _toast.value = it })
 
     /** The PC page: live stats, history, processes and Claude usage (bridge 1.18+). */
-    val monitor = PcMonitor(viewModelScope, client = { client }, describe = ::describe, say = { _toast.value = it })
+    val monitor = PcMonitor(viewModelScope, client = { client }, describe = ::describe, say = { _toast.value = it },
+        gateway = { source as? GatewayRestClient })
 
     /** A shell on the PC for the Terminal page; null when not connected. Closed by the caller. */
     fun openTerminal(cols: Int, rows: Int): TerminalSession? = client?.let { TerminalSession(it, cols, rows) }
