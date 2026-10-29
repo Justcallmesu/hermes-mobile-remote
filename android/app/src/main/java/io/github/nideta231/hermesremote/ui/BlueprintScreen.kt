@@ -30,6 +30,11 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.ui.layout.LocalPinnableContainer
+import androidx.compose.runtime.withFrameNanos
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
@@ -482,8 +487,42 @@ private fun BoardView(bp: Blueprint, actions: BlueprintActions) {
     var finger by remember { mutableStateOf(Offset.Zero) }
     val colBounds = remember { mutableStateMapOf<String, Rect>() }
     val cardBounds = remember { mutableStateMapOf<String, Rect>() }
+    val listBounds = remember { mutableStateMapOf<String, Rect>() }
+    val listStates = remember { mutableMapOf<String, LazyListState>() }
+    var boardBounds by remember { mutableStateOf<Rect?>(null) }
     val dark = isDark()
     val scroll = rememberScrollState()
+    val density = LocalDensity.current
+    // The gesture lambdas outlive recompositions: read the newest board and filter through these.
+    val bpNow by rememberUpdatedState(bp)
+    val tagNow by rememberUpdatedState(tag)
+    fun shownIn(b: Blueprint, colId: String, t: String?) =
+        b.cardsIn(colId).filter { t == null || (if (t == WAITING) it.openAsks.isNotEmpty() else t in it.tags) }
+    // Where the dragged card would land: (column, slot among the column's shown cards without it).
+    fun dropTarget(): Pair<String, Int>? {
+        val c = dragging ?: return null
+        val col = colBounds.entries.firstOrNull { (_, r) -> r.width > 0f && finger.x >= r.left && finger.x <= r.right }?.key ?: return null
+        val others = shownIn(bpNow, col, tagNow).map { it.id }.filter { it != c.id }
+        val onScreen = listStates[col]?.layoutInfo?.visibleItemsInfo?.mapNotNull { it.key as? String }?.toSet().orEmpty()
+        val visible = others.filter { it in onScreen }.mapNotNull { id -> cardBounds[id]?.let { id to it.center.y } }.sortedBy { it.second }
+        return col to dropSlot(others, visible, finger.y)
+    }
+    // Scroll while the finger holds near an edge: the column under it vertically, the board sideways.
+    LaunchedEffect(dragging?.id) {
+        if (dragging == null) return@LaunchedEffect
+        val zone = with(density) { 64.dp.toPx() }
+        val speed = with(density) { 12.dp.toPx() }
+        while (true) {
+            withFrameNanos { }
+            val f = finger
+            boardBounds?.let { b -> edgeScroll(f.x, b.left, b.right, zone, speed).takeIf { it != 0f }?.let { scroll.dispatchRawDelta(it) } }
+            dropTarget()?.first?.let { col ->
+                val r = listBounds[col] ?: return@let
+                edgeScroll(f.y, r.top, r.bottom, zone, speed).takeIf { it != 0f }?.let { listStates[col]?.dispatchRawDelta(it) }
+            }
+        }
+    }
+    val drop = dropTarget()
 
     Column(Modifier.fillMaxSize()) {
         if (bp.tags.isNotEmpty() || bp.needsYou.isNotEmpty()) Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 12.dp, vertical = 4.dp),
@@ -492,11 +531,22 @@ private fun BoardView(bp: Blueprint, actions: BlueprintActions) {
             if (bp.needsYou.isNotEmpty()) FilterChip(tag == WAITING, { tag = if (tag == WAITING) null else WAITING }, { Text("Waiting for you ${bp.needsYou.size}", color = Warn) }, colors = themedChip())
             bp.tags.forEach { t -> FilterChip(tag == t, { tag = if (tag == t) null else t }, { Text("#$t") }, colors = themedChip()) }
         }
-        Box(Modifier.weight(1f).fillMaxWidth()) {
+        Box(Modifier.weight(1f).fillMaxWidth().onGloballyPositioned { boardBounds = it.boundsInRoot() }) {
             Row(Modifier.fillMaxSize().horizontalScroll(scroll).padding(horizontal = 8.dp, vertical = 6.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 bp.columns.forEach { col ->
-                    val cards = bp.cardsIn(col.id).filter { tag == null || (if (tag == WAITING) it.openAsks.isNotEmpty() else tag in it.tags) }
-                    val target = dragging != null && colBounds[col.id]?.contains(finger) == true
+                    val cards = shownIn(bp, col.id, tag)
+                    val target = drop?.first == col.id
+                    val listState = listStates.getOrPut(col.id) { LazyListState() }
+                    // The gold slot showing where the card lands; none when the drop would not move it.
+                    val dragged = dragging
+                    val placeAt = if (dragged == null || drop?.first != col.id) -1 else {
+                        val others = cards.filter { it.id != dragged.id }
+                        val all = bp.cardsIn(col.id).map { it.id }.filter { it != dragged.id }
+                        val idx = fullIndex(others.map { it.id }, all, drop.second)
+                        if (dragged.column == col.id && idx == bp.cardsIn(col.id).indexOfFirst { it.id == dragged.id }) -1
+                        else others.getOrNull(drop.second)?.let { o -> cards.indexOfFirst { it.id == o.id } } ?: cards.size
+                    }
+                    val slotHeight = with(density) { (dragged?.let { cardBounds[it.id]?.height } ?: 0f).toDp() }.coerceAtLeast(48.dp)
                     val tint = bpColor(col.color, dark)
                     Surface(Modifier.width(280.dp).fillMaxHeight().onGloballyPositioned { colBounds[col.id] = it.boundsInRoot() },
                         shape = RoundedCornerShape(16.dp), color = MaterialTheme.colorScheme.surfaceContainer,
@@ -529,29 +579,46 @@ private fun BoardView(bp: Blueprint, actions: BlueprintActions) {
                                     }
                                 }
                             }
-                            LazyColumn(Modifier.weight(1f).fillMaxWidth(), contentPadding = androidx.compose.foundation.layout.PaddingValues(8.dp),
+                            LazyColumn(Modifier.weight(1f).fillMaxWidth().onGloballyPositioned { listBounds[col.id] = it.boundsInRoot() },
+                                state = listState, contentPadding = androidx.compose.foundation.layout.PaddingValues(8.dp),
                                 verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                                items(cards, key = { it.id }) { card ->
+                                itemsIndexed(cards, key = { _, c -> c.id }) { i, card ->
+                                    Column(Modifier.animateItem(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    if (i == placeAt) DropSlot(slotHeight)
+                                    // Keep the dragged card composed when its column scrolls it away, or the drag would end.
+                                    val pinnable = LocalPinnableContainer.current
+                                    val isDragged = dragging?.id == card.id
+                                    DisposableEffect(isDragged) {
+                                        val handle = if (isDragged) pinnable?.pin() else null
+                                        onDispose { handle?.release() }
+                                    }
+                                    DisposableEffect(card.id) { onDispose { cardBounds.remove(card.id) } }
                                     BoardCard(card, bp, dark, ghost = dragging?.id == card.id,
-                                        modifier = Modifier.animateItem().onGloballyPositioned { cardBounds[card.id] = it.boundsInRoot() }
+                                        modifier = Modifier.onGloballyPositioned { cardBounds[card.id] = it.boundsInRoot() }
                                             .pointerInput(card.id) {
                                                 detectDragGesturesAfterLongPress(
                                                     onDragStart = { at -> dragging = card; finger = (cardBounds[card.id]?.topLeft ?: Offset.Zero) + at },
                                                     onDrag = { ch, d -> ch.consume(); finger += d },
                                                     onDragEnd = {
-                                                        val c = dragging; dragging = null
-                                                        val dest = colBounds.entries.firstOrNull { it.value.contains(finger) }?.key
-                                                        if (c != null && dest != null) {
-                                                            val others = bp.cardsIn(dest).filter { it.id != c.id }
-                                                            val idx = others.count { o -> (cardBounds[o.id]?.center?.y ?: Float.MAX_VALUE) < finger.y }
-                                                            if (dest != c.column || idx != bp.cardsIn(dest).indexOfFirst { it.id == c.id })
+                                                        val c = dragging
+                                                        val target = dropTarget()
+                                                        dragging = null
+                                                        if (c != null && target != null) {
+                                                            val (dest, slot) = target
+                                                            val b = bpNow
+                                                            val all = b.cardsIn(dest).map { it.id }.filter { it != c.id }
+                                                            val shown = shownIn(b, dest, tagNow).map { it.id }.filter { it != c.id }
+                                                            val idx = fullIndex(shown, all, slot)
+                                                            if (dest != c.column || idx != b.cardsIn(dest).indexOfFirst { it.id == c.id })
                                                                 actions.apply(arrayOf(BpOp.of("card.move", "id" to c.id, "column" to dest, "index" to idx))) {}
                                                         }
                                                     },
                                                     onDragCancel = { dragging = null })
                                             },
                                         onOpen = { openCard = card.id })
+                                    }
                                 }
+                                if (placeAt == cards.size) item(key = "drop-slot") { DropSlot(slotHeight, Modifier.animateItem()) }
                                 item {
                                     TextButton(onClick = { addingTo = col.id }, modifier = Modifier.fillMaxWidth()) {
                                         Icon(Glyphs.Plus, null, Modifier.size(16.dp)); Spacer(Modifier.width(6.dp)); Text("Add card")
@@ -593,6 +660,14 @@ private fun BoardView(bp: Blueprint, actions: BlueprintActions) {
         newColumn = false; if (t.isNotBlank()) actions.apply(arrayOf(BpOp.of("column.add", "name" to t))) {}
     }
     openCard?.let { id -> bp.cards.firstOrNull { it.id == id }?.let { CardSheet(it, bp, actions, onDismiss = { openCard = null }) } ?: run { openCard = null } }
+}
+
+/** Where a dragged card will land: an empty card-sized slot with a gold outline. */
+@Composable
+private fun DropSlot(height: androidx.compose.ui.unit.Dp, modifier: Modifier = Modifier) {
+    Box(modifier.fillMaxWidth().height(height)
+        .background(Gold.copy(alpha = 0.10f), RoundedCornerShape(12.dp))
+        .border(BorderStroke(2.dp, Gold.copy(alpha = 0.7f)), RoundedCornerShape(12.dp)))
 }
 
 @Composable
