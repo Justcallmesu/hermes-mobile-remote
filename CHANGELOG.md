@@ -17,7 +17,7 @@ request number.
   subagents (#12), share to Hermes (#15), message search (#16), subagent output and steer (#17)
   and bridge metrics (#18).
 
-## Unreleased
+## v1.35.0
 
 - Bridge stats on the phone: the PC page has a *Bridge* card with what `hermes-remote-bridge
   metrics` prints (devices connected, requests and failures, Hermes reply time, approvals waiting
