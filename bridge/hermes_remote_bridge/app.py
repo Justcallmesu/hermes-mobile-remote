@@ -48,7 +48,7 @@ from .metrics import CONTENT_TYPE as METRICS_CONTENT_TYPE
 from .metrics import BridgeMetrics, read_metrics_token
 from .project_notes import IDEA_MAX_BYTES, NoFolder, read_idea, write_idea
 from .profiles import ProfileRefused, is_visible, media_roots, profile_home, resolve_profile
-from .monitor import RANGES, ClaudeUsage, Monitor
+from .monitor import RANGES, TRACKING, ClaudeUsage, Monitor
 from .relay import ParkedUpstreams, Relay
 from .terminal import Shell
 from .terminal import serve as serve_terminal
@@ -1216,6 +1216,23 @@ def create_app(cfg: Config, *, locator: BackendLocator | None = None, tailnet: T
             raise ApiError(502, "speedtest_failed", f"Speed test failed: {getattr(exc, 'reason', None) or exc}")
         audit_event({"event": "speed_test", "device": device.name, "down": result["down_mbps"], "up": result["up_mbps"]})
         return result
+
+    @app.get("/v1/monitor/tracking")
+    async def monitor_tracking(_: Device = Depends(device_auth)):
+        m = need_monitor()
+        return {"tracking": dict(m.tracking), "labels": dict(TRACKING)}
+
+    @app.put("/v1/monitor/tracking")
+    async def set_monitor_tracking(request: Request, device: Device = Depends(device_auth)):
+        """Turn monitor groups on/off (e.g. {"network": false}); off groups are not read at all."""
+        m = need_monitor()
+        body = await request.json()
+        try:
+            cur = await off_loop(m.set_tracking, body if isinstance(body, dict) else {})
+        except ValueError as exc:
+            raise ApiError(400, "bad_tracking", str(exc))
+        audit_event({"event": "monitor_tracking", "device": device.name, "tracking": cur})
+        return {"tracking": cur, "labels": dict(TRACKING)}
 
     @app.get("/v1/monitor/speedtest")
     async def speed_tests(limit: int = 30, _: Device = Depends(device_auth)):

@@ -23,6 +23,10 @@ from .host import host
 log = logging.getLogger(__name__)
 
 SAMPLE_SECONDS = 10
+# What the monitor reads, in groups the user can turn off to save resources (phone: PC page >
+# What to track). Off = not read at all; its history shows gaps.
+TRACKING = {"cpu": "CPU and load", "memory": "Memory and swap", "temp": "CPU temperature", "disk": "Disk usage and I/O",
+            "network": "Network traffic", "processes": "Top processes", "claude": "Claude usage"}
 CLAUDE_POLL_SECONDS = 300
 RAW_KEEP = 48 * 3600
 M1_KEEP = 30 * 86400
@@ -171,6 +175,34 @@ class Monitor:
         self._prev_net = self._prev_disk = None
         self._prev_t = 0.0
         self._speed_lock = threading.Lock()  # one speed test at a time
+        self.tracking_path = db_path.parent / "monitor-tracking.json"
+        self.tracking: dict[str, bool] = self._load_tracking()
+
+    # ------------------------------------------------------------ what to track
+    def _load_tracking(self) -> dict[str, bool]:
+        try:
+            saved = json.loads(self.tracking_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            saved = {}
+        return {k: bool(saved.get(k, True)) if isinstance(saved, dict) else True for k in TRACKING}
+
+    def on(self, group: str) -> bool:
+        return self.tracking.get(group, True)
+
+    def set_tracking(self, changes: dict) -> dict[str, bool]:
+        """Turn groups on/off; unknown names are an error. Saved next to the database."""
+        bad = [k for k in changes if k not in TRACKING]
+        if bad:
+            raise ValueError(f"Unknown: {', '.join(bad)} (known: {', '.join(TRACKING)})")
+        with self._lock:
+            self.tracking = {**self.tracking, **{k: bool(v) for k, v in changes.items()}}
+            self.tracking_path.parent.mkdir(parents=True, exist_ok=True)
+            self.tracking_path.write_text(json.dumps(self.tracking), encoding="utf-8")
+            if not self.on("network"):
+                self._prev_net = None
+            if not self.on("disk"):
+                self._prev_disk = None
+        return dict(self.tracking)
 
     # ------------------------------------------------------------ storage
     def _db(self) -> sqlite3.Connection:
@@ -195,14 +227,17 @@ class Monitor:
 
     def _sample(self) -> dict:
         now = time.time()
-        first = self._prev_net is None
-        cores = psutil.cpu_percent(percpu=True) or [0.0]
-        vm, sw = psutil.virtual_memory(), psutil.swap_memory()
-        try:
-            du = psutil.disk_usage(_root_disk())
-        except OSError:
-            du = None
-        net, disk = psutil.net_io_counters(), psutil.disk_io_counters()
+        first = self._prev_t == 0.0
+        cores = (psutil.cpu_percent(percpu=True) or [0.0]) if self.on("cpu") else []
+        vm, sw = (psutil.virtual_memory(), psutil.swap_memory()) if self.on("memory") else (None, None)
+        du = None
+        if self.on("disk"):
+            try:
+                du = psutil.disk_usage(_root_disk())
+            except OSError:
+                du = None
+        net = psutil.net_io_counters() if self.on("network") else None
+        disk = psutil.disk_io_counters() if self.on("disk") else None
         dt = max(now - self._prev_t, 0.001)
 
         def rate(cur, prev, field):
@@ -210,20 +245,25 @@ class Monitor:
                 return 0
             return max(0, round((getattr(cur, field) - getattr(prev, field)) / dt))
 
-        try:
-            load1 = round(psutil.getloadavg()[0], 2)
-        except (OSError, AttributeError):
-            load1 = None
-        row = {"cpu": round(sum(cores) / len(cores), 1), "mem": round(vm.percent, 1), "swap": round(sw.percent, 1),
-               "temp": read_temp(), "disk": round(du.percent, 1) if du else None, "load1": load1,
-               "rx": rate(net, self._prev_net, "bytes_recv"), "tx": rate(net, self._prev_net, "bytes_sent"),
-               "rd": rate(disk, self._prev_disk, "read_bytes"), "wr": rate(disk, self._prev_disk, "write_bytes")}
+        load1 = None
+        if self.on("cpu"):
+            try:
+                load1 = round(psutil.getloadavg()[0], 2)
+            except (OSError, AttributeError):
+                load1 = None
+        net_on, disk_on = net is not None, disk is not None
+        row = {"cpu": round(sum(cores) / len(cores), 1) if cores else None,
+               "mem": round(vm.percent, 1) if vm else None, "swap": round(sw.percent, 1) if sw else None,
+               "temp": read_temp() if self.on("temp") else None, "disk": round(du.percent, 1) if du else None, "load1": load1,
+               "rx": rate(net, self._prev_net, "bytes_recv") if net_on else None, "tx": rate(net, self._prev_net, "bytes_sent") if net_on else None,
+               "rd": rate(disk, self._prev_disk, "read_bytes") if disk_on else None, "wr": rate(disk, self._prev_disk, "write_bytes") if disk_on else None}
         self._prev_net, self._prev_disk, self._prev_t = net, disk, now
         self.cores = [round(c, 1) for c in cores]
-        self.latest = dict(row, ts=int(now), mem_used_gb=round(vm.used / 1e9, 1), mem_total_gb=round(vm.total / 1e9, 1),
-                           swap_used_gb=round(sw.used / 1e9, 1), swap_total_gb=round(sw.total / 1e9, 1),
+        self.latest = dict(row, ts=int(now), mem_used_gb=round(vm.used / 1e9, 1) if vm else None, mem_total_gb=round(vm.total / 1e9, 1) if vm else None,
+                           swap_used_gb=round(sw.used / 1e9, 1) if sw else None, swap_total_gb=round(sw.total / 1e9, 1) if sw else None,
                            disk_used_gb=round(du.used / 1e9) if du else None, disk_total_gb=round(du.total / 1e9) if du else None,
-                           uptime_s=int(now - psutil.boot_time()), cores=len(cores))
+                           uptime_s=int(now - psutil.boot_time()), cores=len(cores) or psutil.cpu_count() or 0,
+                           tracking=dict(self.tracking))
         if not first:  # the first sample has no rates yet; don't store zeros
             conn = self._db()
             conn.execute(f"INSERT OR REPLACE INTO raw (ts, {', '.join(METRICS)}) VALUES (?{', ?' * len(METRICS)})",
@@ -422,7 +462,7 @@ class Monitor:
 
     def now(self, live: bool = False) -> dict:
         stats = self.sample() if live or not self.latest else self.latest
-        return {"host": _hostname(), "stats": stats, "core_pct": self.cores, "top": self.top(),
+        return {"host": _hostname(), "stats": stats, "core_pct": self.cores, "top": self.top() if self.on("processes") else [],
                 "claude": self.claude_latest(), "alerts": self.alerts()}
 
     # ------------------------------------------------------------ background loop
@@ -444,7 +484,7 @@ class Monitor:
                 if t0 - last_rollup >= 60:
                     self.rollup()
                     last_rollup = t0
-                if self.claude is not None and t0 >= next_claude:
+                if self.claude is not None and self.on("claude") and t0 >= next_claude:
                     next_claude = t0 + CLAUDE_POLL_SECONDS
                     threading.Thread(target=self.claude_poll, daemon=True).start()
             except Exception:  # noqa: BLE001 - one bad sample must not end monitoring

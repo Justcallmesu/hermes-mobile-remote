@@ -406,4 +406,5 @@ The desktop app manages the bridge through these routes. They are not for the ph
 - **The PC must be on with the bridge running.** There is no relay in the cloud.
 - **Secret and sudo prompts are answered on the PC.** The phone is told one is waiting but is never
   asked to type a password.
+| GET / PUT | `/v1/monitor/tracking` | which monitor groups the PC reads (`cpu`, `memory`, `temp`, `disk`, `network`, `processes`, `claude`); PUT `{"network": false}` stops reading it (saved in `monitor-tracking.json` next to the database). `stats.tracking` in `/v1/monitor/now` mirrors it |
 - **Two trust prompts on Linux.** Until the bridge's own `notify-send` trust prompt is removed, a Linux desktop can show two "Trust this network?" prompts: one from the desktop app and one from the bridge.

@@ -26,6 +26,25 @@ def test_sample_stores_rows_and_history_buckets(tmp_path):
     m.rollup()  # no error on an almost empty db
 
 
+def test_tracking_off_skips_reading_and_persists(tmp_path):
+    m = Monitor(tmp_path / "m.db")
+    assert all(m.tracking.values())
+    m.set_tracking({"network": False, "temp": False, "processes": False})
+    m.sample()
+    s = m.sample()
+    assert s["rx"] is None and s["tx"] is None and s["temp"] is None and s["cpu"] is not None
+    assert m.now()["top"] == [] and s["tracking"]["network"] is False
+    with pytest.raises(ValueError):
+        m.set_tracking({"gpu": False})
+    again = Monitor(tmp_path / "m.db")  # saved next to the database
+    assert again.tracking["network"] is False and again.tracking["cpu"] is True
+    again.set_tracking({"cpu": False, "memory": False, "disk": False})
+    again.sample()
+    s = again.sample()
+    assert s["cpu"] is None and s["mem"] is None and s["disk"] is None and s["cores"] >= 1
+    assert again.history("1h")["range"] == "1h"  # gaps, not errors
+
+
 def test_processes_sort_filter_and_self_protection(tmp_path):
     m = Monitor(tmp_path / "m.db")
     out = m.processes("mem", 500)
