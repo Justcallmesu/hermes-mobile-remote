@@ -25,6 +25,9 @@ request number.
   (1.26+) with the phone's own token, so nothing to set up. **@Justcallmesu** (#21)
 - Linux tray: an *Activity* line (devices connected, turns, approvals waiting) and *Bridge
   stats...*, which shows the full summary. **@Justcallmesu** (#21)
+- **A bridge installed by the desktop app can update itself from the phone (Linux)**: it checks the newest
+  `vX.Y.Z` tag on GitHub, swaps in that release's `bridge/` keeping the old copy as `bridge.old`, and
+  restores it if the sync or the health check fails. `self_update = false` still turns it off.
 - **Bridge keeps a parked socket while its chats have work**: a dropped phone's Hermes socket now stays
   open while a turn, subagent, /loop, /heartbeat or background process is running, so a
   `terminal(background=true, notify=true)` watcher is no longer killed. It is released `park_seconds`

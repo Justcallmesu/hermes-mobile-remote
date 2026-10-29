@@ -358,6 +358,14 @@ cgroup into a scope of its own, restart the bridge. Pairings, TLS keys and netwo
 directory and are not touched, so phones reconnect with the same pairing. The feature is listed as
 `bridge_update` in `/v1/me`; `self_update = false` turns it off. CLI: `hermes-remote-bridge update`.
 
+A bridge installed by the desktop app (a copy without `.git`) updates too, on Linux: `latest` is the newest
+`vX.Y.Z` tag from the GitHub API, and the unit downloads that tag's source archive, extracts only `bridge/`
+(no `tests/`, `.venv`, `__pycache__`; archives with `..` or absolute paths are refused) beside the current
+copy, swaps it in keeping the old one as `bridge.old`, runs `uv sync --frozen --no-dev` into the app's
+existing venv, restarts and health-checks. On any failure the old copy is restored, re-synced and restarted.
+`current` comes from the `bridge.version` file written after each successful update (unknown before the
+first, which counts as "update available"). Windows still says to update the desktop app.
+
 ## Parked sockets: `GET /v1/admin/parked`
 
 Device token; off with `remote_admin = false` (404). Lists the Hermes sockets the bridge holds open for

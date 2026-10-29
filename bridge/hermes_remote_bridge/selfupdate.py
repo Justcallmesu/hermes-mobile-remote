@@ -18,6 +18,7 @@ import secrets
 import shutil
 import subprocess
 import sys
+import tarfile
 import time
 from pathlib import Path
 
@@ -43,7 +44,84 @@ def _git(*args: str, timeout: float = 30) -> subprocess.CompletedProcess:
                           timeout=timeout, stdin=subprocess.DEVNULL)
 
 
+UPSTREAM = "nideta231/hermes-mobile-remote"
+
+
+def _is_git() -> bool:
+    return (REPO / ".git").exists()
+
+
+def _version_file() -> Path:
+    """Desktop-app installs: the release tag of the last successful update, next to the bridge copy."""
+    return REPO / "bridge.version"
+
+
+def _installed_tag() -> str | None:
+    try:
+        return _version_file().read_text().strip() or None
+    except OSError:
+        return None
+
+
+def _api_tags() -> list[str]:
+    """Release tags from the GitHub API (desktop-app installs have no git remote to ask)."""
+    import urllib.request
+
+    req = urllib.request.Request(f"https://api.github.com/repos/{UPSTREAM}/tags?per_page=100",
+                                 headers={"Accept": "application/vnd.github+json", "User-Agent": "hermes-remote-bridge"})
+    try:
+        with urllib.request.urlopen(req, timeout=20) as r:
+            return [t["name"] for t in json.load(r)]
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        raise RuntimeError(str(exc)) from exc
+
+
+def _fetch_archive(tag: str) -> Path:
+    """Download the tag's source archive into a temp file and return its path."""
+    import tempfile
+    import urllib.request
+
+    url = f"https://github.com/{UPSTREAM}/archive/refs/tags/{tag}.tar.gz"
+    fd, name = tempfile.mkstemp(suffix=".tar.gz")
+    try:
+        with os.fdopen(fd, "wb") as out, urllib.request.urlopen(url, timeout=120) as r:
+            shutil.copyfileobj(r, out)
+    except OSError as exc:
+        Path(name).unlink(missing_ok=True)
+        raise RuntimeError(f"Could not download {tag}: {exc}") from exc
+    return Path(name)
+
+
+_SKIP_PARTS = {"tests", ".venv", "__pycache__", ".pytest_cache"}
+
+
+def _extract_bridge(archive: Path, dest: Path) -> None:
+    """Extract only `bridge/` of a source archive (first path component is the repo folder) into [dest].
+    Anything with an absolute or `..` path is refused outright; other members are skipped."""
+    with tarfile.open(archive) as tf:
+        members = tf.getmembers()
+        for m in members:
+            parts = Path(m.name).parts
+            if m.name.startswith("/") or ".." in parts:
+                raise RuntimeError(f"The archive has an unsafe path ({m.name}); nothing changed.")
+        for m in members:
+            parts = Path(m.name).parts[1:]
+            if len(parts) < 2 or parts[0] != "bridge" or _SKIP_PARTS & set(parts) or not m.isfile():
+                continue
+            target = dest.joinpath(*parts[1:])
+            target.parent.mkdir(parents=True, exist_ok=True)
+            src = tf.extractfile(m)
+            if src:
+                with src, open(target, "wb") as out:
+                    shutil.copyfileobj(src, out)
+                target.chmod(m.mode & 0o777 | 0o600)
+    if not dest.exists():
+        raise RuntimeError("The archive has no bridge/ folder; nothing changed.")
+
+
 def _remote_tags(remote: str) -> list[str]:
+    if not _is_git():
+        return _api_tags()
     r = _git("ls-remote", "--tags", "--refs", remote, "v*.*.*", timeout=20)
     if r.returncode != 0:
         raise RuntimeError((r.stderr or "git ls-remote failed").strip().splitlines()[-1])
@@ -52,8 +130,8 @@ def _remote_tags(remote: str) -> list[str]:
 
 def _head() -> tuple[str | None, str | None]:
     """(commit, release tag) the checkout is on now."""
-    if not (REPO / ".git").exists():
-        return None, None
+    if not _is_git():
+        return None, _installed_tag()
     try:
         return (_git("rev-parse", "HEAD").stdout.strip() or None,
                 _git("describe", "--tags", "--abbrev=0", "--match", "v*.*.*").stdout.strip() or None)
@@ -70,12 +148,12 @@ def why_not(remote: str = "origin") -> str | None:
     """Why this install can't update itself, or None when it can."""
     if os.name == "nt":
         return "Windows: update with the Hermes Remote desktop app."
-    if not (REPO / ".git").exists():
-        return "This bridge was installed by the Hermes Remote desktop app; update the app instead."
-    if not shutil.which("git"):
+    if _is_git() and not shutil.which("git"):
         return "git is not installed."
     if not shutil.which("systemd-run"):
         return "systemd is required to update in the background."
+    if not _is_git():
+        return None
     if _git("remote", "get-url", remote).returncode != 0:
         return f"The checkout has no '{remote}' remote."
     dirty = _git("status", "--porcelain", "--untracked-files=no")
@@ -94,7 +172,7 @@ def check(remote: str = "origin") -> dict:
     out["current"] = RUNNING_TAG or head_tag
     out["commit"] = (RUNNING_COMMIT or head_commit or "")[:7] or None
     out["restart_needed"] = bool(RUNNING_COMMIT and head_commit and RUNNING_COMMIT != head_commit)
-    if reason and not (REPO / ".git").exists():
+    if reason and not _is_git():
         out["reason"] = reason
         return out
     try:
@@ -236,7 +314,8 @@ def _render_unit() -> None:
     template = BRIDGE_DIR / "systemd" / UNIT
     if not unit.exists() or unit.is_symlink() or not template.exists():
         return
-    text = template.read_text().replace("@BIN@", str(BRIDGE_DIR / ".venv/bin/hermes-remote-bridge")).replace("@REPO@", str(REPO))
+    venv = BRIDGE_DIR / ".venv" if _is_git() else REPO / "venv"
+    text = template.read_text().replace("@BIN@", str(venv / "bin/hermes-remote-bridge")).replace("@REPO@", str(REPO))
     if unit.read_text() != text:
         unit.write_text(text)
         _systemctl("daemon-reload")
@@ -298,6 +377,81 @@ def _ensure_running(log) -> None:
         _systemctl("start", UNIT)
 
 
+def _run(argv: list[str], **kw) -> subprocess.CompletedProcess:
+    return subprocess.run(argv, **kw)
+
+
+def _sync_app(uv: str) -> subprocess.CompletedProcess:
+    """Install the bridge copy's locked dependencies into the app's existing venv."""
+    return _run([uv, "sync", "--frozen", "--no-dev"], cwd=BRIDGE_DIR, capture_output=True, text=True, timeout=600,
+                stdin=subprocess.DEVNULL, env={**os.environ, "UV_PROJECT_ENVIRONMENT": str(REPO / "venv")})
+
+
+def _swap_back(backup: Path) -> None:
+    shutil.rmtree(BRIDGE_DIR, ignore_errors=True)
+    backup.rename(BRIDGE_DIR)
+
+
+def _apply_archive(log) -> str:
+    """Desktop-app install: swap the bridge copy for the newest release's `bridge/`, keeping the old one
+    as `bridge.old`; any failure puts it back, re-syncs and restarts."""
+    uv = _uv()
+    old_tag = _installed_tag() or "the installed version"
+    try:
+        log("Looking up the newest release…")
+        _write_status(state="running", step="fetching")
+        target = latest_tag(_api_tags())
+        if not target:
+            raise RuntimeError("No release tags found.")
+        if not uv:
+            raise RuntimeError("uv not found; nothing changed.")
+        new, backup = REPO / "bridge.new", REPO / "bridge.old"
+        shutil.rmtree(new, ignore_errors=True)
+        archive = _fetch_archive(target)
+        try:
+            _extract_bridge(archive, new)
+        except BaseException:
+            shutil.rmtree(new, ignore_errors=True)
+            raise
+        finally:
+            archive.unlink(missing_ok=True)
+        log(f"Moving to {target}…")
+        _write_status(state="running", step="checkout", to=target)
+        shutil.rmtree(backup, ignore_errors=True)
+        BRIDGE_DIR.rename(backup)
+        new.rename(BRIDGE_DIR)
+        log("Installing dependencies (uv sync)…")
+        _write_status(state="running", step="sync", to=target)
+        s = _sync_app(uv)
+        if s.returncode != 0:
+            _swap_back(backup)
+            _sync_app(uv)
+            raise RuntimeError(f"uv sync failed, rolled back: {s.stderr.strip()[-300:]}")
+        _render_unit()
+        install_skills(log)
+        moved = keep_hermes_alive()
+        log("Restarting the bridge…")
+        _write_status(state="running", step="restart", to=target)
+        _systemctl("reset-failed", UNIT)
+        _systemctl("restart", UNIT)
+        _write_status(state="running", step="verify", to=target)
+        if not bridge_healthy():
+            _swap_back(backup)
+            _sync_app(uv)
+            _render_unit()
+            keep_hermes_alive()
+            _systemctl("reset-failed", UNIT)
+            _systemctl("restart", UNIT)
+            ok = bridge_healthy()
+            raise RuntimeError(f"{target} did not start; rolled back to {old_tag}" + ("" if ok else " (check `journalctl --user -u hermes-remote-bridge`)"))
+        _version_file().write_text(target + "\n")
+        _write_status(state="done", to=target, moved=moved)
+        log(f"Updated to {target}. Paired devices are unchanged; phones reconnect on their own.")
+        return target
+    finally:
+        _ensure_running(log)
+
+
 def _sync(uv: str) -> subprocess.CompletedProcess:
     return subprocess.run([uv, "sync", "--quiet", "--no-dev", "--inexact"], cwd=BRIDGE_DIR, capture_output=True, text=True,
                           timeout=600, stdin=subprocess.DEVNULL)
@@ -339,6 +493,10 @@ def apply(remote: str = "origin", log=print) -> str:
     rolled back), and a new version that doesn't come up healthy is rolled back and restarted.
     """
     reason = why_not(remote)
+    if not _is_git():
+        if reason:
+            raise RuntimeError(reason)
+        return _apply_archive(log)
     if reason:
         info = check(remote)
         if info["restart_needed"] and info["can_update"]:
