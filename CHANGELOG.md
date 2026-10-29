@@ -17,6 +17,17 @@ request number.
   subagents (#12), share to Hermes (#15), message search (#16), subagent output and steer (#17)
   and bridge metrics (#18).
 
+## v1.32.1
+
+- Notes: what you write is kept when you leave the editor. A background refresh could close a fresh
+  note or put back an older copy before the save landed; the note you're editing now stays on screen
+  and leaving saves it at once. Only a note left completely empty is dropped.
+- Notes: the Archive button says *Archive* / *Unarchive* with its own icon (it was a download arrow),
+  and a message says where the note went.
+- Notes: tags. They show under the title of every note with an *Add tag* chip, as `#tag` on the
+  cards, and filter the list from the chips at the top (same as labels on the PC side).
+- Notes: tapping anywhere in the empty part of a note starts typing, not only on the text itself.
+
 ## v1.32.0
 
 - New **PC bridge** page (drawer ⋮ > PC bridge, or Settings > Hermes on your PC > PC bridge): everything

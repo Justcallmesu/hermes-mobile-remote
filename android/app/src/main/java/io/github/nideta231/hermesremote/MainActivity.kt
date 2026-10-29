@@ -453,7 +453,7 @@ class MainActivity : ComponentActivity() {
                         Page.NOTES -> NotesScreen(notesState, NotesActions(watch = vm.notes::watch, unwatch = vm.notes::stop,
                             setQuery = vm.notes::setQuery, setLabel = vm.notes::setLabel, setArchived = vm.notes::setArchived,
                             create = { list, done -> vm.notes.create(list, done) }, edit = { id, f -> vm.notes.edit(id) { f(it) } },
-                            closed = vm.notes::closed, delete = { vm.notes.delete(it) },
+                            closed = vm.notes::closed, opened = { vm.notes.editing = it }, archive = vm.notes::setArchived, delete = { vm.notes.delete(it) },
                             askHermes = { n -> vm.newChat(); vm.setDraft("Look at my note \"${n.title.ifBlank { n.id }}\" (id ${n.id}, personal-notes skill) and ") ; page = Page.CHAT }),
                             onBack = { page = Page.CHAT })
                         Page.GRAPH -> GraphScreen(sessions.items, sessions.projects, onOpenChat = { vm.openSession(it); page = Page.CHAT },

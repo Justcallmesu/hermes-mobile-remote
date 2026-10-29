@@ -96,8 +96,14 @@ class NotesRepo(
     val state: StateFlow<NotesState> = _state.asStateFlow()
     private var poll: Job? = null
     private val pending = HashMap<String, Job>()
+    /** When each note's last local save finished: a poll that started before that holds a stale copy. */
+    private val savedAt = HashMap<String, Long>()
+    /** The newest local version of each note with unsent or just-sent changes. */
+    private val local = HashMap<String, Note>()
+    /** The note open in the editor: kept on screen even when a filter or search would hide it. */
+    var editing: String? = null
 
-    fun clear() { stop(); _state.value = NotesState() }
+    fun clear() { stop(); local.clear(); savedAt.clear(); _state.value = NotesState() }
 
     fun watch() {
         if (poll?.isActive == true) return
@@ -113,11 +119,16 @@ class NotesRepo(
     suspend fun load() {
         val c = client() ?: return
         val s = _state.value
+        val started = System.nanoTime()
         try {
             val o = c.notes(s.query, s.archived, s.label)
-            // A note with an unsent edit keeps the local copy: the poll must not undo typing.
-            val local = _state.value.notes.associateBy { it.id }
-            val list = o.optJSONArray("notes").objects().map(Note::parse).map { n -> if (n.id in pending) local[n.id] ?: n else n }
+            // A note edited here keeps the local copy while its save is pending, and also when this
+            // poll left before the save landed (its server copy is older than what is on screen).
+            val list = o.optJSONArray("notes").objects().map(Note::parse).map { n ->
+                val mine = local[n.id]
+                if (mine != null && (n.id in pending || (savedAt[n.id] ?: Long.MIN_VALUE) > started)) mine else n
+            }.let { l -> val e = editing; val keep = e?.let { id -> _state.value.notes.firstOrNull { it.id == id } }
+                if (keep != null && l.none { it.id == e }) listOf(keep) + l else l }
             _state.update { it.copy(notes = list, labels = o.optJSONArray("labels").strings(), loading = false, error = null, unsupported = false) }
         } catch (t: Throwable) {
             if (t is CancellationException) throw t
@@ -135,6 +146,7 @@ class NotesRepo(
                 val n = Note.parse(c.createNote(JSONObject().put("body", if (checklist) "- [ ] \n" else "")
                     .put("labels", JSONArray(listOfNotNull(label)))))
                 _state.update { it.copy(notes = listOf(n) + it.notes) }
+                editing = n.id
                 onCreated(n)
             } catch (t: Throwable) { if (t is CancellationException) throw t; say(describe(t)) }
         }
@@ -144,28 +156,45 @@ class NotesRepo(
     fun edit(id: String, debounceMs: Long = 600, change: (Note) -> Note) {
         val before = _state.value.notes.firstOrNull { it.id == id } ?: return
         val after = change(before)
+        local[id] = after
         _state.update { st -> st.copy(notes = st.notes.map { if (it.id == id) after else it }) }
         pending[id]?.cancel()
         pending[id] = scope.launch {
             delay(debounceMs)
-            val c = client() ?: return@launch
-            try {
-                c.updateNote(id, JSONObject().put("title", after.title).put("body", after.body).put("color", after.color)
-                    .put("pinned", after.pinned).put("archived", after.archived).put("labels", JSONArray(after.labels)))
-            } catch (t: Throwable) { if (t is CancellationException) throw t; say(describe(t)) }
-            finally { pending.remove(id) }
+            save(after)
         }
     }
 
-    /** Leaving the editor: an empty new note is dropped, like Keep. */
+    private suspend fun save(n: Note) {
+        val c = client() ?: return
+        try {
+            c.updateNote(n.id, JSONObject().put("title", n.title).put("body", n.body).put("color", n.color)
+                .put("pinned", n.pinned).put("archived", n.archived).put("labels", JSONArray(n.labels)))
+            savedAt[n.id] = System.nanoTime()
+        } catch (t: Throwable) { if (t is CancellationException) throw t; say("Note not saved: ${describe(t)}") }
+        finally { if (pending[n.id]?.isActive != true) pending.remove(n.id) }
+    }
+
+    /** Leaving the editor: what was written is saved right away; a note left completely empty is dropped, like Keep. */
     fun closed(id: String) {
-        val n = _state.value.notes.firstOrNull { it.id == id } ?: return
-        if (n.isEmpty) delete(id, quiet = true)
+        val n = _state.value.notes.firstOrNull { it.id == id } ?: local[id] ?: return
+        if (editing == id) editing = null
+        if (n.isEmpty) return delete(id, quiet = true)
+        val job = pending[id] ?: return
+        job.cancel()
+        pending[id] = scope.launch { save(local[id] ?: n) }
+    }
+
+    /** Archive (or bring back) with a clear message, since the note leaves the current list. */
+    fun setArchived(id: String, archived: Boolean) {
+        edit(id, debounceMs = 0) { it.copy(archived = archived) }
+        say(if (archived) "Note archived (find it under Archive)" else "Note moved back to Notes")
     }
 
     fun delete(id: String, quiet: Boolean = false) {
         val c = client() ?: return
         pending.remove(id)?.cancel()
+        local.remove(id)
         _state.update { st -> st.copy(notes = st.notes.filterNot { it.id == id }) }
         scope.launch {
             try { c.deleteNote(id); if (!quiet) say("Note deleted") }

@@ -57,6 +57,9 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.text.font.FontWeight
@@ -77,6 +80,10 @@ class NotesActions(
     val create: (Boolean, (Note) -> Unit) -> Unit,
     val edit: (String, (Note) -> Note) -> Unit,
     val closed: (String) -> Unit,
+    /** The editor opened this note (it stays on screen while edited). */
+    val opened: (String) -> Unit = {},
+    /** Archive or unarchive, with a message saying where the note went. */
+    val archive: (String, Boolean) -> Unit = { _, _ -> },
     val delete: (String) -> Unit,
     /** Start a chat with Hermes about this note (drafts the message; nothing is sent until Send). */
     val askHermes: (Note) -> Unit,
@@ -110,7 +117,7 @@ fun NotesScreen(state: NotesState, actions: NotesActions, onBack: () -> Unit) {
     val open = openId?.let { id -> state.notes.firstOrNull { it.id == id } }
     AnimatedContent(open != null, transitionSpec = { fadeIn(tween(180)) togetherWith fadeOut(tween(140)) }, label = "notes") { editing ->
         if (editing && open != null) NoteEditor(open, state.labels, actions, onClose = { actions.closed(open.id); openId = null })
-        else NotesGrid(state, actions, onOpen = { openId = it }, onBack = onBack)
+        else NotesGrid(state, actions, onOpen = { actions.opened(it); openId = it }, onBack = onBack)
     }
 }
 
@@ -204,7 +211,7 @@ private fun NoteCard(n: Note, actions: NotesActions, modifier: Modifier, onOpen:
                 color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 4.dp))
             if (n.labels.isNotEmpty()) Row(Modifier.padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                 n.labels.take(3).forEach { l ->
-                    Text(l, style = MaterialTheme.typography.labelSmall, maxLines = 1,
+                    Text("#$l", style = MaterialTheme.typography.labelSmall, maxLines = 1,
                         modifier = Modifier.background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f), RoundedCornerShape(8.dp))
                             .padding(horizontal = 6.dp, vertical = 2.dp))
                 }
@@ -228,30 +235,37 @@ private fun NoteEditor(n: Note, allLabels: List<String>, actions: NotesActions, 
             IconButton(onClick = onClose) { Icon(Glyphs.Back, "Back") }
             Spacer(Modifier.weight(1f))
             IconButton(onClick = { edit { it.copy(pinned = !it.pinned) } }) { Icon(Glyphs.Pin, if (n.pinned) "Unpin" else "Pin", tint = if (n.pinned) Gold else text) }
-            IconButton(onClick = { edit { it.copy(archived = !it.archived) }; onClose() }) { Icon(Glyphs.Download, if (n.archived) "Unarchive" else "Archive") }
+            TextButton(onClick = { actions.archive(n.id, !n.archived); onClose() }) {
+                Icon(if (n.archived) Glyphs.Unarchive else Glyphs.Archive, null, Modifier.size(18.dp), tint = text)
+                Spacer(Modifier.width(6.dp)); Text(if (n.archived) "Unarchive" else "Archive", color = text)
+            }
             Box {
                 IconButton(onClick = { menu = true }) { Icon(Glyphs.More, "More") }
                 DropdownMenu(menu, { menu = false }) {
                     DropdownMenuItem({ Text("Ask Hermes about this") }, { menu = false; actions.askHermes(n) }, leadingIcon = { Icon(Glyphs.Spark, null, Modifier.size(18.dp)) })
                     DropdownMenuItem({ Text(if (NoteText.isChecklist(n.body)) "Plain text" else "Checkboxes") },
                         { menu = false; edit { it.copy(body = NoteText.toggleChecklist(it.body)) } }, leadingIcon = { Icon(Glyphs.Check, null, Modifier.size(18.dp)) })
-                    DropdownMenuItem({ Text("Labels") }, { menu = false; labelDialog = true }, leadingIcon = { Icon(Glyphs.Filter, null, Modifier.size(18.dp)) })
+                    DropdownMenuItem({ Text("Tags") }, { menu = false; labelDialog = true }, leadingIcon = { Icon(Glyphs.Tag, null, Modifier.size(18.dp)) })
                     DropdownMenuItem({ Text("Delete", color = Bad) }, { menu = false; confirmDelete = true }, leadingIcon = { Icon(Glyphs.Close, null, Modifier.size(18.dp), tint = Bad) })
                 }
             }
         }
-        Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(horizontal = 20.dp)) {
+        val bodyFocus = remember { FocusRequester() }
+        BoxWithConstraints(Modifier.weight(1f)) {
+        val pageH = maxHeight
+        Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 20.dp)) {
+            TagRow(n.labels, text, onEdit = { labelDialog = true })
             BasicTextField(n.title, { t -> edit { it.copy(title = t) } }, textStyle = MaterialTheme.typography.titleLarge.copy(color = text),
                 cursorBrush = SolidColor(Gold), modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
                 decorationBox = { inner -> if (n.title.isEmpty()) Text("Title", style = MaterialTheme.typography.titleLarge, color = text.copy(alpha = 0.45f)); inner() })
             if (NoteText.isChecklist(n.body)) ChecklistEditor(n, ::edit)
             else BasicTextField(n.body, { b -> edit { it.copy(body = b) } }, textStyle = MaterialTheme.typography.bodyLarge.copy(color = text),
-                cursorBrush = SolidColor(Gold), modifier = Modifier.fillMaxWidth().padding(bottom = 24.dp),
-                decorationBox = { inner -> if (n.body.isEmpty()) Text("Note", style = MaterialTheme.typography.bodyLarge, color = text.copy(alpha = 0.45f)); inner() })
-            if (n.labels.isNotEmpty()) Row(Modifier.padding(vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                n.labels.forEach { l -> Text("#$l", style = MaterialTheme.typography.labelMedium,
-                    modifier = Modifier.background(text.copy(alpha = 0.08f), RoundedCornerShape(8.dp)).clickable { labelDialog = true }.padding(horizontal = 8.dp, vertical = 4.dp)) }
-            }
+                cursorBrush = SolidColor(Gold),
+                // The whole empty page below the text is part of the field: a tap anywhere starts typing.
+                modifier = Modifier.fillMaxWidth().heightIn(min = (pageH - 120.dp).coerceAtLeast(160.dp)).padding(bottom = 24.dp).focusRequester(bodyFocus),
+                decorationBox = { inner -> Box(Modifier.fillMaxSize()) {
+                    if (n.body.isEmpty()) Text("Note", style = MaterialTheme.typography.bodyLarge, color = text.copy(alpha = 0.45f)); inner() } })
+        }
         }
         Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
             IconButton(onClick = { palette = !palette }) { Box(Modifier.size(20.dp).background(Gold, CircleShape)) }
@@ -271,6 +285,24 @@ private fun NoteEditor(n: Note, allLabels: List<String>, actions: NotesActions, 
         text = { Text("It is removed from the PC too.") },
         confirmButton = { TextButton(onClick = { confirmDelete = false; actions.delete(n.id); onClose() }) { Text("Delete", color = Bad) } },
         dismissButton = { TextButton(onClick = { confirmDelete = false }) { Text("Cancel") } })
+}
+
+/** The note's tags, always visible under the title, with a chip to add or change them. */
+@Composable
+private fun TagRow(tags: List<String>, text: Color, onEdit: () -> Unit) {
+    Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(bottom = 6.dp),
+        horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+        tags.forEach { l ->
+            Text("#$l", style = MaterialTheme.typography.labelMedium,
+                modifier = Modifier.background(text.copy(alpha = 0.10f), RoundedCornerShape(8.dp)).clickable(onClick = onEdit)
+                    .padding(horizontal = 8.dp, vertical = 4.dp))
+        }
+        Row(Modifier.border(1.dp, text.copy(alpha = 0.25f), RoundedCornerShape(8.dp)).clickable(onClick = onEdit)
+            .padding(horizontal = 8.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+            Icon(Glyphs.Tag, null, Modifier.size(14.dp), tint = text.copy(alpha = 0.7f)); Spacer(Modifier.width(4.dp))
+            Text(if (tags.isEmpty()) "Add tag" else "Edit", style = MaterialTheme.typography.labelMedium, color = text.copy(alpha = 0.7f))
+        }
+    }
 }
 
 /** Checklist editing: tick, edit, add, remove; done items sink to the bottom like Keep. */
@@ -302,9 +334,9 @@ private fun ChecklistEditor(n: Note, edit: ((Note) -> Note) -> Unit) {
 private fun LabelDialog(current: List<String>, all: List<String>, onDone: (List<String>) -> Unit, onDismiss: () -> Unit) {
     var picked by remember { mutableStateOf(current) }
     var new by remember { mutableStateOf("") }
-    AlertDialog(onDismissRequest = onDismiss, title = { Text("Labels") }, text = {
+    AlertDialog(onDismissRequest = onDismiss, title = { Text("Tags") }, text = {
         Column {
-            OutlinedTextField(new, { new = it.replace(" ", "-").take(40) }, singleLine = true, placeholder = { Text("New label") },
+            OutlinedTextField(new, { new = it.replace(" ", "-").take(40) }, singleLine = true, placeholder = { Text("New tag") },
                 trailingIcon = { if (new.isNotBlank()) TextButton(onClick = { picked = (picked + new).distinct(); new = "" }) { Text("Add") } })
             (all + picked).distinct().forEach { l ->
                 Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().clickable {
