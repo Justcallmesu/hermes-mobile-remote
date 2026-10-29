@@ -25,6 +25,8 @@ data class BridgeUpdateState(
     /** Outcome of the last update (\"Updated to v1.29.0\", or the failure). */
     val message: String? = null,
     val failed: Boolean = false,
+    /** The PC already has newer code on disk but the running bridge was never restarted onto it. */
+    val restartNeeded: Boolean = false,
 ) {
     companion object {
         fun parse(o: JSONObject): BridgeUpdateState {
@@ -37,7 +39,7 @@ data class BridgeUpdateState(
                     "failed" -> "Last update failed: ${st.str("error").orEmpty()}"
                     "running" -> "Updating (${st.str("step") ?: "starting"})…"
                     else -> null
-                }, failed = st?.str("state") == "failed")
+                }, failed = st?.str("state") == "failed", restartNeeded = o.optBoolean("restart_needed"))
         }
     }
 }

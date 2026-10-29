@@ -17,6 +17,15 @@ request number.
   subagents (#12), share to Hermes (#15), message search (#16), subagent output and steer (#17)
   and bridge metrics (#18).
 
+## v1.31.1
+
+- Fixed: the bridge said "up to date" while still running old code. It compared the files on disk
+  (already new after a `git pull`) instead of the code it had loaded, so features of the new version,
+  like Notes, stayed hidden until someone restarted it. It now reports the version it is actually
+  running, and when newer code is installed but not loaded, the drawer and Settings offer
+  *Restart PC bridge to load vX.Y.Z* (health-checked, with the same reconnect as an update). This
+  works even when the checkout has local changes. Needs this bridge version, restarted once.
+
 ## v1.31.0
 
 - Update the PC bridge from the drawer: when a newer bridge is out, the three-dot menu gets a dot and

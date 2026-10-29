@@ -50,6 +50,22 @@ def _remote_tags(remote: str) -> list[str]:
     return [line.split("refs/tags/", 1)[1] for line in r.stdout.splitlines() if "refs/tags/" in line]
 
 
+def _head() -> tuple[str | None, str | None]:
+    """(commit, release tag) the checkout is on now."""
+    if not (REPO / ".git").exists():
+        return None, None
+    try:
+        return (_git("rev-parse", "HEAD").stdout.strip() or None,
+                _git("describe", "--tags", "--abbrev=0", "--match", "v*.*.*").stdout.strip() or None)
+    except (OSError, subprocess.SubprocessError):
+        return None, None
+
+
+# What the running bridge loaded (this module is imported at startup). The checkout can move on
+# under it (git pull, an update whose restart failed): then the files are new but the code isn't.
+RUNNING_COMMIT, RUNNING_TAG = _head()
+
+
 def why_not(remote: str = "origin") -> str | None:
     """Why this install can't update itself, or None when it can."""
     if os.name == "nt":
@@ -71,12 +87,13 @@ def why_not(remote: str = "origin") -> str | None:
 def check(remote: str = "origin") -> dict:
     """Current and newest release, read-only. Network: one `git ls-remote`."""
     out: dict = {"current": None, "commit": None, "latest": None, "available": False, "can_update": False,
-                 "reason": None, "status": read_status()}
+                 "reason": None, "restart_needed": False, "status": read_status()}
     reason = why_not(remote)
-    if (REPO / ".git").exists():
-        cur = _git("describe", "--tags", "--abbrev=0", "--match", "v*.*.*")
-        out["current"] = cur.stdout.strip() or None
-        out["commit"] = _git("rev-parse", "--short", "HEAD").stdout.strip() or None
+    head_commit, head_tag = _head()
+    # Report what is RUNNING, not what is on disk: a checkout updated without a restart serves old code.
+    out["current"] = RUNNING_TAG or head_tag
+    out["commit"] = (RUNNING_COMMIT or head_commit or "")[:7] or None
+    out["restart_needed"] = bool(RUNNING_COMMIT and head_commit and RUNNING_COMMIT != head_commit)
     if reason and not (REPO / ".git").exists():
         out["reason"] = reason
         return out
@@ -87,9 +104,16 @@ def check(remote: str = "origin") -> dict:
         return out
     cur_key = version_key(out["current"] or "")
     new_key = version_key(out["latest"] or "")
-    out["available"] = bool(new_key and (cur_key is None or new_key > cur_key))
+    newer = bool(new_key and (cur_key is None or new_key > cur_key))
+    disk_key = version_key(head_tag or "")
+    # Nothing on the remote beyond what is already on disk: only a restart is needed.
+    beyond_disk = bool(new_key and (disk_key is None or new_key > disk_key))
+    if out["restart_needed"] and not beyond_disk:
+        out["latest"] = head_tag or out["latest"]
+    out["available"] = newer or out["restart_needed"]
     out["reason"] = reason
-    out["can_update"] = reason is None and out["available"]
+    # Loading code that is already on disk needs only a restart: local changes don't block that.
+    out["can_update"] = out["available"] and (reason is None or (out["restart_needed"] and not beyond_disk))
     return out
 
 
@@ -151,7 +175,7 @@ def launch_argv(python: str = sys.executable) -> list[str]:
 
 def launch() -> None:
     reason = why_not()
-    if reason:
+    if reason and not check().get("can_update"):
         raise RuntimeError(reason)
     st = read_status()
     if st and st.get("state") == "running" and time.time() - st.get("at", 0) < 600:
@@ -287,6 +311,26 @@ def _rollback(old: str, uv: str | None, log) -> None:
     _render_unit()
 
 
+def _restart_only(log, reason: str) -> str:
+    """The checkout can't be moved (local changes...), but what is on disk may still be newer than
+    what runs: restart to load it, health-checked like an update."""
+    head_tag = _head()[1] or "the installed version"
+    try:
+        log(f"Not fetching ({reason}); restarting to load {head_tag}…")
+        moved = keep_hermes_alive()
+        _write_status(state="running", step="restart", to=head_tag)
+        _systemctl("reset-failed", UNIT)
+        _systemctl("restart", UNIT)
+        _write_status(state="running", step="verify", to=head_tag)
+        if not bridge_healthy():
+            raise RuntimeError(f"{head_tag} did not start (check `journalctl --user -u hermes-remote-bridge`)")
+        _write_status(state="done", to=head_tag, moved=moved)
+        log(f"Restarted on {head_tag}.")
+        return head_tag
+    finally:
+        _ensure_running(log)
+
+
 def apply(remote: str = "origin", log=print) -> str:
     """Fetch, move to the newest release, sync the venv, restart the bridge and check it answers.
 
@@ -295,6 +339,9 @@ def apply(remote: str = "origin", log=print) -> str:
     """
     reason = why_not(remote)
     if reason:
+        info = check(remote)
+        if info["restart_needed"] and info["can_update"]:
+            return _restart_only(log, reason)
         raise RuntimeError(reason)
     old = _git("rev-parse", "HEAD").stdout.strip()
     old_tag = _git("describe", "--tags", "--abbrev=0", "--match", "v*.*.*").stdout.strip() or old[:7]

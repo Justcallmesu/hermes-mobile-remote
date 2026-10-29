@@ -143,7 +143,7 @@ private fun DrawerMoreMenu(actions: SessionActions) {
             @Composable fun item(label: String, icon: androidx.compose.ui.graphics.vector.ImageVector, onClick: () -> Unit) =
                 androidx.compose.material3.DropdownMenuItem(text = { Text(label) },
                     leadingIcon = { Icon(icon, null, Modifier.size(18.dp)) }, onClick = { open = false; onClick() })
-            if (offer) item("Update PC bridge to ${upd!!.state.latest}", Glyphs.Download) { confirm = true }
+            if (offer) item(if (upd!!.state.restartNeeded) "Restart PC bridge to load ${upd.state.latest}" else "Update PC bridge to ${upd.state.latest}", Glyphs.Download) { confirm = true }
             if (upd != null && upd.state.updating) item(upd.state.message ?: "Updating PC bridge…", Glyphs.Refresh) {}
             actions.openNotes?.let { item("Notes", Glyphs.Doc, it) }
             actions.openPc?.let { item("PC monitor", Glyphs.Chip, it) }
@@ -920,6 +920,7 @@ private fun BridgeUpdatePanel(a: BridgeUpdateActions) {
     Panel {
         val sub = when {
             s.updating -> s.message ?: "Updating…"
+            s.restartNeeded && s.canUpdate -> "${s.latest} is installed but not running yet: restart to load it"
             s.available && s.canUpdate -> "${s.latest} is available (you have ${s.current ?: "?"})"
             s.available -> "${s.latest} is available. ${s.reason.orEmpty()}"
             s.current != null -> "Up to date" + (s.message?.let { " · $it" } ?: "")
