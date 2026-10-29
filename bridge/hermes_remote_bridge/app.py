@@ -453,6 +453,7 @@ def create_app(cfg: Config, *, locator: BackendLocator | None = None, tailnet: T
                                               ("terminal", cfg.terminal),
                                               ("speedtest", monitor is not None),
                                               ("folders", True),
+                                              ("file_info", True),
                                               ("bridge_update", cfg.self_update),
                                               ("notes", cfg.notes),
                                               ("blueprints", cfg.blueprints),
@@ -1043,6 +1044,32 @@ def create_app(cfg: Config, *, locator: BackendLocator | None = None, tailnet: T
         mime = mimetypes.guess_type(target)[0] or "application/octet-stream"
         return FileResponse(target, media_type=mime, filename=os.path.basename(target),
                             headers={"Cache-Control": "private, no-cache"})
+
+    @app.get("/v1/sessions/{session_id}/file/info")
+    async def get_chat_file_info(session_id: str, path: str, profile: str | None = Depends(profile_param),
+                                 _: Device = Depends(device_auth)):
+        """Name, full path, size, type and modified time of a file or picture the chat shows,
+        without downloading it. Same rule as the download: the chat names it, or it is a picture
+        in one of Hermes' image folders."""
+        _check_id(session_id, "session id")
+        home = profile_home(cfg.hermes_home, profile)
+        target = await asyncio.to_thread(referenced_file, home, session_id, path)
+        if target is None:
+            try:
+                real = await asyncio.to_thread(lambda: os.path.realpath(os.path.expanduser(path)))
+            except (OSError, ValueError):
+                raise ApiError(400, "invalid_path", "Invalid path")
+            roots = media_roots(cfg.hermes_home, cfg.allowed_profiles)
+            if os.path.splitext(real)[1].lower() in MEDIA_TYPES and any(real.startswith(r + os.sep) for r in roots):
+                target = real
+        if target is None:
+            raise ApiError(403, "not_in_chat", "This chat doesn't name that file")
+        try:
+            st = await asyncio.to_thread(os.stat, target)
+        except OSError:
+            return {"path": target, "name": os.path.basename(target), "exists": False}
+        return {"path": target, "name": os.path.basename(target), "exists": True, "size": st.st_size,
+                "modified": int(st.st_mtime), "mime": mimetypes.guess_type(target)[0] or "application/octet-stream"}
 
     @app.get("/v1/projects/{project_id}/idea")
     async def get_project_idea(project_id: str, profile: str | None = Depends(profile_param),

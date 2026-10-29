@@ -104,7 +104,7 @@ def test_monitor_routes(mon_env):
         assert c.post(f"/v1/monitor/processes/{os.getpid()}/stop").json()["error"]["code"] == "forbidden_process"
         assert c.post("/v1/monitor/processes/999999999/stop").status_code in (403, 404)
         assert c.get("/v1/claude/usage?refresh=true").json()["ok"] is False
-        assert c.get("/v1/me").json()["features"] == ["monitor", "claude_usage", "terminal", "speedtest", "folders", "bridge_update", "notes", "blueprints", "admin"]
+        assert c.get("/v1/me").json()["features"] == ["monitor", "claude_usage", "terminal", "speedtest", "folders", "file_info", "bridge_update", "notes", "blueprints", "admin"]
 
 
 def test_monitor_requires_token(mon_env):
@@ -122,7 +122,7 @@ def test_monitor_off(tmp_path):
     c = TestClient(app, client=(PHONE, 5555))
     c.headers["Authorization"] = f"Bearer {token}"
     assert c.get("/v1/monitor/now").json()["error"]["code"] == "monitor_off"
-    assert c.get("/v1/me").json()["features"] == ["folders", "bridge_update", "notes", "blueprints", "admin"]
+    assert c.get("/v1/me").json()["features"] == ["folders", "file_info", "bridge_update", "notes", "blueprints", "admin"]
 
 
 @pytest.mark.skipif(os.name == "nt", reason="PTY shell is POSIX only")

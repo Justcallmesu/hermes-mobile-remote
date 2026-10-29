@@ -17,6 +17,13 @@ request number.
   subagents (#12), share to Hermes (#15), message search (#16), subagent output and steer (#17)
   and bridge metrics (#18).
 
+## v1.34.0
+
+- **File and picture info**: an *i* button on every file card and in the full-screen picture viewer
+  shows the name, the full path on the PC (tap to copy), the size, the type and when it was last
+  changed, without downloading it. Pictures still being sent show their size on the phone.
+  Needs the updated bridge for size, type and date; older bridges show the name and path.
+
 ## v1.33.0
 
 - **Blueprints**: a flow diagram and a task board for each project, on the PC, shared with Hermes.

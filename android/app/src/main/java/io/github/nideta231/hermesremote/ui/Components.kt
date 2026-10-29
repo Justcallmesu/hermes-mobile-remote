@@ -101,6 +101,7 @@ object Glyphs {
     val Image = line("M3 5h18v14H3z", "M8.5 10.5a1.5 1.5 0 1 0 0-.01", "M21 15l-5-5L5 19")
     val Plus = line("M12 5v14", "M5 12h14")
     val Paperclip = line("M21 11.5l-8.6 8.6a5.5 5.5 0 0 1-7.8-7.8l8.6-8.6a3.7 3.7 0 0 1 5.2 5.2l-8.6 8.6a1.8 1.8 0 0 1-2.6-2.6l7.9-7.9")
+    val Info = line("M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18z", "M12 11v5", "M12 8h.01")
     val Close = line("M6 6l12 12", "M18 6L6 18")
     val Back = line("M19 12H5", "M12 5l-7 7 7 7")
     val More = line("M12 6h.01", "M12 12h.01", "M12 18h.01")

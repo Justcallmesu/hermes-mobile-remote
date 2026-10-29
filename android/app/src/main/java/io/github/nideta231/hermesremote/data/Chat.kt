@@ -70,6 +70,29 @@ fun fileRefs(text: String): List<String> {
 }
 
 /** Last segment of a PC path (either slash). */
+/** What the Info sheet of a chat file or picture shows. [size]/[modified] are null when unknown. */
+data class FileInfo(val name: String, val path: String, val exists: Boolean = true, val size: Long? = null,
+                    val modified: Long? = null, val mime: String? = null, val note: String? = null)
+
+/** Parses the bridge's `/v1/sessions/{id}/file/info` answer. */
+fun parseFileInfo(o: org.json.JSONObject, asked: String): FileInfo = FileInfo(
+    name = o.optString("name").ifEmpty { fileName(asked) },
+    path = o.optString("path").ifEmpty { asked },
+    exists = o.optBoolean("exists", true),
+    size = if (o.has("size")) o.optLong("size") else null,
+    modified = if (o.has("modified")) o.optLong("modified") else null,
+    mime = o.optString("mime").ifEmpty { null })
+
+/** 1536 -> "1.5 KB", in powers of 1024, like file managers. */
+fun humanSize(bytes: Long): String {
+    if (bytes < 1024) return "$bytes B"
+    val units = listOf("KB", "MB", "GB", "TB")
+    var v = bytes / 1024.0
+    var i = 0
+    while (v >= 1024 && i < units.size - 1) { v /= 1024; i++ }
+    return (if (v >= 100) "%.0f %s" else "%.1f %s").format(java.util.Locale.US, v, units[i])
+}
+
 fun fileName(path: String): String = path.trimEnd('/', '\\').substringAfterLast('/').substringAfterLast('\\')
 
 /** Hermes appends a model-facing "--- Context Warnings ---" block to a message with files; not the user's words. */

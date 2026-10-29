@@ -149,6 +149,10 @@ class BridgeClient(
         }
     }
 
+    /** Name, full path, size, type and modified time of a file or picture the chat shows (no download). */
+    suspend fun chatFileInfo(sessionId: String, path: String, profile: String?) =
+        call("GET", "/v1/sessions/${enc(sessionId)}/file/info", mapOf("path" to path) + scoped(profile))
+
     /** Cheap reachability check with a short timeout: an absent LAN must not stall switching. */
     suspend fun reachable(): Boolean = probe() == Probe.OK
 

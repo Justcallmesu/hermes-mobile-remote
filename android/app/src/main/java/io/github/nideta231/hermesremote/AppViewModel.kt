@@ -9,6 +9,8 @@ import androidx.lifecycle.DefaultLifecycleObserver
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.ProcessLifecycleOwner
 import androidx.lifecycle.viewModelScope
+import io.github.nideta231.hermesremote.data.FileInfo
+import io.github.nideta231.hermesremote.data.parseFileInfo
 import io.github.nideta231.hermesremote.data.mergeSessionHead
 import io.github.nideta231.hermesremote.data.sessionParams
 import io.github.nideta231.hermesremote.data.BridgeClient
@@ -2092,6 +2094,33 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
         val f = java.io.File(app.cacheDir, "chat-files/${(sid + path).hashCode().toUInt()}/$name")
         if (!f.isFile) c.chatFile(sid, path, profileParam(profile), f)
         return f
+    }
+
+    /**
+     * Info for a chat file or picture: a phone pick still sending is read from the phone, a PC path
+     * is asked from the bridge. An older bridge (no `file_info`) still gets the name and path.
+     */
+    suspend fun chatFileInfo(ref: String): FileInfo {
+        if (ref.startsWith("content://") || ref.startsWith("file://")) return kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            val uri = android.net.Uri.parse(ref)
+            var name = fileName(ref); var size: Long? = null
+            runCatching {
+                app.contentResolver.query(uri, null, null, null, null)?.use { c ->
+                    if (c.moveToFirst()) {
+                        c.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME).takeIf { it >= 0 }?.let { c.getString(it) }?.let { name = it }
+                        c.getColumnIndex(android.provider.OpenableColumns.SIZE).takeIf { it >= 0 && !c.isNull(it) }?.let { size = c.getLong(it) }
+                    }
+                }
+            }
+            FileInfo(name, ref, size = size, mime = app.contentResolver.getType(uri), note = "On this phone, still being sent")
+        }
+        if (ref.startsWith("data:")) return FileInfo("Picture", "Inline picture (no file on the PC)",
+            size = (ref.substringAfter(',').length * 3L / 4), mime = ref.removePrefix("data:").substringBefore(';'))
+        val c = client
+        val sid = _chat.value.sessionId
+        if (c == null || sid == null || "file_info" !in _features.value)
+            return FileInfo(fileName(ref), ref, note = if (c != null && sid != null) "Update the PC bridge to see the size" else null)
+        return parseFileInfo(c.chatFileInfo(sid, ref, profileParam(profile)), ref)
     }
 
     // ------------------------------------------------------------ models + reasoning

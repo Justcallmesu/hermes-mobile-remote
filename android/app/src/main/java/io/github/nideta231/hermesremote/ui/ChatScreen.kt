@@ -187,6 +187,8 @@ class ChatActions(
     val loadImage: suspend (String) -> ByteArray? = { null },
     /** A file the chat names (PC path), downloaded into the app's cache. */
     val fetchFile: suspend (String) -> java.io.File = { throw java.io.IOException("Not available") },
+    /** Name, path, size and type of a chat file or picture, for its Info sheet. */
+    val fileInfo: suspend (String) -> io.github.nideta231.hermesremote.data.FileInfo = { io.github.nideta231.hermesremote.data.FileInfo(fileName(it), it) },
     /** Answer the open masked prompt: (identifier for a login, value); empty value = skip. */
     val answerSecret: (String, String) -> Unit = { _, _ -> },
     /** Edit a sent message: Hermes drops it and what followed, then answers the new text. */
@@ -211,6 +213,11 @@ private val LocalImageLoader = staticCompositionLocalOf<suspend (String) -> Byte
 
 /** Downloads a chat file from the PC; provided once by [ChatScreen] so every bubble can show file cards. */
 private val LocalFileFetcher = staticCompositionLocalOf<suspend (String) -> java.io.File> { { throw java.io.IOException("Not available") } }
+
+/** Looks up a chat file's info; provided once by [ChatScreen]. */
+private val LocalFileInfo = staticCompositionLocalOf<suspend (String) -> io.github.nideta231.hermesremote.data.FileInfo> {
+    { io.github.nideta231.hermesremote.data.FileInfo(fileName(it), it) }
+}
 
 /** How the phone reaches the PC right now, reduced to what the top bar shows. */
 enum class LinkHealth { LAN, TAILNET, SEARCHING, OFFLINE }
@@ -262,6 +269,7 @@ fun ChatScreen(
     val secret = LiveReducer.openSecret(state.items)
 
     CompositionLocalProvider(LocalImageLoader provides actions.loadImage, LocalFileFetcher provides actions.fetchFile,
+        LocalFileInfo provides actions.fileInfo,
         LocalEditMessage provides actions.edit) {
     Column(Modifier.fillMaxSize().imePadding()) {
         ChatTopBar(state, health, showMenuButton, actions, profile, claudeUsage) { usageSheet = true }
@@ -1451,7 +1459,10 @@ private fun ImageViewer(ref: String, onClose: () -> Unit) {
                     if (scale == 1f) { dx = 0f; dy = 0f } else { dx += pan.x; dy += pan.y }
                 }
             }.graphicsLayer { scaleX = scale; scaleY = scale; translationX = dx; translationY = dy })
+            var info by remember { mutableStateOf(false) }
+            if (info) FileInfoDialog(ref) { info = false }
             Row(Modifier.align(Alignment.TopEnd).statusBarsPadding().padding(8.dp)) {
+                IconButton(onClick = { info = true }) { Icon(Glyphs.Info, "Info", tint = Color.White) }
                 IconButton(onClick = { download() }) { Icon(Glyphs.Download, "Download", tint = Color.White) }
                 IconButton(onClick = onClose) { Icon(Glyphs.Close, "Close", tint = Color.White) }
             }
@@ -1513,6 +1524,8 @@ private fun FileCard(path: String) {
     var busy by remember(path) { mutableStateOf(false) }
     var pending by remember { mutableStateOf<java.io.File?>(null) }
     val name = remember(path) { fileName(path) }
+    var info by remember { mutableStateOf(false) }
+    if (info) FileInfoDialog(path) { info = false }
     fun toast(msg: String) = android.widget.Toast.makeText(context, msg, android.widget.Toast.LENGTH_SHORT).show()
     // Android 8/9: no MediaStore Downloads without a permission, so the user picks where it goes.
     val pick = androidx.activity.compose.rememberLauncherForActivityResult(
@@ -1561,10 +1574,61 @@ private fun FileCard(path: String) {
                     style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             Spacer(Modifier.width(4.dp))
+            IconButton(onClick = { info = true }) { Icon(Glyphs.Info, "Info about $name", modifier = Modifier.size(18.dp)) }
             if (busy) Box(Modifier.size(40.dp), contentAlignment = Alignment.Center) {
                 androidx.compose.material3.CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp, color = Gold)
             } else IconButton(onClick = { save() }) { Icon(Glyphs.Download, "Save $name", modifier = Modifier.size(18.dp)) }
         }
+    }
+}
+
+/** Info sheet of a chat file or picture: name, full path (tap to copy), size, type, modified. */
+@Composable
+private fun FileInfoDialog(ref: String, onClose: () -> Unit) {
+    val lookup = LocalFileInfo.current
+    val clipboard = LocalClipboardManager.current
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val state by produceState<Result<io.github.nideta231.hermesremote.data.FileInfo>?>(null, ref) {
+        value = runCatching { lookup(ref) }.onFailure { if (it is kotlinx.coroutines.CancellationException) throw it }
+    }
+    val info = state?.getOrNull()
+    AlertDialog(onDismissRequest = onClose,
+        title = { Text(info?.name ?: fileName(ref), maxLines = 2, overflow = TextOverflow.Ellipsis) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                when {
+                    state == null -> Row(verticalAlignment = Alignment.CenterVertically) {
+                        androidx.compose.material3.CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp, color = Gold)
+                        Spacer(Modifier.width(8.dp)); Text("Asking the PC…", style = MaterialTheme.typography.bodySmall)
+                    }
+                    info == null -> Text(fileError(fileName(ref), state!!.exceptionOrNull()!!), style = MaterialTheme.typography.bodySmall)
+                }
+                val path = info?.path ?: ref
+                InfoLine("Path", path) {
+                    clipboard.setText(androidx.compose.ui.text.AnnotatedString(path))
+                    android.widget.Toast.makeText(context, "Path copied", android.widget.Toast.LENGTH_SHORT).show()
+                }
+                if (info != null) {
+                    if (!info.exists) InfoLine("Size", "No longer on the PC")
+                    info.size?.let { InfoLine("Size", io.github.nideta231.hermesremote.data.humanSize(it) + if (it >= 1024) " (%,d bytes)".format(it) else "") }
+                    info.mime?.let { InfoLine("Type", it) }
+                    info.modified?.let {
+                        InfoLine("Modified", java.text.DateFormat.getDateTimeInstance(java.text.DateFormat.MEDIUM, java.text.DateFormat.SHORT)
+                            .format(java.util.Date(it * 1000)))
+                    }
+                    info.note?.let { Text(it, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                }
+            }
+        },
+        confirmButton = { androidx.compose.material3.TextButton(onClick = onClose) { Text("Close") } })
+}
+
+@Composable
+private fun InfoLine(label: String, value: String, onClick: (() -> Unit)? = null) {
+    Column(if (onClick != null) Modifier.fillMaxWidth().clickable(onClick = onClick) else Modifier.fillMaxWidth()) {
+        Text(label + if (onClick != null) " · tap to copy" else "", style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text(value, style = MaterialTheme.typography.bodyMedium)
     }
 }
 

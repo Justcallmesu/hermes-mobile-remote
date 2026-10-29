@@ -950,6 +950,35 @@ def test_chat_file_serves_only_files_the_chat_names(tmp_path):
     assert get("s2", work / "report.pdf", headers=auth(token)).status_code == 404
 
 
+
+def test_chat_file_info_names_size_and_path_without_downloading(tmp_path):
+    import sqlite3
+    home = tmp_path / "hermes"
+    work = tmp_path / "work"
+    (home / "images").mkdir(parents=True)
+    work.mkdir()
+    (work / "report.pdf").write_bytes(b"%PDF-1234")
+    (work / "secret.txt").write_text("not named")
+    (home / "images" / "shot.png").write_bytes(b"\x89PNG")
+    db = sqlite3.connect(home / "state.db")
+    db.execute("CREATE TABLE sessions (id TEXT, parent_session_id TEXT, cwd TEXT)")
+    db.execute("CREATE TABLE messages (session_id TEXT, content TEXT)")
+    db.execute("INSERT INTO sessions VALUES ('s1', NULL, ?)", (str(work),))
+    db.executemany("INSERT INTO messages VALUES (?,?)", [("s1", "MEDIA:report.pdf"), ("s1", "MEDIA:gone.zip")])
+    db.commit(); db.close()
+    c, token = _profile_app(tmp_path, [], hermes_home=home)
+
+    def info(path, **kw):
+        return c.get("/v1/sessions/s1/file/info", params={"path": str(path)}, **kw)
+
+    r = info("report.pdf", headers=auth(token)).json()
+    assert r["path"] == str(work / "report.pdf") and r["name"] == "report.pdf"
+    assert r["size"] == 9 and r["mime"] == "application/pdf" and r["exists"] is True and r["modified"] > 0
+    assert info(home / "images" / "shot.png", headers=auth(token)).json()["size"] == 4  # Hermes' image folder
+    assert info("gone.zip", headers=auth(token)).json() == {"path": str(work / "gone.zip"), "name": "gone.zip", "exists": False}
+    assert info(work / "secret.txt", headers=auth(token)).status_code == 403
+    assert info("report.pdf").status_code == 401
+
 def test_project_idea_reads_and_writes_only_the_projects_own_idea_md(tmp_path):
     import sqlite3
     home = tmp_path / "hermes"
