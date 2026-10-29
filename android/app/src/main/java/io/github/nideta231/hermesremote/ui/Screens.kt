@@ -143,6 +143,8 @@ class SessionActions(
     val switchProfile: (String) -> Unit = {},
     val openScheduled: () -> Unit = {},
     val openVault: () -> Unit = {},
+    /** The Obsidian-style map of chats, projects and topics. */
+    val openGraph: () -> Unit = {},
     /** The PC page (stats, processes, Claude usage) and the terminal; null hides the button
      *  (the bridge doesn't serve it). */
     val openPc: (() -> Unit)? = null,
@@ -245,6 +247,7 @@ fun SessionsPane(
             }
             actions.openPc?.let { IconButton(modifier = Modifier.size(40.dp), onClick = it) { Icon(Glyphs.Chip, "PC", modifier = Modifier.size(20.dp)) } }
             actions.openTerminal?.let { IconButton(modifier = Modifier.size(40.dp), onClick = it) { Icon(Glyphs.Terminal, "Terminal", modifier = Modifier.size(20.dp)) } }
+            IconButton(modifier = Modifier.size(40.dp), onClick = actions.openGraph) { Icon(Glyphs.Graph, "Graph", modifier = Modifier.size(20.dp)) }
             IconButton(modifier = Modifier.size(40.dp), onClick = actions.openScheduled) {
                 Box {
                     Icon(Glyphs.Clock, "Scheduled", modifier = Modifier.size(20.dp))

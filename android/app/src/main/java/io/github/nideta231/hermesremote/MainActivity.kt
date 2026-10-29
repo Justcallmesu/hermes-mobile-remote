@@ -70,6 +70,7 @@ import io.github.nideta231.hermesremote.ui.CronScreen
 import io.github.nideta231.hermesremote.ui.PcActions
 import io.github.nideta231.hermesremote.ui.PcScreen
 import io.github.nideta231.hermesremote.ui.TerminalScreen
+import io.github.nideta231.hermesremote.ui.GraphScreen
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.TextButton
 import io.github.nideta231.hermesremote.ui.VaultActions
@@ -102,7 +103,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 /** Chat is home; the others are pages pushed on top of it. */
-enum class Page { CHAT, SCHEDULED, PC, TERMINAL, VAULT, SETTINGS }
+enum class Page { CHAT, SCHEDULED, PC, TERMINAL, VAULT, GRAPH, SETTINGS }
 
 class MainActivity : ComponentActivity() {
     private val vm: AppViewModel by viewModels()
@@ -367,6 +368,7 @@ class MainActivity : ComponentActivity() {
             switchProfile = { vm.switchProfile(it); go(Page.CHAT) },
             openScheduled = { go(Page.SCHEDULED) },
             openVault = { go(Page.VAULT) },
+            openGraph = { go(Page.GRAPH) },
             openPc = if (hasMonitor) ({ go(Page.PC) }) else null,
             openTerminal = if (hasTerminal) ({ go(Page.TERMINAL) }) else null,
             repairPc = vm::startRepair,
@@ -428,6 +430,8 @@ class MainActivity : ComponentActivity() {
                         Page.SCHEDULED -> CronScreen(cron, hermesProfiles.active.takeIf { hermesProfiles.items.size > 1 }, cronActions, onBack = { page = Page.CHAT })
                         Page.PC -> PcScreen(pcState, pcActions, onBack = { page = Page.CHAT })
                         Page.TERMINAL -> TerminalScreen(open = vm::openTerminal, onBack = { page = Page.CHAT })
+                        Page.GRAPH -> GraphScreen(sessions.items, sessions.projects, onOpenChat = { vm.openSession(it); page = Page.CHAT },
+                            onBack = { page = Page.CHAT })
                         Page.VAULT -> VaultScreen(vaultState, VaultActions(refresh = vm.vault::refresh, save = vm.vault::save,
                             remove = vm.vault::remove), onBack = { page = Page.SETTINGS })
                         Page.SETTINGS -> SettingsScreen(system, pairing, conn, update, settingsActions, onBack = { page = Page.CHAT }, models = models)
