@@ -17,6 +17,19 @@ request number.
   subagents (#12), share to Hermes (#15), message search (#16), subagent output and steer (#17)
   and bridge metrics (#18).
 
+## v1.29.0
+
+- Bridge updates from the phone: Settings > Hermes on your PC shows the bridge's version, and when a
+  newer one is out, *Update* installs it on the PC and restarts the bridge (about a minute). Paired
+  phones keep their pairing and reconnect on their own; Hermes and running chats keep going. On the PC
+  the same is `hermes-remote-bridge update` (`--check` only looks). It works for bridges installed from
+  the git checkout with `install.sh`; desktop-app installs update with the app. Needs this bridge
+  version once (update it with `git pull && ./install.sh` the first time); after that it updates itself.
+  Turn it off with `self_update = false` in config.toml.
+- Forgetting the PC in use no longer leaves the app on the pairing screen when other PCs are saved:
+  it moves to the next one. If the app does end up on the pairing screen, it lists your saved PCs so
+  you can switch back without pairing.
+
 ## v1.28.1
 
 - Drawer top bar is tidier: only Scheduled and Settings stay as buttons. PC monitor, Terminal and

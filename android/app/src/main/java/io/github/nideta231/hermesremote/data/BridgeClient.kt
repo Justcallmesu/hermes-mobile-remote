@@ -94,6 +94,12 @@ class BridgeClient(
 
     suspend fun me() = call("GET", "/v1/me")
 
+    /** The bridge's release and the newest one (`/v1/bridge/update`). */
+    suspend fun bridgeUpdateCheck(refresh: Boolean = false) = call("GET", "/v1/bridge/update", mapOf("refresh" to refresh), readTimeoutS = 40)
+
+    /** Starts the bridge's self-update; it restarts at the end with every pairing kept. */
+    suspend fun startBridgeUpdate() = call("POST", "/v1/bridge/update", readTimeoutS = 40)
+
     /** An image a chat shows, by the PC path Hermes stored for it (`/v1/media`; bridges before 1.11 answer 404). */
     override suspend fun media(path: String): ByteArray = runInterruptible(Dispatchers.IO) {
         http.newCall(Request.Builder().url(url("/v1/media", mapOf("path" to path))).build()).execute().use { resp ->

@@ -411,6 +411,8 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
         call = { method, params -> (gateway ?: throw IOException("Not connected to your PC")).call(method, scoped(params), 30_000) },
         target = ::target, describe = ::describe, say = { _toast.value = it })
     /** Settings > PC: the bridge's health, and the profile's approval mode and default model. */
+    val bridgeUpdate = io.github.nideta231.hermesremote.data.BridgeUpdater(viewModelScope, client = { client },
+        describe = ::describe, say = { _toast.value = it })
     val settings = SystemSettings(viewModelScope, client = { client }, source = { source }, target = ::target,
         describe = ::describe, say = { _toast.value = it },
         onDefaultModel = { option -> _models.update { cat -> cat?.copy(options = cat.options.map { o ->
@@ -1030,6 +1032,7 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
         search.clear()
         vault.clear()
         monitor.clear()
+        bridgeUpdate.clear()
         _features.value = emptySet()
         _claudeUsage.value = null
         _unauthorized.value = false

@@ -888,6 +888,45 @@ fun PageScaffold(title: String, onBack: (() -> Unit)?, content: @Composable () -
 
 // ================================================================ Settings
 
+class BridgeUpdateActions(
+    val state: io.github.nideta231.hermesremote.data.BridgeUpdateState,
+    val check: (Boolean) -> Unit,
+    val start: () -> Unit,
+)
+
+/** Settings > Bridge: its release, and Update when a newer one is out. Pairings stay through the restart. */
+@Composable
+private fun BridgeUpdatePanel(a: BridgeUpdateActions) {
+    LaunchedEffect(Unit) { a.check(false) }
+    var confirm by remember { mutableStateOf(false) }
+    val s = a.state
+    Spacer(Modifier.size(10.dp))
+    Panel {
+        val sub = when {
+            s.updating -> s.message ?: "Updating…"
+            s.available && s.canUpdate -> "${s.latest} is available (you have ${s.current ?: "?"})"
+            s.available -> "${s.latest} is available. ${s.reason.orEmpty()}"
+            s.current != null -> "Up to date" + (s.message?.let { " · $it" } ?: "")
+            s.reason != null -> s.reason
+            else -> "Checking…"
+        }
+        PanelRow("Bridge ${s.current ?: ""}".trim(), sub, Glyphs.Download,
+            iconTint = if (s.failed) Bad else if (s.available) Gold else MaterialTheme.colorScheme.onSurfaceVariant,
+            onClick = { if (s.available && s.canUpdate && !s.updating) confirm = true else a.check(true) }) {
+            when {
+                s.updating || s.checking && s.current == null -> TypingDots()
+                s.available && s.canUpdate -> TextButton(onClick = { confirm = true }) { Text("Update") }
+            }
+        }
+    }
+    if (confirm) androidx.compose.material3.AlertDialog(onDismissRequest = { confirm = false },
+        title = { Text("Update the bridge to ${s.latest}?") },
+        text = { Text("The PC downloads it and restarts the bridge, which takes about a minute. Paired phones keep " +
+            "their pairing and reconnect on their own; Hermes and running chats keep going.") },
+        confirmButton = { TextButton(onClick = { confirm = false; a.start() }) { Text("Update") } },
+        dismissButton = { TextButton(onClick = { confirm = false }) { Text("Cancel") } })
+}
+
 class SettingsActions(
     val refresh: () -> Unit,
     val unpair: () -> Unit,
@@ -903,6 +942,8 @@ class SettingsActions(
     val dismissDefaultConfirm: () -> Unit = {},
     val openVault: () -> Unit = {},
     val repair: () -> Unit = {},
+    /** The PC bridge's self-update; null when the bridge can't do it (old, or turned off). */
+    val bridgeUpdate: BridgeUpdateActions? = null,
 )
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -932,6 +973,7 @@ fun SettingsScreen(
                 }
                 SettingsSection("Hermes on your PC", "Shared with the desktop app and messaging.") {
                     StatusPanel(state)
+                    if (bridgeCard) actions.bridgeUpdate?.let { BridgeUpdatePanel(it) }
                     if (bridgeCard) {
                         Spacer(Modifier.size(10.dp))
                         DefaultModelPanel(state, models) { actions.loadModels(); modelSheet = true }

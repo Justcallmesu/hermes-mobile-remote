@@ -71,6 +71,7 @@ import io.github.nideta231.hermesremote.ui.PcActions
 import io.github.nideta231.hermesremote.ui.PcScreen
 import io.github.nideta231.hermesremote.ui.TerminalScreen
 import io.github.nideta231.hermesremote.ui.GraphScreen
+import io.github.nideta231.hermesremote.ui.BridgeUpdateActions
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.TextButton
 import io.github.nideta231.hermesremote.ui.VaultActions
@@ -309,6 +310,7 @@ class MainActivity : ComponentActivity() {
         val vaultState by vm.vault.state.collectAsState()
         val claudeUsage by vm.claudeUsage.collectAsState()
         val pcState by vm.monitor.state.collectAsState()
+        val bridgeUpdateState by vm.bridgeUpdate.state.collectAsState()
         val features by vm.features.collectAsState()
         val unauthorized by vm.unauthorized.collectAsState()
         val pendingShare by vm.pendingShare.collectAsState()
@@ -401,6 +403,7 @@ class MainActivity : ComponentActivity() {
             loadModels = vm::loadModels, setDefaultModel = vm.settings::setDefaultModel, dismissDefaultConfirm = vm.settings::dismissDefaultConfirm,
             openVault = { page = Page.VAULT },
             repair = vm::startRepair,
+            bridgeUpdate = if ("bridge_update" in features) BridgeUpdateActions(bridgeUpdateState, vm.bridgeUpdate::check, vm.bridgeUpdate::start) else null,
         )
         val pcActions = PcActions(watch = { vm.monitor.watch() }, unwatch = vm.monitor::stop, refresh = vm.monitor::refresh,
             setRange = vm.monitor::setRange, setSort = vm.monitor::setSort, setQuery = vm.monitor::setQuery,

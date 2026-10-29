@@ -287,6 +287,21 @@ same one the desktop app uses. The bridge adds only:
 - Models: `model.options`. Switch the chat's model with `config.set {session_id, key: "model",
   value: "<model> --provider <slug> --session"}`, and its reasoning effort with `key: "reasoning"`.
 
+## Bridge update
+
+`GET /v1/bridge/update[?refresh=true]` (device token): `{current, commit, latest, available, can_update,
+reason, status}`. `current` is the release tag of the checkout, `latest` the newest `vX.Y.Z` tag on the
+`origin` remote (one `git ls-remote`, cached 10 minutes), `reason` why it can't update itself (installed by
+the desktop app, local changes, no git/systemd, offline). `status` is the last update:
+`{state: running|done|failed, step, to, error}`.
+
+`POST /v1/bridge/update` starts it and returns `{started, to}` (409 when up to date, already running or
+refused). It runs as a transient systemd unit outside the bridge's cgroup: `git fetch`, fast-forward to the
+tag, `uv sync` (rolled back on failure), refresh the installed unit, move any Hermes still in the bridge's
+cgroup into a scope of its own, restart the bridge. Pairings, TLS keys and networks are in the config
+directory and are not touched, so phones reconnect with the same pairing. The feature is listed as
+`bridge_update` in `/v1/me`; `self_update = false` turns it off. CLI: `hermes-remote-bridge update`.
+
 ## Local control API (desktop app)
 
 The desktop app manages the bridge through these routes. They are not for the phone and are never in the relay's allowlist.

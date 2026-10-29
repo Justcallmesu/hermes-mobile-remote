@@ -210,6 +210,8 @@ $B trust --list            # ...which networks are trusted
 $B trust --remove ID       # ...stop trusting one
 $B firewall                # allow the port from private networks (asks first)
 $B metrics                 # requests, live sockets, Hermes latency, approval wait since start
+$B update                  # update to the newest release; pairings and settings stay
+$B update --check          # only say whether a newer release is out
 
 journalctl --user -u hermes-remote-bridge -f    # live log
 ```
@@ -273,6 +275,7 @@ max_body_bytes = 1_000_000
 requests_per_minute = 240
 frames_per_minute = 600         # per live connection
 park_seconds = 300              # keep Hermes' socket open this long after the phone drops; 0 = off
+self_update = true              # let a paired phone update this bridge (git checkout installs only)
 terminal_shell = ""             # the shell the phone's Terminal opens; empty means the platform
                                 #   default (Windows: pwsh, then powershell, then cmd)
 metrics = true                  # GET /metrics (Prometheus); token in ~/.config/hermes-remote/metrics.token
