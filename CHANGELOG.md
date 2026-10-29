@@ -44,6 +44,11 @@ request number.
   disk, network, top processes and Claude usage on or off. Off means the PC stops reading it (less CPU
   and fewer disk writes); its gauge, row or chart disappears and its history has a gap. Needs the
   updated bridge.
+- **Resizable chat list on wide screens**: drag the edge between the chat list and the chat to make the
+  list 240 to 480 dp wide (double-tap the edge to reset).
+- **Hide the chat list on wide screens**: the menu button at the top left of the chat hides it so the chat
+  takes the full width, and brings it back. Also in Settings > Appearance.
+- **Compact layout** (Settings > Appearance): everything about 12% smaller, so more fits on screen.
 
 ## v1.35.0
 

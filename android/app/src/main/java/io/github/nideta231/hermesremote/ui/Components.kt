@@ -1,5 +1,10 @@
 package io.github.nideta231.hermesremote.ui
 
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.ui.input.pointer.pointerInput
+import kotlin.math.roundToInt
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
@@ -282,5 +287,38 @@ fun CopyButton(text: String, modifier: Modifier = Modifier, label: String? = "Co
             Spacer(Modifier.width(5.dp))
             Text(if (done) "Copied" else label, style = MaterialTheme.typography.labelMedium, color = tint)
         }
+    }
+}
+
+/**
+ * The edge between the chat list and the chat on wide screens: drag it to resize the list
+ * (saved on release), double-tap to reset it to the default width.
+ */
+@Composable
+fun SidebarHandle() {
+    val density = androidx.compose.ui.platform.LocalDensity.current
+    var dragging by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(false) }
+    var width by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf<Float?>(null) }
+    androidx.compose.foundation.layout.Box(
+        androidx.compose.ui.Modifier.width(10.dp).fillMaxHeight()
+            .pointerInput(Unit) {
+                detectHorizontalDragGestures(
+                    onDragStart = { dragging = true; width = null },
+                    onDragEnd = { dragging = false; ThemePrefs.pickSidebarWidth(ThemePrefs.sidebarWidth) },
+                    onDragCancel = { dragging = false; ThemePrefs.pickSidebarWidth(ThemePrefs.sidebarWidth) },
+                ) { ch, dx ->
+                    ch.consume()
+                    // Accumulate in floats: a slow drag moves less than 1 dp per event.
+                    width = (width ?: ThemePrefs.sidebarWidth.toFloat()) + with(density) { dx.toDp().value }
+                    ThemePrefs.pickSidebarWidth(width!!.roundToInt(), save = false)
+                }
+            }
+            .pointerInput(Unit) {
+                detectTapGestures(onDoubleTap = { ThemePrefs.pickSidebarWidth(SIDEBAR_DEFAULT) })
+            },
+        contentAlignment = androidx.compose.ui.Alignment.Center,
+    ) {
+        androidx.compose.foundation.layout.Box(androidx.compose.ui.Modifier.width(if (dragging) 3.dp else 1.dp).fillMaxHeight()
+            .background(if (dragging) Gold else MaterialTheme.colorScheme.outline.copy(alpha = 0.3f)))
     }
 }

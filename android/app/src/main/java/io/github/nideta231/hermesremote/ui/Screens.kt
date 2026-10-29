@@ -1108,6 +1108,8 @@ fun SettingsScreen(
                 }
                 SettingsSection("Appearance", "Only changes this phone.") {
                     ThemePanel()
+                    Spacer(Modifier.size(10.dp))
+                    LayoutPanel()
                 }
                 SettingsSection("Background", "What happens when you close or swipe away the app.") {
                     KeepAlivePanel()
@@ -1404,6 +1406,31 @@ private fun DrawerPanel() {
             else "Each date or project shows $current chats; \"Show more\" adds $current at a time. The open chat always shows.",
             style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.padding(start = 16.dp, end = 16.dp, bottom = 14.dp))
+    }
+}
+
+/** Compact layout, and the chat list beside the chat on wide screens (tablets, unfolded phones). */
+@Composable
+private fun LayoutPanel() {
+    Panel {
+        Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text("Compact layout", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+                Text("Everything a bit smaller, so more fits on screen.", style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            androidx.compose.material3.Switch(ThemePrefs.compact, { ThemePrefs.pickCompact(it) })
+        }
+        PanelDivider()
+        Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text("Chat list beside the chat", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+                Text("Wide screens. Off gives the chat the full width; the menu button in the chat brings the list back. " +
+                    "Drag the list's edge to resize it (now ${ThemePrefs.sidebarWidth} dp; double-tap the edge to reset).",
+                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            androidx.compose.material3.Switch(!ThemePrefs.sidebarHidden, { ThemePrefs.pickSidebarHidden(!it) })
+        }
     }
 }
 

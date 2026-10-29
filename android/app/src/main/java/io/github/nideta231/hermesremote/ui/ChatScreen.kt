@@ -205,6 +205,8 @@ class ChatActions(
     val openSubagentSession: (String) -> Unit = {},
     /** Kill one background process of the open chat. */
     val stopProcess: (String) -> Unit = {},
+    /** Wide screens: hide the chat list beside the chat (null when it is hidden or there is none). */
+    val hideSidebar: (() -> Unit)? = null,
 )
 
 /** The long-press menu of a sent message; provided by [ChatScreen]. */
@@ -356,7 +358,8 @@ private fun ChatTopBar(state: ChatState, health: LinkHealth, showMenu: Boolean, 
         Row(Modifier.fillMaxWidth().statusBarsPadding().padding(horizontal = 4.dp, vertical = 4.dp),
             verticalAlignment = Alignment.CenterVertically) {
             if (showMenu) IconButton(onClick = actions.openDrawer) { Icon(Glyphs.Menu, "Sessions") }
-            else Spacer(Modifier.width(12.dp))
+            else actions.hideSidebar?.let { hide -> IconButton(onClick = hide) { Icon(Glyphs.Menu, "Hide the chat list") } }
+                ?: Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f).padding(horizontal = 4.dp)) {
                 AnimatedContent(state.title, transitionSpec = {
                     (slideInVertically { it / 2 } + fadeIn()) togetherWith (slideOutVertically { -it / 2 } + fadeOut())

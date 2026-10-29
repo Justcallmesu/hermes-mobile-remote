@@ -419,7 +419,8 @@ class MainActivity : ComponentActivity() {
             openSubagentSession = { vm.openSession(it) },
             answerClarify = vm::answerClarify, draft = vm::setDraft,
             togglePin = vm::togglePin, newChat = { vm.newChat() },
-            openDrawer = { vm.refreshSessions(); scope.launch { drawer.open() } },
+            openDrawer = { vm.refreshSessions(); if (wide) ThemePrefs.pickSidebarHidden(false) else scope.launch { drawer.open() } },
+            hideSidebar = if (wide && !ThemePrefs.sidebarHidden) ({ ThemePrefs.pickSidebarHidden(true) }) else null,
             openSettings = { go(Page.SETTINGS) },
             loadModels = vm::loadModels, chooseModel = vm::chooseModel, dismissConfirm = vm::dismissConfirm,
             setReasoning = vm::setReasoning, modelPickerOpened = vm::modelPickerOpened,
@@ -461,7 +462,7 @@ class MainActivity : ComponentActivity() {
                 }, label = "page") { p ->
                     when (p) {
                         Page.CHAT -> ChatScreen(chat, health, models, vm.shownModel(models, chat), reasoning, suggestions,
-                            openModelPicker, confirm, showMenuButton = !wide, actions = chatActions,
+                            openModelPicker, confirm, showMenuButton = !wide || ThemePrefs.sidebarHidden, actions = chatActions,
                             update = update, onOpenUpdate = openUpdate, onDismissUpdate = vm.updates::dismissUpdateBanner,
                             projects = sessions.projects.filter { it.path != null || (!it.auto && it.id != io.github.nideta231.hermesremote.data.SessionView.NO_PROJECT) },
                             profile = hermesProfiles.headerLabel,
@@ -524,10 +525,15 @@ class MainActivity : ComponentActivity() {
 
         if (wide) {
             Row(Modifier.fillMaxSize()) {
-                Surface(color = MaterialTheme.colorScheme.surfaceContainerLow, modifier = Modifier.width(320.dp).fillMaxHeight()) {
-                    SessionsPane(sessions, chat.sessionId, sessionActions, pcs = pcs, profiles = hermesProfiles, view = sessionView, update = update, onOpenUpdate = openUpdate, groupOrder = groupOrder, scheduledCount = cron.jobs.count { it.state == "scheduled" }, search = sessionSearch)
+                androidx.compose.animation.AnimatedVisibility(!ThemePrefs.sidebarHidden,
+                    enter = androidx.compose.animation.expandHorizontally(), exit = androidx.compose.animation.shrinkHorizontally()) {
+                    Row {
+                        Surface(color = MaterialTheme.colorScheme.surfaceContainerLow, modifier = Modifier.width(ThemePrefs.sidebarWidth.dp).fillMaxHeight()) {
+                            SessionsPane(sessions, chat.sessionId, sessionActions, pcs = pcs, profiles = hermesProfiles, view = sessionView, update = update, onOpenUpdate = openUpdate, groupOrder = groupOrder, scheduledCount = cron.jobs.count { it.state == "scheduled" }, search = sessionSearch)
+                        }
+                        io.github.nideta231.hermesremote.ui.SidebarHandle()
+                    }
                 }
-                VerticalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f))
                 Box(Modifier.weight(1f)) { content() }
             }
         } else {

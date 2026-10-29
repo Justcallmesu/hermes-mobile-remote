@@ -159,6 +159,35 @@ object ThemePrefs {
         collapsedGroups = p.getStringSet("collapsed_groups", null)?.toSet() ?: emptySet()
         sessionsPerGroup = p.getInt("sessions_per_group", SESSION_FIRST_PAGE)
         queueWhileBusy = p.getBoolean("queue_while_busy", false)
+        sidebarWidth = clampSidebar(p.getInt("sidebar_width", SIDEBAR_DEFAULT))
+        sidebarHidden = p.getBoolean("sidebar_hidden", false)
+        compact = p.getBoolean("compact", false)
+    }
+
+    /** Width of the chat list beside the chat on wide screens (dp); drag its edge to change it. */
+    var sidebarWidth by mutableStateOf(SIDEBAR_DEFAULT)
+        private set
+    /** Wide screens: chat list hidden, the chat takes the full width (menu button brings it back). */
+    var sidebarHidden by mutableStateOf(false)
+        private set
+    /** Compact layout: everything about 12% smaller, so more fits on screen. */
+    var compact by mutableStateOf(false)
+        private set
+
+    /** While dragging: [save] false only updates the screen; the release saves. */
+    fun pickSidebarWidth(dp: Int, save: Boolean = true) {
+        sidebarWidth = clampSidebar(dp)
+        if (save) ctx?.let { prefs(it).edit().putInt("sidebar_width", sidebarWidth).apply() }
+    }
+
+    fun pickSidebarHidden(value: Boolean) {
+        sidebarHidden = value
+        ctx?.let { prefs(it).edit().putBoolean("sidebar_hidden", value).apply() }
+    }
+
+    fun pickCompact(value: Boolean) {
+        compact = value
+        ctx?.let { prefs(it).edit().putBoolean("compact", value).apply() }
     }
 
     /** A message typed while the agent works: false steers the running turn, true queues it as the next turn. */
@@ -202,5 +231,17 @@ object ThemePrefs {
 }
 
 @Composable
-fun HermesTheme(content: @Composable () -> Unit) =
-    MaterialTheme(colorScheme = colorScheme(ThemePrefs.mode, ThemePrefs.accent, isSystemInDarkTheme()), content = content)
+fun HermesTheme(content: @Composable () -> Unit) {
+    val base = androidx.compose.ui.platform.LocalDensity.current
+    // Compact: a smaller density shrinks every dp and sp alike, so the whole UI fits more.
+    val density = if (ThemePrefs.compact) androidx.compose.ui.unit.Density(base.density * COMPACT_SCALE, base.fontScale) else base
+    androidx.compose.runtime.CompositionLocalProvider(androidx.compose.ui.platform.LocalDensity provides density) {
+        MaterialTheme(colorScheme = colorScheme(ThemePrefs.mode, ThemePrefs.accent, isSystemInDarkTheme()), content = content)
+    }
+}
+
+const val SIDEBAR_DEFAULT = 320
+const val SIDEBAR_MIN = 240
+const val SIDEBAR_MAX = 480
+const val COMPACT_SCALE = 0.88f
+fun clampSidebar(dp: Int) = dp.coerceIn(SIDEBAR_MIN, SIDEBAR_MAX)
