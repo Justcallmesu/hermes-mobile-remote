@@ -172,3 +172,15 @@ def test_install_skills_copies_missing_only(tmp_path, monkeypatch):
     assert mine.read_text() == "my edits"
     assert (tmp_path / "skills" / "software-development" / "project-blueprint" / "SKILL.md").exists()
     assert selfupdate.install_skills(log=lambda m: None) == []
+
+
+def test_app_install_leaves_the_desktop_apps_unit_alone(app_install, tmp_path, monkeypatch):
+    unit_dir = tmp_path / "xdg" / "systemd" / "user"
+    unit_dir.mkdir(parents=True)
+    unit = unit_dir / selfupdate.UNIT
+    unit.write_text("[Service]\nEnvironment=HERMES_REMOTE_NO_TRUST_PROMPT=1\n")
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
+    calls = []
+    monkeypatch.setattr(selfupdate, "_systemctl", lambda *a: calls.append(a))
+    selfupdate._render_unit()
+    assert unit.read_text() == "[Service]\nEnvironment=HERMES_REMOTE_NO_TRUST_PROMPT=1\n" and calls == []

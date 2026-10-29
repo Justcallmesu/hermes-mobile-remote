@@ -309,12 +309,17 @@ def keep_hermes_alive() -> int:
 
 
 def _render_unit() -> None:
-    """Refresh the installed unit from the checkout's template (as install.sh does), when it changed."""
+    """Refresh the installed unit from the checkout's template (as install.sh does), when it changed.
+
+    Only for git installs: the desktop app writes its own unit (with its own environment), so an app
+    install's unit is left as the app wrote it."""
+    if not _is_git():
+        return
     unit = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "systemd/user" / UNIT
     template = BRIDGE_DIR / "systemd" / UNIT
     if not unit.exists() or unit.is_symlink() or not template.exists():
         return
-    venv = BRIDGE_DIR / ".venv" if _is_git() else REPO / "venv"
+    venv = BRIDGE_DIR / ".venv"
     text = template.read_text().replace("@BIN@", str(venv / "bin/hermes-remote-bridge")).replace("@REPO@", str(REPO))
     if unit.read_text() != text:
         unit.write_text(text)
