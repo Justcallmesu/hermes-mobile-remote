@@ -13,6 +13,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.toArgb
 
 /** The accent of the chosen theme. Kept under its old name so every call site follows the picker. */
 val Gold: Color
@@ -81,9 +82,67 @@ fun ThemeMode.isDark(systemDark: Boolean) = when (this) {
     ThemeMode.DARK, ThemeMode.MIDNIGHT -> true
 }
 
-fun colorScheme(mode: ThemeMode, accent: Accent, systemDark: Boolean): ColorScheme {
+fun colorScheme(mode: ThemeMode, accent: Accent, systemDark: Boolean, customPrimary: Color? = null, customBackground: Color? = null): ColorScheme {
     val dark = mode.isDark(systemDark)
-    val primary = accent.color(mode, systemDark)
+    val primary = customPrimary ?: accent.color(mode, systemDark)
+    val base = baseScheme(mode, dark, primary)
+    val withPrimary = if (customPrimary == null) base else base.copy(onPrimary = readableOn(customPrimary))
+    return customBackground?.let { schemeOnBackground(withPrimary, it) } ?: withPrimary
+}
+
+/** A colour scheme rebuilt around a chosen background: surfaces step away from it, text flips to stay readable. */
+fun schemeOnBackground(s: ColorScheme, bg: Color): ColorScheme {
+    val lightBg = luminance(bg) > 0.4f
+    val ink = if (lightBg) Color(0xFF1C1B19) else Color(0xFFE6E6E9)
+    return s.copy(
+        background = bg, surface = bg,
+        surfaceContainerLow = mix(bg, ink, 0.03f), surfaceContainer = mix(bg, ink, 0.06f),
+        surfaceContainerHigh = mix(bg, ink, 0.10f), surfaceContainerHighest = mix(bg, ink, 0.14f),
+        surfaceVariant = mix(bg, ink, 0.10f), onSurface = ink, onBackground = ink,
+        onSurfaceVariant = mix(bg, ink, 0.68f), outline = mix(bg, ink, 0.22f), outlineVariant = mix(bg, ink, 0.14f),
+    )
+}
+
+/** Relative luminance (sRGB approximation), 0 = black, 1 = white. */
+fun luminance(c: Color): Float = 0.2126f * c.red + 0.7152f * c.green + 0.0722f * c.blue
+
+fun mix(a: Color, b: Color, t: Float) = Color(a.red + (b.red - a.red) * t, a.green + (b.green - a.green) * t, a.blue + (b.blue - a.blue) * t)
+
+/** Text colour that reads on [c]. */
+fun readableOn(c: Color) = if (luminance(c) > 0.5f) Color(0xFF15130F) else Color.White
+
+/** Hue (0-360), saturation and value (0-1) of [c]. */
+fun hsvOf(c: Color): Triple<Float, Float, Float> {
+    val max = maxOf(c.red, c.green, c.blue); val min = minOf(c.red, c.green, c.blue); val d = max - min
+    val h = when {
+        d == 0f -> 0f
+        max == c.red -> 60f * (((c.green - c.blue) / d) % 6f)
+        max == c.green -> 60f * ((c.blue - c.red) / d + 2f)
+        else -> 60f * ((c.red - c.green) / d + 4f)
+    }.let { if (it < 0f) it + 360f else it }
+    return Triple(h, if (max == 0f) 0f else d / max, max)
+}
+
+/**
+ * Backgrounds that go with [primary] for people who'd rather not pick one: a neutral, the accent's own
+ * hue gently tinted, its complement, and a warm and a cool option, all dark enough (or light enough
+ * on a light theme) for the app's text to stay readable.
+ */
+fun backgroundSuggestions(primary: Color, dark: Boolean): List<Pair<String, Color>> {
+    val h = hsvOf(primary).first
+    val v = if (dark) 0.11f else 0.97f
+    val s = if (dark) 0.28f else 0.06f
+    return listOf(
+        "Neutral" to Color.hsv(0f, 0f, v),
+        "Accent tint" to Color.hsv(h, s, v),
+        "Deep accent" to Color.hsv(h, if (dark) 0.45f else 0.10f, if (dark) 0.09f else 0.94f),
+        "Complement" to Color.hsv((h + 180f) % 360f, s, v),
+        "Warm" to Color.hsv(30f, s * 0.8f, v),
+        "Cool" to Color.hsv(215f, s, v),
+    )
+}
+
+private fun baseScheme(mode: ThemeMode, dark: Boolean, primary: Color): ColorScheme {
     return when {
         !dark -> lightColorScheme(
             primary = primary,
@@ -162,6 +221,25 @@ object ThemePrefs {
         sidebarWidth = clampSidebar(p.getInt("sidebar_width", SIDEBAR_DEFAULT))
         sidebarHidden = p.getBoolean("sidebar_hidden", false)
         compact = p.getBoolean("compact", false)
+        customPrimary = p.takeIf { it.contains("custom_primary") }?.getInt("custom_primary", 0)?.let { Color(it) }
+        customBackground = p.takeIf { it.contains("custom_background") }?.getInt("custom_background", 0)?.let { Color(it) }
+    }
+
+    /** A primary colour of the user's own (null: the [accent]). */
+    var customPrimary by mutableStateOf<Color?>(null)
+        private set
+    /** A background of the user's own (null: the [mode]'s). */
+    var customBackground by mutableStateOf<Color?>(null)
+        private set
+
+    fun pickCustomPrimary(c: Color?) {
+        customPrimary = c
+        ctx?.let { prefs(it).edit().apply { if (c == null) remove("custom_primary") else putInt("custom_primary", c.toArgb()) }.apply() }
+    }
+
+    fun pickCustomBackground(c: Color?) {
+        customBackground = c
+        ctx?.let { prefs(it).edit().apply { if (c == null) remove("custom_background") else putInt("custom_background", c.toArgb()) }.apply() }
     }
 
     /** Width of the chat list beside the chat on wide screens (dp); drag its edge to change it. */
@@ -236,7 +314,7 @@ fun HermesTheme(content: @Composable () -> Unit) {
     // Compact: a smaller density shrinks every dp and sp alike, so the whole UI fits more.
     val density = if (ThemePrefs.compact) androidx.compose.ui.unit.Density(base.density * COMPACT_SCALE, base.fontScale) else base
     androidx.compose.runtime.CompositionLocalProvider(androidx.compose.ui.platform.LocalDensity provides density) {
-        MaterialTheme(colorScheme = colorScheme(ThemePrefs.mode, ThemePrefs.accent, isSystemInDarkTheme()), content = content)
+        MaterialTheme(colorScheme = colorScheme(ThemePrefs.mode, ThemePrefs.accent, isSystemInDarkTheme(), ThemePrefs.customPrimary, ThemePrefs.customBackground), content = content)
     }
 }
 

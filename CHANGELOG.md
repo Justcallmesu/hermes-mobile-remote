@@ -49,6 +49,10 @@ request number.
 - **Hide the chat list on wide screens**: the menu button at the top left of the chat hides it so the chat
   takes the full width, and brings it back. Also in Settings > Appearance.
 - **Compact layout** (Settings > Appearance): everything about 12% smaller, so more fits on screen.
+- **Pick your own primary and background colours** (Settings > Appearance): hue, saturation and
+  brightness sliders or a hex code. For the background there are six suggestions built from your
+  primary colour (neutral, accent tint, deep accent, complement, warm, cool). Text colours adjust so
+  everything stays readable. *Reset* goes back to the accent and mode.
 
 ## v1.35.0
 

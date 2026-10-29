@@ -84,6 +84,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontFamily
@@ -1378,12 +1379,71 @@ private fun ThemePanel() {
             Accent.entries.chunked(5).forEach { row ->
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     row.forEach { a ->
-                        ThemeSwatch(a.label, a == accent, bg, a.color(mode, systemDark), Modifier.weight(1f)) { ThemePrefs.pickAccent(a) }
+                        ThemeSwatch(a.label, a == accent && ThemePrefs.customPrimary == null, bg, a.color(mode, systemDark), Modifier.weight(1f)) {
+                            ThemePrefs.pickAccent(a); ThemePrefs.pickCustomPrimary(null)
+                        }
                     }
                     repeat(5 - row.size) { Spacer(Modifier.weight(1f)) }
                 }
             }
         }
+        PanelDivider()
+        var editPrimary by remember { mutableStateOf(false) }
+        var editBackground by remember { mutableStateOf(false) }
+        val dark = mode.isDark(systemDark)
+        PanelRow("Custom primary colour", ThemePrefs.customPrimary?.let { hex(it) } ?: "Off (uses the accent)", onClick = { editPrimary = !editPrimary }) {
+            ThemePrefs.customPrimary?.let { Box(Modifier.size(20.dp).clip(CircleShape).background(it)) }
+        }
+        if (editPrimary) ColorPicker(ThemePrefs.customPrimary ?: accent.color(mode, systemDark), onPick = ThemePrefs::pickCustomPrimary,
+            onReset = if (ThemePrefs.customPrimary != null) ({ ThemePrefs.pickCustomPrimary(null) }) else null)
+        PanelDivider()
+        PanelRow("Custom background", ThemePrefs.customBackground?.let { hex(it) } ?: "Off (uses the mode)", onClick = { editBackground = !editBackground }) {
+            ThemePrefs.customBackground?.let { Box(Modifier.size(20.dp).clip(CircleShape).background(it).border(1.dp, MaterialTheme.colorScheme.outline, CircleShape)) }
+        }
+        if (editBackground) {
+            // Suggestions for anyone who'd rather not pick: built from the current primary colour.
+            Text("Suggested for your colour", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(start = 16.dp, top = 4.dp))
+            Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 12.dp, vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                backgroundSuggestions(MaterialTheme.colorScheme.primary, dark).forEach { (label, c) ->
+                    ThemeSwatch(label, ThemePrefs.customBackground == c, c, MaterialTheme.colorScheme.primary, Modifier.width(72.dp)) { ThemePrefs.pickCustomBackground(c) }
+                }
+            }
+            ColorPicker(ThemePrefs.customBackground ?: MaterialTheme.colorScheme.background, onPick = ThemePrefs::pickCustomBackground,
+                onReset = if (ThemePrefs.customBackground != null) ({ ThemePrefs.pickCustomBackground(null) }) else null)
+        }
+    }
+}
+
+private fun hex(c: Color) = "#%06X".format(c.toArgb() and 0xFFFFFF)
+
+/** Hue, saturation and brightness sliders plus a hex field; every change applies at once. */
+@Composable
+private fun ColorPicker(initial: Color, onPick: (Color) -> Unit, onReset: (() -> Unit)?) {
+    val start = hsvOf(initial)
+    var h by remember { mutableStateOf(start.first) }
+    var sat by remember { mutableStateOf(start.second) }
+    var v by remember { mutableStateOf(start.third) }
+    var text by remember { mutableStateOf(hex(initial)) }
+    fun push() { val c = Color.hsv(h, sat, v); text = hex(c); onPick(c) }
+    Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(Modifier.size(36.dp).clip(RoundedCornerShape(10.dp)).background(Color.hsv(h, sat, v)).border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(10.dp)))
+            Spacer(Modifier.width(12.dp))
+            androidx.compose.material3.OutlinedTextField(text, { t ->
+                text = t
+                Regex("#?([0-9a-fA-F]{6})").matchEntire(t.trim())?.let { m ->
+                    val c = Color(0xFF000000 or m.groupValues[1].toLong(16)); val (hh, ss, vv) = hsvOf(c); h = hh; sat = ss; v = vv; onPick(c)
+                }
+            }, singleLine = true, label = { Text("Hex") }, modifier = Modifier.weight(1f))
+            onReset?.let { TextButton(onClick = it) { Text("Reset") } }
+        }
+        Text("Hue", style = MaterialTheme.typography.labelSmall)
+        androidx.compose.material3.Slider(h, { h = it; push() }, valueRange = 0f..359f)
+        Text("Saturation", style = MaterialTheme.typography.labelSmall)
+        androidx.compose.material3.Slider(sat, { sat = it; push() })
+        Text("Brightness", style = MaterialTheme.typography.labelSmall)
+        androidx.compose.material3.Slider(v, { v = it; push() })
     }
 }
 
