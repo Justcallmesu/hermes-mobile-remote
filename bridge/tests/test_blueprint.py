@@ -124,6 +124,32 @@ def test_agent_badge_clears_when_done_and_instructions_reach_hermes(tmp_path):
     assert "## Instructions" not in bp.to_markdown(doc)
 
 
+def test_board_settings_new_cards_on_top_and_column_limits(tmp_path):
+    s = bp.BlueprintStore(tmp_path)
+    s.create("p1", "Shop")
+    titles = lambda doc, col: [c["title"] for c in sorted(doc["board"]["cards"], key=lambda c: c["order"]) if c["column"] == col]
+    doc, _ = s.apply("p1", [{"op": "card.add", "title": "A", "column": "Todo"}, {"op": "card.add", "title": "B", "column": "Todo"}])
+    assert titles(doc, "todo") == ["A", "B"] and bp.settings(doc) == {"new_cards": "bottom", "aging_days": 0}
+    doc, _ = s.apply("p1", [{"op": "settings.set", "new_cards": "top", "aging_days": 7}])
+    doc, _ = s.apply("p1", [{"op": "card.add", "title": "C", "column": "Todo"}, {"op": "card.add", "title": "D", "column": "Todo", "index": 9}])
+    assert titles(doc, "todo") == ["C", "A", "B", "D"]  # top by default; an explicit index still wins
+    doc, _ = s.apply("p1", [{"op": "card.move", "id": "A", "column": "Working"}, {"op": "card.move", "id": "B", "column": "Working"}])
+    assert titles(doc, "working") == ["B", "A"]
+    doc, _ = s.apply("p1", [{"op": "card.move", "id": "C", "column": "Todo"}])  # same column, no index: to the end
+    assert titles(doc, "todo") == ["D", "C"]
+    for bad in ({"new_cards": "middle"}, {"aging_days": 5}, {"colour": "x"}):
+        with pytest.raises(bp.BlueprintError):
+            s.apply("p1", [{"op": "settings.set", **bad}])
+    doc, _ = s.apply("p1", [{"op": "column.update", "id": "Working", "limit": 1}])
+    md = bp.to_markdown(doc)
+    assert "### Working (2 of max 1, OVER THE LIMIT" in md and "go to the top of a column, cards untouched for 7 days fade" in md
+    assert next(c for c in bp.summary(doc)["columns"] if c["id"] == "working")["limit"] == 1
+    doc, _ = s.apply("p1", [{"op": "column.update", "id": "Working", "limit": 0}])
+    assert "limit" not in doc["board"]["columns"][2] and "### Working (2)" in bp.to_markdown(doc)
+    with pytest.raises(bp.BlueprintError):
+        s.apply("p1", [{"op": "column.update", "id": "Working", "limit": "lots"}])
+
+
 def test_routes(tmp_path):
     cfg = Config(devices_file=tmp_path / "d.json", audit_log=tmp_path / "a.log", trust_file=tmp_path / "n.json",
                  blueprints_dir=tmp_path / "bp")

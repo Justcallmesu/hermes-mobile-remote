@@ -645,8 +645,10 @@ def cmd_blueprint(cfg: Config, args: argparse.Namespace) -> None:
                 run([{"op": "column.update", "id": rest[0], "name": args.title or " ".join(rest[1:])}])
             elif sub == "rm":
                 run([{"op": "column.remove", "id": rest[0], "move_to": args.column}])
+            elif sub == "limit":  # column limit <column> <n>; 0 or none removes it
+                run([{"op": "column.update", "id": rest[0], "limit": 0 if rest[1] == "none" else int(rest[1])}])
             else:
-                raise bp.BlueprintError("column add|rename|rm")
+                raise bp.BlueprintError("column add|rename|limit|rm")
         elif a == "layout":
             run([{"op": "diagram.layout"}])
         elif a == "log":
@@ -657,6 +659,15 @@ def cmd_blueprint(cfg: Config, args: argparse.Namespace) -> None:
             else:
                 t = text()
                 run([{"op": "instructions.set", "text": "" if t.strip() == "none" else t}])
+        elif a == "settings":  # no args: print; key=value ...: set (new_cards=top|bottom, aging_days=0|3|7|14|30)
+            if not rest:
+                print("\n".join(f"{k}={v}" for k, v in bp.settings(need(project())).items()))
+            else:
+                ch = {}
+                for kv in rest:
+                    k, _, v = kv.partition("=")
+                    ch[k] = int(v) if v.isdigit() else v
+                run([{"op": "settings.set", **ch}])
         elif a == "control":
             run([{"op": "control.set", "mode": rest[0] if rest else "shared"}])
         elif a == "path":
@@ -855,7 +866,7 @@ def main(argv: list[str] | None = None) -> None:
     doc = sub.add_parser("doctor", help="Check why the phone can't connect")
     doc.add_argument("--json", action="store_true", help="Machine-readable checks (for the tray app)")
     bpp = sub.add_parser("blueprint", help="Project blueprints (flow diagram + task board) for Hermes")
-    bpp.add_argument("action", choices=("list", "show", "md", "create", "trash", "restore", "card", "node", "column", "layout", "log", "control", "instructions", "op", "path"))
+    bpp.add_argument("action", choices=("list", "show", "md", "create", "trash", "restore", "card", "node", "column", "layout", "log", "control", "instructions", "settings", "op", "path"))
     bpp.add_argument("args", nargs="*", help="Sub-action and its arguments (see the blueprint skill)")
     bpp.add_argument("-p", "--project", help="Project id, name or folder (default: the current folder's project)")
     bpp.add_argument("--here", action="store_true", help="Use the project that owns the current folder")

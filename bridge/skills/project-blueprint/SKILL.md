@@ -21,6 +21,7 @@ Each Hermes project can have a **blueprint**: a flow diagram (Start, Feature, Fl
    - new work found: `card add -c Todo "<title>" --item ... --tag ...` (search first, no duplicates)
    - a new feature or flow: `node add --kind feature --after "<node>" "<label>"`, link its card with `--node`
    - log decisions worth remembering: `log "<one line>"`
+- A column over its card limit (`OVER THE LIMIT` in `md`): finish or move cards out of it before starting another card there.
 4. Cards and nodes can be named by id or by a unique part of the title. If a name is ambiguous the command lists the ids.
 
 ## Control
@@ -44,6 +45,8 @@ $B card ask login "Use Stripe or PayPal?"            # highlighted until the use
 $B card review login "Check the export" --file out/report.csv
 $B card comment login "Pushed abc123" | card resolve login [<comment id>]
 $B instructions                          # print the user's rules for this project (set from the phone)
+$B settings                              # board settings: new_cards=top|bottom, aging_days=0|3|7|14|30 (set: settings new_cards=top)
+$B column limit Working 3                # WIP cap per column (0 or none removes it); md shows "OVER THE LIMIT"
 $B node add -p shop --kind feature --after Start "Login"   # kinds: start end feature flow decision note
 $B node link -p shop "Checkout" End [label]
 $B node edit -p shop Login -t "Sign in" --body "note"

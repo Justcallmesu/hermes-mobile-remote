@@ -10,9 +10,10 @@ bumps ``version``. Removing a blueprint moves the file to ``.trash/`` where it c
       "version": 12, "created": 1793200000.0, "updated": 1793200500.0,
       "control": "shared",                        # or "hermes": Hermes drives, the phone mostly reads
       "instructions": "Never deploy to live unless asked",   # the user's standing rules for agents
+      "settings": {"new_cards": "bottom", "aging_days": 0},   # board settings (see SETTINGS)
       "diagram": {"nodes": [{"id": "n1", "kind": "start", "label": "Start", "x": 0, "y": 0, ...}],
                   "edges": [{"id": "e1", "from": "n1", "to": "n2", "label": ""}]},
-      "board": {"columns": [{"id": "todo", "name": "Todo", "color": "blue"}],
+      "board": {"columns": [{"id": "todo", "name": "Todo", "color": "blue", "limit": 3}],   # limit: WIP cap or absent
                 "cards": [{"id": "c1", "column": "todo", "title": "...", "tags": [], "checklist": [...],
                            "agent": "Hermes",           # who is actively working on it right now (or null)
                            "comments": [{"id": "m1", "at": 0.0, "by": "hermes", "kind": "question",
@@ -39,6 +40,9 @@ ASSIGNEES = (None, "me", "hermes")
 CONTROL = ("shared", "hermes")
 COMMENT_KINDS = ("comment", "question", "review")  # question/review = waiting for the user until resolved
 MAX_COMMENTS = 200
+# Board settings, shared by the phone and Hermes. new_cards: where a card added (or moved into another
+# column) without an explicit position lands. aging_days: fade cards untouched that long (0 = off).
+SETTINGS = {"new_cards": ("bottom", "top"), "aging_days": (0, 3, 7, 14, 30)}
 MAX_COMMENT_FILES = 10
 DEFAULT_COLUMNS = (("docs", "Docs", "purple"), ("todo", "Todo", "blue"), ("working", "Working", "orange"), ("done", "Done", "green"))
 NODE_SIZE = {"start": (120, 56), "end": (120, 56), "decision": (150, 90), "feature": (180, 64), "flow": (180, 56), "note": (170, 70)}
@@ -190,6 +194,26 @@ def _last_column(doc: dict) -> str:
     return doc["board"]["columns"][-1]["id"]
 
 
+def _limit(v) -> int | None:
+    try:
+        n = int(v or 0)
+    except (TypeError, ValueError):
+        raise BlueprintError("limit is a number (0 or null for none)") from None
+    if n < 0 or n > 999:
+        raise BlueprintError("limit is between 0 and 999")
+    return n or None
+
+
+def settings(doc: dict) -> dict:
+    """The board settings with defaults filled in."""
+    have = doc.get("settings") or {}
+    return {k: have.get(k) if have.get(k) in allowed else allowed[0] for k, allowed in SETTINGS.items()}
+
+
+def _default_index(doc: dict) -> int | None:
+    return 0 if settings(doc)["new_cards"] == "top" else None
+
+
 def _order_after(cards: list[dict], column: str, index: int | None) -> float:
     same = sorted((c for c in cards if c["column"] == column), key=lambda c: c["order"])
     if index is None or index >= len(same):
@@ -331,6 +355,8 @@ def apply_op(doc: dict, op: dict, by: str = "phone") -> str | None:
         if any(c["id"] == cid for c in b["columns"]):
             cid = _id("col")
         b["columns"].append({"id": cid, "name": name, "color": op.get("color") if op.get("color") in COLORS else "default"})
+        if op.get("limit"):
+            b["columns"][-1]["limit"] = _limit(op["limit"])
         op["id"] = cid
         return f"Added column '{name}'"
     if kind == "column.update":
@@ -339,6 +365,12 @@ def apply_op(doc: dict, op: dict, by: str = "phone") -> str | None:
             c["name"] = _text(op["name"], 60)
         if "color" in op:
             c["color"] = op["color"] if op["color"] in COLORS else "default"
+        if "limit" in op:  # WIP cap: a positive number, or 0/null for none
+            c.pop("limit", None)
+            if _limit(op["limit"]):
+                c["limit"] = _limit(op["limit"])
+                return f"Set the card limit of '{c['name']}' to {c['limit']}"
+            return f"Removed the card limit of '{c['name']}'"
         return f"Edited column '{c['name']}'"
     if kind == "column.move":
         c = _column(doc, op.get("id"))
@@ -360,7 +392,8 @@ def apply_op(doc: dict, op: dict, by: str = "phone") -> str | None:
         now = time.time()
         card = {"id": op.get("id") or _id("c"), "column": col["id"], "title": "", "body": "", "tags": [], "checklist": [],
                 "priority": None, "due": None, "assignee": None, "node": None, "color": "default",
-                "order": _order_after(b["cards"], col["id"], op.get("index")), "created": now, "updated": now}
+                "order": _order_after(b["cards"], col["id"], op["index"] if "index" in op else _default_index(doc)),
+                "created": now, "updated": now}
         _card_fields(doc, card, {"title": op.get("title") or "Untitled", **{k: v for k, v in op.items() if k not in ("op", "id", "column", "index", "title")}})
         b["cards"].append(card)
         op["id"] = card["id"]
@@ -387,7 +420,9 @@ def apply_op(doc: dict, op: dict, by: str = "phone") -> str | None:
         card = _card_ref(doc, op.get("id"))
         col = _column(doc, op.get("column") or card["column"])
         others = [c for c in b["cards"] if c is not card]
-        card["column"], card["order"] = col["id"], _order_after(others, col["id"], op.get("index"))
+        # No position: into another column it lands where the settings say; within its column, at the end.
+        index = op["index"] if "index" in op else (_default_index(doc) if col["id"] != card["column"] else None)
+        card["column"], card["order"] = col["id"], _order_after(others, col["id"], index)
         if col["id"] == _last_column(doc):  # finished: nobody is working on it any more
             card["agent"] = None
         card["updated"] = time.time()
@@ -432,6 +467,18 @@ def apply_op(doc: dict, op: dict, by: str = "phone") -> str | None:
     if kind == "instructions.set":  # the user's standing rules for any agent working on this project
         doc["instructions"] = str(op.get("text") or "").strip()[:MAX_TEXT]
         return "Updated the agent instructions" if doc["instructions"] else "Cleared the agent instructions"
+    if kind == "settings.set":  # board settings: any of SETTINGS' keys
+        cur = settings(doc)
+        for k, v in op.items():
+            if k == "op":
+                continue
+            if k not in SETTINGS:
+                raise BlueprintError(f"Unknown setting '{k}' (known: {', '.join(SETTINGS)})")
+            if v not in SETTINGS[k]:
+                raise BlueprintError(f"{k} must be one of {', '.join(map(str, SETTINGS[k]))}")
+            cur[k] = v
+        doc["settings"] = cur
+        return "Changed the board settings"
     if kind == "card.remove":
         card = _card_ref(doc, op.get("id"))
         b["cards"].remove(card)
@@ -480,7 +527,8 @@ def summary(doc: dict) -> dict:
     return {"project": doc["project"], "version": doc["version"], "updated": doc["updated"], "control": doc.get("control", "shared"),
             "nodes": len(doc["diagram"]["nodes"]), "cards": len(cards),
             "needs_you": sum(1 for c in cards if open_asks(c)), "working": sum(1 for c in cards if c.get("agent")),
-            "columns": [{"id": c["id"], "name": c["name"], "count": sum(1 for x in cards if x["column"] == c["id"])} for c in cols]}
+            "columns": [{"id": c["id"], "name": c["name"], "count": sum(1 for x in cards if x["column"] == c["id"]), "limit": c.get("limit")}
+                        for c in cols]}
 
 
 def to_markdown(doc: dict) -> str:
@@ -508,10 +556,13 @@ def to_markdown(doc: dict) -> str:
                      + (f"  -> {', '.join(nxt)}" if nxt else "")
                      + (f"  [card: {card['title']} in {cols.get(card['column'], '?')}]" if card else "")
                      + (f"\n  note: {n['note']}" if n.get("note") else ""))
-    lines += ["", "## Board"]
+    st = settings(doc)
+    lines += ["", "## Board", f"settings: new and moved cards go to the {st['new_cards']} of a column"
+              + (f", cards untouched for {st['aging_days']} days fade" if st["aging_days"] else "")]
     for col in b["columns"]:
         cards = sorted((c for c in b["cards"] if c["column"] == col["id"]), key=lambda c: c["order"])
-        lines.append(f"### {col['name']} ({len(cards)})")
+        lim = col.get("limit")
+        lines.append(f"### {col['name']} ({len(cards)}" + (f" of max {lim}" + (", OVER THE LIMIT: finish or move cards out before adding more" if len(cards) > lim else "") if lim else "") + ")")
         for c in cards:
             meta = [f"#{t}" for t in c["tags"]]
             if c.get("priority"):
