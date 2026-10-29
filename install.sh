@@ -81,6 +81,11 @@ SKILL_DST="$HERMES_HOME/skills/productivity/personal-notes"
 if [[ ! -e "$SKILL_DST/SKILL.md" ]]; then
   mkdir -p "$SKILL_DST" && cp "$BRIDGE/skills/personal-notes/SKILL.md" "$SKILL_DST/SKILL.md" && info "Hermes skill installed: personal-notes"
 fi
+# The blueprint skill: Hermes reads a project's diagram + board before working on it and keeps it current.
+SKILL_DST="$HERMES_HOME/skills/software-development/project-blueprint"
+if [[ ! -e "$SKILL_DST/SKILL.md" ]]; then
+  mkdir -p "$SKILL_DST" && cp "$BRIDGE/skills/project-blueprint/SKILL.md" "$SKILL_DST/SKILL.md" && info "Hermes skill installed: project-blueprint"
+fi
 info "installed into $BRIDGE/.venv; command: hermes-remote-bridge"
 [[ ":$PATH:" == *":$LOCAL_BIN:"* ]] || info "Add $LOCAL_BIN to your PATH to use it without the full path."
 

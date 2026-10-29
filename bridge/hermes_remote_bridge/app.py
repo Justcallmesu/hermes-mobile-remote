@@ -455,6 +455,7 @@ def create_app(cfg: Config, *, locator: BackendLocator | None = None, tailnet: T
                                               ("folders", True),
                                               ("bridge_update", cfg.self_update),
                                               ("notes", cfg.notes),
+                                              ("blueprints", cfg.blueprints),
                                               ("admin", cfg.remote_admin)) if on],
                 "bridge_version": __version__, "protocol": PROTOCOL}
 
@@ -500,6 +501,93 @@ def create_app(cfg: Config, *, locator: BackendLocator | None = None, tailnet: T
         _notes_on()
         _note(note_id)
         await asyncio.to_thread(note_store.delete, note_id)
+        return {"deleted": True}
+
+    # ------------------------------------------------------------ Project blueprints
+    # A flow diagram + task board per Hermes project, JSON files Hermes edits through the CLI. Every
+    # change is a batch of ops applied to the newest copy under a lock, so phone and Hermes merge.
+    from . import blueprint as bp_mod
+
+    bp_store = bp_mod.BlueprintStore(cfg.blueprints_dir)
+
+    def _bp_on() -> None:
+        if not cfg.blueprints:
+            raise ApiError(404, "blueprints_off", "Blueprints are off (blueprints = false)")
+
+    def _bp(pid: str) -> dict:
+        try:
+            return bp_store.get(pid)
+        except KeyError:
+            raise ApiError(404, "no_blueprint", "This project has no blueprint")
+
+    @app.get("/v1/blueprints")
+    async def list_blueprints(_: Device = Depends(device_auth)):
+        _bp_on()
+        docs = await asyncio.to_thread(bp_store.all)
+        return {"blueprints": [bp_mod.summary(d) for d in docs], "trash": await asyncio.to_thread(bp_store.trashed)}
+
+    @app.get("/v1/blueprints/{pid}")
+    async def get_blueprint(pid: str, since: int = 0, _: Device = Depends(device_auth)):
+        _bp_on()
+        doc = await asyncio.to_thread(_bp, pid)
+        if since and doc.get("version") == since:
+            return {"version": since, "unchanged": True}
+        return doc
+
+    @app.post("/v1/blueprints/{pid}")
+    async def create_blueprint(pid: str, request: Request, device: Device = Depends(device_auth)):
+        _bp_on()
+        body = await request.json() if (await request.body()) else {}
+        body = body if isinstance(body, dict) else {}
+        try:
+            doc = await asyncio.to_thread(bp_store.create, pid, str(body.get("name") or "")[:200], body.get("path") or None)
+        except KeyError:
+            raise ApiError(400, "bad_project", "Bad project id")
+        except bp_mod.BlueprintError as exc:
+            raise ApiError(409, "blueprint_exists", str(exc))
+        audit_event({"event": "blueprint_create", "device": device.id, "project": pid})
+        return doc
+
+    @app.post("/v1/blueprints/{pid}/ops")
+    async def blueprint_ops(pid: str, request: Request, _: Device = Depends(device_auth)):
+        _bp_on()
+        body = await request.json()
+        ops = body.get("ops") if isinstance(body, dict) else None
+        _bp(pid)
+        try:
+            doc, applied = await asyncio.to_thread(bp_store.apply, pid, ops, "phone")
+        except bp_mod.BlueprintError as exc:
+            raise ApiError(400, "bad_op", str(exc), doc=await asyncio.to_thread(_bp, pid))
+        return {"doc": doc, "applied": applied}
+
+    @app.delete("/v1/blueprints/{pid}")
+    async def trash_blueprint(pid: str, device: Device = Depends(device_auth)):
+        _bp_on()
+        _bp(pid)
+        tid = await asyncio.to_thread(bp_store.trash, pid)
+        audit_event({"event": "blueprint_trash", "device": device.id, "project": pid})
+        return {"trashed": tid}
+
+    @app.post("/v1/blueprints-trash/{tid}/restore")
+    async def restore_blueprint(tid: str, device: Device = Depends(device_auth)):
+        _bp_on()
+        try:
+            doc = await asyncio.to_thread(bp_store.restore, tid)
+        except KeyError:
+            raise ApiError(404, "not_in_trash", "Not in the trash")
+        except bp_mod.BlueprintError as exc:
+            raise ApiError(409, "blueprint_exists", str(exc))
+        audit_event({"event": "blueprint_restore", "device": device.id, "trash": tid})
+        return doc
+
+    @app.delete("/v1/blueprints-trash/{tid}")
+    async def purge_blueprint(tid: str, device: Device = Depends(device_auth)):
+        _bp_on()
+        try:
+            await asyncio.to_thread(bp_store.purge, tid)
+        except KeyError:
+            raise ApiError(404, "not_in_trash", "Not in the trash")
+        audit_event({"event": "blueprint_purge", "device": device.id, "trash": tid})
         return {"deleted": True}
 
     update_check = selfupdate.CachedCheck()

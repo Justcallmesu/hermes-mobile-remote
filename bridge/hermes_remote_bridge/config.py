@@ -84,6 +84,9 @@ class Config:
     # PC bridge admin from a paired phone: doctor with fixes, restart, networks, devices, logs.
     remote_admin: bool = True
     notes_dir: Path = CONFIG_DIR / "notes"
+    # Project blueprints (flow diagram + task board per Hermes project), read and edited by Hermes too.
+    blueprints: bool = True
+    blueprints_dir: Path = CONFIG_DIR / "blueprints"
 
     @classmethod
     def load(cls, path: Path | None = None) -> "Config":

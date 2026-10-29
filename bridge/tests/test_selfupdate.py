@@ -66,3 +66,15 @@ def test_local_changes_still_allow_a_plain_restart(monkeypatch):
     monkeypatch.setattr(selfupdate, "why_not", lambda remote="origin": "local changes")
     monkeypatch.setattr(selfupdate, "_remote_tags", lambda remote: ["v1.31.0"])
     assert selfupdate.check()["can_update"]
+
+
+def test_install_skills_copies_missing_only(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setattr("hermes_remote_bridge.config.Config.load", classmethod(lambda cls, p=None: (_ for _ in ()).throw(OSError())))
+    mine = tmp_path / "skills" / "productivity" / "personal-notes" / "SKILL.md"
+    mine.parent.mkdir(parents=True)
+    mine.write_text("my edits")
+    assert selfupdate.install_skills(log=lambda m: None) == ["project-blueprint"]
+    assert mine.read_text() == "my edits"
+    assert (tmp_path / "skills" / "software-development" / "project-blueprint" / "SKILL.md").exists()
+    assert selfupdate.install_skills(log=lambda m: None) == []

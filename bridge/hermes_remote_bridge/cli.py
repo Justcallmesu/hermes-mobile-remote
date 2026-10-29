@@ -493,6 +493,153 @@ def cmd_metrics(cfg: Config, args: argparse.Namespace) -> None:
     print(summarize(data))
 
 
+def cmd_blueprint(cfg: Config, args: argparse.Namespace) -> None:
+    """Project blueprints for Hermes: read the flow + board, then update them as work progresses."""
+    from . import blueprint as bp
+
+    store = bp.BlueprintStore(cfg.blueprints_dir)
+    a = args.action
+    by = args.by or "hermes"
+    js = getattr(args, "json", False)
+    rest = list(args.args or [])
+
+    def project() -> dict:
+        ref = args.project or (rest.pop(0) if a in ("show", "md", "create", "trash", "op") and rest and not args.here else None)
+        return bp.resolve(store, ref, cfg.hermes_home, cwd=os.getcwd() if (args.here or not ref) else None)
+
+    def need(p: dict) -> dict:
+        if not p["exists"]:
+            raise bp.BlueprintError(f"{p['name']} has no blueprint yet (create it: blueprint create {p['id']})")
+        return store.get(p["id"])
+
+    def run(ops: list[dict]) -> None:
+        p = project()
+        need(p)
+        doc, applied = store.apply(p["id"], ops, by=by)
+        if js:
+            print(json.dumps({"version": doc["version"], "applied": applied}, ensure_ascii=False, indent=2))
+        else:
+            for op in applied:
+                print(f"ok {op['op']}" + (f" {op['id']}" if op.get("id") else ""))
+            print(f"version {doc['version']}")
+
+    def text(i: int = 0) -> str:
+        t = " ".join(rest[i:])
+        return sys.stdin.read() if t == "-" else t.replace("\\n", "\n")
+
+    def card_fields() -> dict:
+        f: dict = {}
+        if args.title is not None:
+            f["title"] = args.title
+        if args.body is not None:
+            f["body"] = sys.stdin.read() if args.body == "-" else args.body.replace("\\n", "\n")
+        if args.tag:
+            f["tags"] = args.tag
+        if args.item:
+            f["checklist"] = args.item
+        if args.priority:
+            f["priority"] = None if args.priority == "none" else args.priority
+        if args.due:
+            f["due"] = None if args.due == "none" else args.due
+        if args.assignee:
+            f["assignee"] = None if args.assignee == "none" else args.assignee
+        if args.node:
+            f["node"] = None if args.node == "none" else args.node
+        return f
+
+    try:
+        if a == "list":
+            docs = store.all()
+            have = {d["project"]["id"] for d in docs}
+            for d in docs:
+                s = bp.summary(d)
+                print(f"{s['project']['id']}  {s['project']['name']}  v{s['version']}  " + "  ".join(f"{c['name']}:{c['count']}" for c in s["columns"])
+                      + ("  [hermes in control]" if s["control"] == "hermes" else ""))
+            others = [p for p in bp.hermes_projects(cfg.hermes_home) if p["id"] not in have]
+            if others:
+                print("\nProjects without a blueprint: " + ", ".join(f"{p['name']} ({p['id']})" for p in others))
+            if not docs and not others:
+                print("No blueprints.")
+        elif a in ("show", "md"):
+            p = project()
+            doc = need(p)
+            print(json.dumps(doc, ensure_ascii=False, indent=1) if js else bp.to_markdown(doc), end="" if not js else "\n")
+        elif a == "create":
+            try:
+                p = project()
+            except bp.BlueprintError:  # a new id: create a stand-alone blueprint under it
+                ref = args.project or (args.args or [None])[0]
+                if not ref:
+                    raise
+                p = {"id": ref, "name": args.title or ref, "path": os.getcwd() if args.here else None}
+            doc = store.create(p["id"], p.get("name") or "", p.get("path"))
+            print(f"Created the blueprint for {doc['project']['name']} ({p['id']})")
+        elif a == "trash":
+            p = project()
+            print(f"Moved to trash: {store.trash(p['id'])} (restore from the app, or: blueprint restore <that id>)")
+        elif a == "restore":
+            doc = store.restore(rest[0])
+            print(f"Restored {doc['project']['name']}")
+        elif a == "op":  # raw JSON ops: one object or a list
+            raw = text()
+            ops = json.loads(raw)
+            run(ops if isinstance(ops, list) else [ops])
+        elif a == "card":
+            sub = rest.pop(0) if rest else ""
+            if sub == "add":
+                run([{"op": "card.add", "column": args.column, "title": args.title or text(), **{k: v for k, v in card_fields().items() if k != "title"}}])
+            elif sub == "move":
+                run([{"op": "card.move", "id": rest[0], "column": args.column or " ".join(rest[1:])}])
+            elif sub == "edit":
+                run([{"op": "card.update", "id": rest[0], **card_fields()}])
+            elif sub in ("check", "uncheck"):
+                run([{"op": "card.check", "id": rest[0], "text": " ".join(rest[1:]), "done": sub == "check"}])
+            elif sub == "rm":
+                run([{"op": "card.remove", "id": rest[0]}])
+            else:
+                raise bp.BlueprintError("card add|move|edit|check|uncheck|rm")
+        elif a == "node":
+            sub = rest.pop(0) if rest else ""
+            if sub == "add":
+                run([{"op": "node.add", "kind": args.kind or "feature", "label": args.title or text(), "after": args.after, "note": args.body or ""}])
+            elif sub == "edit":
+                f = {"op": "node.update", "id": rest[0]}
+                if args.title is not None:
+                    f["label"] = args.title
+                if args.kind:
+                    f["kind"] = args.kind
+                if args.body is not None:
+                    f["note"] = args.body
+                run([f])
+            elif sub == "link":
+                run([{"op": "edge.add", "from": rest[0], "to": rest[1], "label": " ".join(rest[2:])}])
+            elif sub == "rm":
+                run([{"op": "node.remove", "id": rest[0]}])
+            else:
+                raise bp.BlueprintError("node add|edit|link|rm")
+        elif a == "column":
+            sub = rest.pop(0) if rest else ""
+            if sub == "add":
+                run([{"op": "column.add", "name": args.title or text()}])
+            elif sub == "rename":
+                run([{"op": "column.update", "id": rest[0], "name": args.title or " ".join(rest[1:])}])
+            elif sub == "rm":
+                run([{"op": "column.remove", "id": rest[0], "move_to": args.column}])
+            else:
+                raise bp.BlueprintError("column add|rename|rm")
+        elif a == "layout":
+            run([{"op": "diagram.layout"}])
+        elif a == "log":
+            run([{"op": "log", "text": text()}])
+        elif a == "control":
+            run([{"op": "control.set", "mode": rest[0] if rest else "shared"}])
+        elif a == "path":
+            print(cfg.blueprints_dir)
+    except (bp.BlueprintError, KeyError, ValueError, IndexError) as exc:
+        print(f"blueprint: {exc}", file=sys.stderr)
+        sys.exit(1)
+
+
 def cmd_notes(cfg: Config, args: argparse.Namespace) -> None:
     """The notes the phone shows, for Hermes and scripts: list, show, add, append, edit, check, rm."""
     from .notes import NoteStore
@@ -681,6 +828,24 @@ def main(argv: list[str] | None = None) -> None:
     t.add_argument("--json", action="store_true", help="Machine-readable output, with --list")
     doc = sub.add_parser("doctor", help="Check why the phone can't connect")
     doc.add_argument("--json", action="store_true", help="Machine-readable checks (for the tray app)")
+    bpp = sub.add_parser("blueprint", help="Project blueprints (flow diagram + task board) for Hermes")
+    bpp.add_argument("action", choices=("list", "show", "md", "create", "trash", "restore", "card", "node", "column", "layout", "log", "control", "op", "path"))
+    bpp.add_argument("args", nargs="*", help="Sub-action and its arguments (see the blueprint skill)")
+    bpp.add_argument("-p", "--project", help="Project id, name or folder (default: the current folder's project)")
+    bpp.add_argument("--here", action="store_true", help="Use the project that owns the current folder")
+    bpp.add_argument("--column", "-c")
+    bpp.add_argument("--title", "-t")
+    bpp.add_argument("--body", "-b")
+    bpp.add_argument("--tag", action="append")
+    bpp.add_argument("--item", action="append", help="Checklist item (repeat)")
+    bpp.add_argument("--priority", choices=("low", "medium", "high", "none"))
+    bpp.add_argument("--due", help="YYYY-MM-DD or none")
+    bpp.add_argument("--assignee", choices=("me", "hermes", "none"))
+    bpp.add_argument("--node", help="Diagram node id/label to link a card to (or none)")
+    bpp.add_argument("--kind", choices=("start", "end", "feature", "flow", "decision", "note"))
+    bpp.add_argument("--after", help="Diagram node the new node follows (adds the arrow)")
+    bpp.add_argument("--by", help=argparse.SUPPRESS)
+    bpp.add_argument("--json", action="store_true")
     nt = sub.add_parser("notes", help="Read and edit the notes the phone shows (for Hermes and scripts)")
     nt.add_argument("action", choices=("list", "show", "add", "append", "edit", "check", "rm", "path"))
     nt.add_argument("id", nargs="?", help="Note id (from list); not for list/add/path")
@@ -716,12 +881,17 @@ def main(argv: list[str] | None = None) -> None:
     if not (argv if argv is not None else sys.argv[1:]):
         _no_command_help(parser)
         return
-    args = parser.parse_args(argv)
+    raw = list(sys.argv[1:] if argv is None else argv)
+    # `blueprint` mixes free words with options (`card add -c todo Login page`): parse it intermixed.
+    if "blueprint" in raw:
+        args = bpp.parse_intermixed_args(raw[raw.index("blueprint") + 1:], namespace=parser.parse_args(raw[:raw.index("blueprint") + 1] + ["path"]))
+    else:
+        args = parser.parse_args(argv)
     cfg = Config.load(args.config)
     handler = {"serve": cmd_serve, "pair": cmd_pair, "revoke": cmd_revoke, "devices": cmd_devices,
                "trust": cmd_trust, "doctor": cmd_doctor, "firewall": cmd_firewall,
                "supervise": cmd_supervise, "metrics": cmd_metrics, "update": cmd_update,
-               "notes": cmd_notes}[args.command]
+               "notes": cmd_notes, "blueprint": cmd_blueprint}[args.command]
     try:
         handler(cfg, args)
     except ValueError as exc:

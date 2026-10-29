@@ -317,6 +317,7 @@ def _restart_only(log, reason: str) -> str:
     head_tag = _head()[1] or "the installed version"
     try:
         log(f"Not fetching ({reason}); restarting to load {head_tag}…")
+        install_skills(log)
         moved = keep_hermes_alive()
         _write_status(state="running", step="restart", to=head_tag)
         _systemctl("reset-failed", UNIT)
@@ -370,6 +371,7 @@ def apply(remote: str = "origin", log=print) -> str:
             _rollback(old, uv, log)
             raise RuntimeError(f"uv sync failed, rolled back: {s.stderr.strip()[-300:]}")
         _render_unit()
+        install_skills(log)
         moved = keep_hermes_alive()
         if moved:
             log(f"Kept {moved} Hermes process(es) running outside the bridge.")
@@ -393,9 +395,38 @@ def apply(remote: str = "origin", log=print) -> str:
         _ensure_running(log)
 
 
+# Hermes skills the bridge ships: (folder in bridge/skills, category under $HERMES_HOME/skills).
+SKILLS = (("personal-notes", "productivity"), ("project-blueprint", "software-development"))
+
+
+def install_skills(log=print) -> list[str]:
+    """Copy shipped Hermes skills that are missing (never overwrite one the user changed). Runs from the
+    update/restart job, outside the service sandbox that makes ~/.hermes read-only."""
+    try:
+        from .config import Config
+        home = Path(Config.load().hermes_home)
+    except Exception:  # noqa: BLE001
+        home = Path(os.environ.get("HERMES_HOME", Path.home() / ".hermes"))
+    done = []
+    for name, category in SKILLS:
+        src = BRIDGE_DIR / "skills" / name / "SKILL.md"
+        dst = home / "skills" / category / name / "SKILL.md"
+        if src.exists() and not dst.exists() and not any((home / "skills").glob(f"*/{name}/SKILL.md")):
+            try:
+                dst.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(src, dst)
+                done.append(name)
+            except OSError as exc:
+                log(f"Could not install the {name} skill: {exc}")
+    if done:
+        log("Installed Hermes skills: " + ", ".join(done))
+    return done
+
+
 def restart(log=print) -> None:
     """Restart the bridge, health-checked; the bridge is left running whatever happens."""
     try:
+        install_skills(log)
         moved = keep_hermes_alive()
         if moved:
             log(f"Kept {moved} Hermes process(es) running outside the bridge.")

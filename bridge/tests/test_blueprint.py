@@ -1,0 +1,100 @@
+"""Project blueprints: ops, merging, trash, Hermes' Markdown view, routes."""
+import httpx
+import pytest
+from fastapi.testclient import TestClient
+
+from hermes_remote_bridge import blueprint as bp
+from hermes_remote_bridge.app import create_app
+from hermes_remote_bridge.config import Config
+from hermes_remote_bridge.devices import DeviceStore
+
+from test_cron import Locator, Tailnet
+
+
+def test_new_blueprint_has_start_end_and_default_columns(tmp_path):
+    s = bp.BlueprintStore(tmp_path)
+    doc = s.create("p1", "Shop", "/x/shop")
+    assert [n["kind"] for n in doc["diagram"]["nodes"]] == ["start", "end"]
+    assert [c["name"] for c in doc["board"]["columns"]] == ["Docs", "Todo", "Working", "Done"]
+    with pytest.raises(bp.BlueprintError):
+        s.create("p1")
+
+
+def test_ops_merge_and_resolve_by_title(tmp_path):
+    s = bp.BlueprintStore(tmp_path)
+    s.create("p1", "Shop")
+    doc, applied = s.apply("p1", [{"op": "card.add", "title": "Login page", "column": "todo", "tags": ["#auth"],
+                                   "checklist": ["form", "api"], "priority": "high"}], by="hermes")
+    cid = applied[0]["id"]
+    # the phone applies to the newest copy: Hermes' card is kept
+    doc, _ = s.apply("p1", [{"op": "card.add", "title": "Docs", "column": "Docs"}], by="phone")
+    assert len(doc["board"]["cards"]) == 2
+    doc, _ = s.apply("p1", [{"op": "card.move", "id": "login", "column": "Working"}, {"op": "card.check", "id": cid, "text": "form"}])
+    c = next(c for c in doc["board"]["cards"] if c["id"] == cid)
+    assert c["column"] == "working" and c["checklist"][0]["done"] and c["tags"] == ["auth"]
+    assert doc["version"] == 4
+    assert any("Moved 'Login page' to Working" in l["text"] for l in doc["log"])
+
+
+def test_a_bad_op_rejects_the_whole_batch(tmp_path):
+    s = bp.BlueprintStore(tmp_path)
+    s.create("p1")
+    with pytest.raises(bp.BlueprintError):
+        s.apply("p1", [{"op": "card.add", "title": "a"}, {"op": "card.move", "id": "nope", "column": "done"}])
+    assert s.get("p1")["board"]["cards"] == [] and s.get("p1")["version"] == 1
+
+
+def test_node_after_connects_and_places_and_layout(tmp_path):
+    s = bp.BlueprintStore(tmp_path)
+    doc = s.create("p1")
+    start = doc["diagram"]["nodes"][0]["id"]
+    doc, a = s.apply("p1", [{"op": "node.add", "kind": "feature", "label": "Feature", "after": start},
+                            {"op": "node.add", "kind": "flow", "label": "Flow", "after": "Feature"},
+                            {"op": "diagram.layout"}])
+    n = {x["label"]: x for x in doc["diagram"]["nodes"]}
+    assert n["Start"]["y"] < n["Feature"]["y"] < n["Flow"]["y"] <= n["End"]["y"]
+    pairs = {(e["from"], e["to"]) for e in doc["diagram"]["edges"]}
+    assert pairs == {(n["Start"]["id"], n["Feature"]["id"]), (n["Feature"]["id"], n["Flow"]["id"]), (n["Flow"]["id"], n["End"]["id"])}
+    doc, _ = s.apply("p1", [{"op": "node.remove", "id": "Feature"}])
+    assert all(n["Feature"]["id"] not in (e["from"], e["to"]) for e in doc["diagram"]["edges"])
+
+
+def test_trash_restore_purge(tmp_path):
+    s = bp.BlueprintStore(tmp_path)
+    s.create("p1", "Shop")
+    tid = s.trash("p1")
+    assert not s.exists("p1") and s.trashed()[0]["id"] == tid
+    s.restore(tid)
+    assert s.exists("p1") and s.trashed() == []
+    s.purge(s.trash("p1"))
+    assert s.trashed() == []
+
+
+def test_markdown_and_resolve_by_folder(tmp_path):
+    s = bp.BlueprintStore(tmp_path / "b")
+    s.create("p1", "Shop", str(tmp_path / "shop"))
+    s.apply("p1", [{"op": "card.add", "title": "Pay", "column": "todo", "checklist": ["stripe"]}])
+    md = bp.to_markdown(s.get("p1"))
+    assert "# Blueprint: Shop" in md and "### Todo (1)" in md and "- [ ] stripe" in md
+    (tmp_path / "shop" / "src").mkdir(parents=True)
+    assert bp.resolve(s, None, cwd=str(tmp_path / "shop" / "src"))["id"] == "p1"
+    assert bp.resolve(s, "shop")["id"] == "p1"
+
+
+def test_routes(tmp_path):
+    cfg = Config(devices_file=tmp_path / "d.json", audit_log=tmp_path / "a.log", trust_file=tmp_path / "n.json",
+                 blueprints_dir=tmp_path / "bp")
+    store = DeviceStore(cfg.devices_file)
+    _, token = store.pair("phone")
+    app = create_app(cfg, locator=Locator(), http=httpx.AsyncClient(transport=httpx.MockTransport(lambda r: httpx.Response(404))),
+                     tailnet=Tailnet(), devices=store, owner_login="me@x")
+    c, h = TestClient(app, client=("100.64.0.10", 50000)), {"Authorization": f"Bearer {token}"}
+    assert c.post("/v1/blueprints/p1", json={"name": "Shop"}, headers=h).json()["version"] == 1
+    r = c.post("/v1/blueprints/p1/ops", json={"ops": [{"op": "card.add", "title": "A"}]}, headers=h).json()
+    assert r["doc"]["version"] == 2
+    assert c.get("/v1/blueprints/p1?since=2", headers=h).json() == {"version": 2, "unchanged": True}
+    bad = c.post("/v1/blueprints/p1/ops", json={"ops": [{"op": "card.move", "id": "zzz", "column": "x"}]}, headers=h)
+    assert bad.status_code == 400 and bad.json()["error"]["doc"]["version"] == 2
+    tid = c.delete("/v1/blueprints/p1", headers=h).json()["trashed"]
+    assert c.get("/v1/blueprints", headers=h).json()["trash"][0]["id"] == tid
+    assert c.post(f"/v1/blueprints-trash/{tid}/restore", headers=h).json()["project"]["name"] == "Shop"
