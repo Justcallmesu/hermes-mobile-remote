@@ -100,6 +100,17 @@ class BridgeClient(
     suspend fun updateNote(id: String, body: JSONObject) = call("PATCH", "/v1/notes/${enc(id)}", body = body)
     suspend fun deleteNote(id: String) = call("DELETE", "/v1/notes/${enc(id)}")
 
+    /** PC bridge admin (`/v1/admin/...`): doctor with fixes, restart, networks, devices, log. */
+    suspend fun adminDoctor() = call("GET", "/v1/admin/doctor", readTimeoutS = 30)
+    suspend fun adminFix(fix: String) = call("POST", "/v1/admin/fix/${enc(fix)}", readTimeoutS = 60)
+    suspend fun adminRestart() = call("POST", "/v1/admin/restart", readTimeoutS = 30)
+    suspend fun adminTrust() = call("GET", "/v1/admin/trust")
+    suspend fun adminTrustNow() = call("POST", "/v1/admin/trust")
+    suspend fun adminUntrust(id: String) = call("POST", "/v1/admin/untrust", body = JSONObject().put("id", id))
+    suspend fun adminDevices() = call("GET", "/v1/admin/devices")
+    suspend fun adminRevoke(name: String) = call("POST", "/v1/admin/revoke", body = JSONObject().put("name", name))
+    suspend fun adminLogs(lines: Int = 200) = call("GET", "/v1/admin/logs", mapOf("lines" to lines), readTimeoutS = 20)
+
     /** The bridge's release and the newest one (`/v1/bridge/update`). */
     suspend fun bridgeUpdateCheck(refresh: Boolean = false) = call("GET", "/v1/bridge/update", mapOf("refresh" to refresh), readTimeoutS = 40)
 

@@ -17,6 +17,20 @@ request number.
   subagents (#12), share to Hermes (#15), message search (#16), subagent output and steer (#17)
   and bridge metrics (#18).
 
+## v1.32.0
+
+- New **PC bridge** page (drawer ⋮ > PC bridge, or Settings > Hermes on your PC > PC bridge): everything
+  that needed a terminal on the PC, from the phone.
+  - **Health**: the bridge doctor's checks, each problem with a one-tap fix (Trust network, Restart
+    bridge, Start Hermes).
+  - **Restart bridge**: runs as its own job on the PC, checks the bridge answers afterwards, and the
+    app reconnects the moment it's back. Hermes and running chats keep going.
+  - **Update**: the bridge self-update, same as before.
+  - **Networks**: trust the Wi-Fi the PC is on (direct connection without Tailscale), or remove one.
+  - **Paired devices**: see who can connect and revoke old ones (this phone can't revoke itself).
+  - **Log**: the bridge's latest log lines.
+  - Turn it off with `remote_admin = false` in the bridge config. Needs this bridge version.
+
 ## v1.31.1
 
 - Fixed: the bridge said "up to date" while still running old code. It compared the files on disk

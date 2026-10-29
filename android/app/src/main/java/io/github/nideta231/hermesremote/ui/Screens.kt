@@ -146,6 +146,7 @@ private fun DrawerMoreMenu(actions: SessionActions) {
             if (offer) item(if (upd!!.state.restartNeeded) "Restart PC bridge to load ${upd.state.latest}" else "Update PC bridge to ${upd.state.latest}", Glyphs.Download) { confirm = true }
             if (upd != null && upd.state.updating) item(upd.state.message ?: "Updating PC bridge…", Glyphs.Refresh) {}
             actions.openNotes?.let { item("Notes", Glyphs.Doc, it) }
+            actions.openBridge?.let { item("PC bridge", Glyphs.Shield, it) }
             actions.openPc?.let { item("PC monitor", Glyphs.Chip, it) }
             actions.openTerminal?.let { item("Terminal", Glyphs.Terminal, it) }
             item("Graph", Glyphs.Graph, actions.openGraph)
@@ -176,6 +177,8 @@ class SessionActions(
     val openGraph: () -> Unit = {},
     /** Keep-style notes Hermes can read and edit; null when the bridge has none. */
     val openNotes: (() -> Unit)? = null,
+    /** PC bridge admin page (doctor, restart, networks, devices). */
+    val openBridge: (() -> Unit)? = null,
     /** The PC bridge's self-update, offered in the menu when a newer release is out. */
     val bridgeUpdate: BridgeUpdateActions? = null,
     /** The PC page (stats, processes, Claude usage) and the terminal; null hides the button
@@ -967,6 +970,7 @@ class SettingsActions(
     val openVault: () -> Unit = {},
     val repair: () -> Unit = {},
     /** The PC bridge's self-update; null when the bridge can't do it (old, or turned off). */
+    val openBridge: (() -> Unit)? = null,
     val bridgeUpdate: BridgeUpdateActions? = null,
 )
 
@@ -998,6 +1002,10 @@ fun SettingsScreen(
                 SettingsSection("Hermes on your PC", "Shared with the desktop app and messaging.") {
                     StatusPanel(state)
                     if (bridgeCard) actions.bridgeUpdate?.let { BridgeUpdatePanel(it) }
+                    if (bridgeCard) actions.openBridge?.let { open ->
+                        Spacer(Modifier.size(10.dp))
+                        Panel { PanelRow("PC bridge", "Health check and fixes, restart, trusted networks, paired devices, log", Glyphs.Shield, onClick = open) }
+                    }
                     if (bridgeCard) {
                         Spacer(Modifier.size(10.dp))
                         DefaultModelPanel(state, models) { actions.loadModels(); modelSheet = true }
@@ -1330,7 +1338,7 @@ private fun KeepAlivePanel() {
 
 /** A titled settings group: header, one-line hint, then its panels, with even spacing between groups. */
 @Composable
-private fun SettingsSection(title: String, hint: String? = null, content: @Composable () -> Unit) {
+internal fun SettingsSection(title: String, hint: String? = null, content: @Composable () -> Unit) {
     Column(Modifier.fillMaxWidth().padding(top = 20.dp)) {
         Text(title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold,
             modifier = Modifier.padding(start = 4.dp))

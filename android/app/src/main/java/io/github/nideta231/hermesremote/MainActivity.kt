@@ -64,6 +64,8 @@ import io.github.nideta231.hermesremote.data.Notifier
 import io.github.nideta231.hermesremote.data.hiddenFeatures
 import io.github.nideta231.hermesremote.ui.LocalHiddenFeatures
 import io.github.nideta231.hermesremote.ui.ChatActions
+import io.github.nideta231.hermesremote.ui.BridgeAdminActions
+import io.github.nideta231.hermesremote.ui.BridgeAdminScreen
 import io.github.nideta231.hermesremote.ui.ProjectActions
 import io.github.nideta231.hermesremote.ui.CronActions
 import io.github.nideta231.hermesremote.ui.CronScreen
@@ -106,7 +108,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 /** Chat is home; the others are pages pushed on top of it. */
-enum class Page { CHAT, SCHEDULED, PC, TERMINAL, VAULT, GRAPH, NOTES, SETTINGS }
+enum class Page { CHAT, SCHEDULED, PC, TERMINAL, VAULT, GRAPH, NOTES, BRIDGE, SETTINGS }
 
 class MainActivity : ComponentActivity() {
     private val vm: AppViewModel by viewModels()
@@ -314,6 +316,7 @@ class MainActivity : ComponentActivity() {
         val pcState by vm.monitor.state.collectAsState()
         val bridgeUpdateState by vm.bridgeUpdate.state.collectAsState()
         val notesState by vm.notes.state.collectAsState()
+        val bridgeAdminState by vm.bridgeAdmin.state.collectAsState()
         val features by vm.features.collectAsState()
         val unauthorized by vm.unauthorized.collectAsState()
         val pendingShare by vm.pendingShare.collectAsState()
@@ -377,6 +380,7 @@ class MainActivity : ComponentActivity() {
             openVault = { go(Page.VAULT) },
             openGraph = { go(Page.GRAPH) },
             openNotes = if ("notes" in features) ({ go(Page.NOTES) }) else null,
+            openBridge = if ("admin" in features) ({ go(Page.BRIDGE) }) else null,
             bridgeUpdate = if ("bridge_update" in features) BridgeUpdateActions(bridgeUpdateState, vm.bridgeUpdate::check, vm.bridgeUpdate::start) else null,
             openPc = if (hasMonitor) ({ go(Page.PC) }) else null,
             openTerminal = if (hasTerminal) ({ go(Page.TERMINAL) }) else null,
@@ -408,6 +412,7 @@ class MainActivity : ComponentActivity() {
             loadModels = vm::loadModels, setDefaultModel = vm.settings::setDefaultModel, dismissDefaultConfirm = vm.settings::dismissDefaultConfirm,
             openVault = { page = Page.VAULT },
             repair = vm::startRepair,
+            openBridge = if ("admin" in features) ({ page = Page.BRIDGE }) else null,
             bridgeUpdate = if ("bridge_update" in features) BridgeUpdateActions(bridgeUpdateState, vm.bridgeUpdate::check, vm.bridgeUpdate::start) else null,
         )
         val pcActions = PcActions(watch = { vm.monitor.watch() }, unwatch = vm.monitor::stop, refresh = vm.monitor::refresh,
@@ -440,6 +445,11 @@ class MainActivity : ComponentActivity() {
                         Page.SCHEDULED -> CronScreen(cron, hermesProfiles.active.takeIf { hermesProfiles.items.size > 1 }, cronActions, onBack = { page = Page.CHAT })
                         Page.PC -> PcScreen(pcState, pcActions, onBack = { page = Page.CHAT })
                         Page.TERMINAL -> TerminalScreen(open = vm::openTerminal, onBack = { page = Page.CHAT })
+                        Page.BRIDGE -> BridgeAdminScreen(bridgeAdminState, BridgeAdminActions(refresh = vm.bridgeAdmin::refresh,
+                            fix = vm.bridgeAdmin::fix, restart = vm.bridgeAdmin::restart, trust = vm.bridgeAdmin::trustCurrent,
+                            untrust = vm.bridgeAdmin::untrust, revoke = vm.bridgeAdmin::revoke, loadLogs = vm.bridgeAdmin::loadLogs,
+                            update = if ("bridge_update" in features) BridgeUpdateActions(bridgeUpdateState, vm.bridgeUpdate::check, vm.bridgeUpdate::start) else null),
+                            onBack = { page = Page.CHAT })
                         Page.NOTES -> NotesScreen(notesState, NotesActions(watch = vm.notes::watch, unwatch = vm.notes::stop,
                             setQuery = vm.notes::setQuery, setLabel = vm.notes::setLabel, setArchived = vm.notes::setArchived,
                             create = { list, done -> vm.notes.create(list, done) }, edit = { id, f -> vm.notes.edit(id) { f(it) } },

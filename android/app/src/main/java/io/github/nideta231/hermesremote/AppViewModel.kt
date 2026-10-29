@@ -416,6 +416,9 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
     val bridgeUpdate = io.github.nideta231.hermesremote.data.BridgeUpdater(viewModelScope, client = { client },
         describe = ::describe, say = { _toast.value = it }, onBridgeBack = ::bridgeBack)
 
+    val bridgeAdmin = io.github.nideta231.hermesremote.data.BridgeAdmin(viewModelScope, client = { client },
+        describe = ::describe, say = { _toast.value = it }, onBridgeBack = ::bridgeBack)
+
     /** After a bridge restart: reopen the live socket at once (no backoff wait) and reload everything it serves. */
     private fun bridgeBack() {
         val g = gateway
@@ -1048,6 +1051,7 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
         vault.clear()
         monitor.clear()
         bridgeUpdate.clear()
+        bridgeAdmin.clear()
         notes.clear()
         _features.value = emptySet()
         _claudeUsage.value = null
