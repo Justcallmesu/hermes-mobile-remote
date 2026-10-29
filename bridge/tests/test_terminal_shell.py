@@ -85,3 +85,10 @@ def test_pipe_shell_reads_from_an_unbuffered_pipe():
     finally:
         stdout.close()
 
+
+
+def test_frame_says_when_the_shell_wants_bracketed_paste():
+    screen = terminal.Screen(20, 3, reply=lambda d: None)
+    assert screen.frame()["paste"] is False
+    screen.feed(b"\x1b[?2004h$ ")
+    assert screen.frame()["paste"] is True

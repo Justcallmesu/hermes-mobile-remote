@@ -1,8 +1,11 @@
 package io.github.nideta231.hermesremote.ui
 
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.calculateZoom
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -10,19 +13,16 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.KeyboardActions
-import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -31,50 +31,76 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.positionChange
+import androidx.compose.ui.input.pointer.util.VelocityTracker
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.drawText
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.input.ImeAction
-import androidx.compose.ui.text.input.KeyboardCapitalization
-import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextDecoration
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.viewinterop.AndroidView
 import io.github.nideta231.hermesremote.data.TermKeys
 import io.github.nideta231.hermesremote.data.TermLine
+import io.github.nideta231.hermesremote.data.TermPoint
+import io.github.nideta231.hermesremote.data.TermSelection
 import io.github.nideta231.hermesremote.data.TermStatus
 import io.github.nideta231.hermesremote.data.TerminalSession
+import io.github.nideta231.hermesremote.data.selectedText
+import io.github.nideta231.hermesremote.data.wordAt
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
+import kotlin.math.abs
+import kotlin.math.floor
+import kotlin.math.roundToInt
 
-private val TermBg = Color(0xFF0F1115)
-private val TermFg = Color(0xFFD8DEE9)
+// Konsole's default "Breeze" colour scheme, so the phone looks like the terminal on the PC.
+private val TermBg = Color(0xFF232627)
+private val TermFg = Color(0xFFFCFCFC)
+private val CursorColor = Color(0xFFFCFCFC)
+private val SelectionColor = Color(0x663DAEE9)
+private val HandleColor = Color(0xFF3DAEE9)
+private val KeysBg = Color(0xFF1B1E20)
 
-/** pyte colour names and hex values to colours (xterm-ish palette). */
+/** pyte colour names and hex values to colours (Konsole Breeze palette). */
 fun termColor(name: String, fallback: Color): Color = when (name) {
     "default" -> fallback
-    "black" -> Color(0xFF2E3440); "red" -> Color(0xFFE06C75); "green" -> Color(0xFF98C379); "brown", "yellow" -> Color(0xFFE5C07B)
-    "blue" -> Color(0xFF61AFEF); "magenta" -> Color(0xFFC678DD); "cyan" -> Color(0xFF56B6C2); "white" -> Color(0xFFDCDFE4)
-    "brightblack" -> Color(0xFF5C6370); "brightred" -> Color(0xFFFF7A85); "brightgreen" -> Color(0xFFB5E890)
-    "brightbrown", "brightyellow" -> Color(0xFFFFD68A); "brightblue" -> Color(0xFF82C4FF); "brightmagenta" -> Color(0xFFE09AF0)
-    "brightcyan" -> Color(0xFF7FD6E0); "brightwhite" -> Color(0xFFFFFFFF)
+    "black" -> Color(0xFF232627); "red" -> Color(0xFFED1515); "green" -> Color(0xFF11D116); "brown", "yellow" -> Color(0xFFF67400)
+    "blue" -> Color(0xFF1D99F3); "magenta" -> Color(0xFF9B59B6); "cyan" -> Color(0xFF1ABC9C); "white" -> Color(0xFFFCFCFC)
+    "brightblack" -> Color(0xFF7F8C8D); "brightred" -> Color(0xFFC0392B); "brightgreen" -> Color(0xFF1CDC9A)
+    "brightbrown", "brightyellow" -> Color(0xFFFDBC4B); "brightblue" -> Color(0xFF3DAEE9); "brightmagenta" -> Color(0xFF8E44AD)
+    "brightcyan" -> Color(0xFF16A085); "brightwhite" -> Color(0xFFFFFFFF)
     else -> name.takeIf { it.length == 6 }?.toLongOrNull(16)?.let { Color(0xFF000000 or it) } ?: fallback
 }
 
-private val CursorColor = Color(0xFFE8B54A)
-
+/** One row as styled text; [cursorX] draws a block cursor on that column. */
 fun lineText(line: TermLine, cursorX: Int? = null): AnnotatedString = buildAnnotatedString {
     var col = 0
     line.forEach { r ->
@@ -99,114 +125,247 @@ fun lineText(line: TermLine, cursorX: Int? = null): AnnotatedString = buildAnnot
     }
 }
 
+private enum class Gesture { TAP, DRAG, MULTI, LONG }
+
+/**
+ * A shell on the PC, drawn and driven like Termux: the screen is a character grid, typing goes
+ * straight to the shell (no text field), swipe scrolls the scrollback, pinch zooms, long press
+ * selects a word (drag to extend, or drag the handles) with Copy / Paste, and two extra-key rows
+ * give Esc, Ctrl, Alt, Tab and the arrows.
+ */
 @Composable
 fun TerminalScreen(open: (cols: Int, rows: Int) -> TerminalSession?, onBack: () -> Unit) {
-    val fontSize = remember { mutableIntStateOf(12) }
-    val style = TextStyle(fontFamily = FontFamily.Monospace, fontSize = fontSize.intValue.sp, lineHeight = (fontSize.intValue + 3).sp, color = TermFg)
-    val measurer = rememberTextMeasurer()
+    var fontSize by rememberSaveable { mutableFloatStateOf(12f) }
+    val style = TextStyle(fontFamily = FontFamily.Monospace, fontSize = fontSize.sp, lineHeight = (fontSize * 1.25f).sp, color = TermFg)
+    val measurer = rememberTextMeasurer(cacheSize = 256)
     val density = LocalDensity.current
+    val clipboard = LocalClipboardManager.current
+    val haptics = LocalHapticFeedback.current
+    val scope = rememberCoroutineScope()
     var session by remember { mutableStateOf<TerminalSession?>(null) }
     var generation by remember { mutableIntStateOf(0) }
     DisposableEffect(generation) { onDispose { session?.close(); session = null } }
+    var ctrl by remember { mutableStateOf(false) }
+    var alt by remember { mutableStateOf(false) }
+    var input by remember { mutableStateOf<TermInputView?>(null) }
+    var selection by remember { mutableStateOf<TermSelection?>(null) }
+    val st = session?.state?.collectAsState()?.value
+    // Rows scrolled back from the bottom; 0 follows the output.
+    var back by remember { mutableFloatStateOf(0f) }
+    fun send(s: String) { session?.send(s) }
+    fun paste() {
+        val text = clipboard.getText()?.text?.takeIf { it.isNotEmpty() } ?: return
+        back = 0f; selection = null
+        send(TermKeys.paste(text, st?.screen?.bracketedPaste == true))
+    }
 
-    PageScaffold("Terminal", onBack) {
-        Column(Modifier.fillMaxSize().background(TermBg).imePadding().navigationBarsPadding()) {
-            BoxWithConstraints(Modifier.weight(1f).fillMaxWidth().padding(horizontal = 6.dp, vertical = 4.dp)) {
-                val cell = remember(fontSize.intValue) { measurer.measure("M".repeat(10), style) }
-                val cols = with(density) { (maxWidth.toPx() / (cell.size.width / 10f)).toInt() }.coerceIn(20, 300)
-                val rows = with(density) { (maxHeight.toPx() / cell.size.height).toInt() }.coerceIn(5, 200)
-                LaunchedEffect(generation) { if (session == null) session = open(cols, rows) }
-                LaunchedEffect(cols, rows) { session?.resize(cols, rows) }
-                val s = session
-                if (s == null) {
-                    Text("Not connected to your PC.", color = TermFg, modifier = Modifier.padding(12.dp))
-                } else {
-                    val st by s.state.collectAsState()
-                    val list = rememberLazyListState()
-                    val screen = st.screen
-                    val total = screen.scrollback.size + screen.lines.size
-                    LaunchedEffect(total, screen.cursorY) { if (total > 0) list.scrollToItem(total - 1) }
-                    Box(Modifier.fillMaxSize().horizontalScroll(rememberScrollState())) {
-                        LazyColumn(state = list, modifier = Modifier.fillMaxSize()) {
-                            items(screen.scrollback.size) { i -> Text(lineText(screen.scrollback[i]), style = style, softWrap = false, maxLines = 1) }
-                            items(screen.lines.size) { y ->
-                                val cur = if (y == screen.cursorY && screen.cursorVisible && st.status == TermStatus.OPEN) screen.cursorX else null
-                                Text(lineText(screen.lines[y], cur), style = style, softWrap = false, maxLines = 1)
+    Column(Modifier.fillMaxSize().background(TermBg).statusBarsPadding().imePadding().navigationBarsPadding()) {
+        Row(Modifier.fillMaxWidth().height(44.dp).padding(horizontal = 2.dp), verticalAlignment = Alignment.CenterVertically) {
+            IconButton(onClick = onBack) { Icon(Glyphs.Back, "Back", tint = TermFg) }
+            Text(st?.screen?.title?.takeIf { it.isNotBlank() } ?: "Terminal", color = TermFg, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                style = MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f))
+            TextButton(onClick = { fontSize = (fontSize - 1f).coerceAtLeast(7f) }) { Text("A−", color = TermFg) }
+            TextButton(onClick = { fontSize = (fontSize + 1f).coerceAtMost(28f) }) { Text("A+", color = TermFg) }
+            TextButton(onClick = { paste() }) { Text("Paste", color = TermFg) }
+        }
+        BoxWithConstraints(Modifier.weight(1f).fillMaxWidth().padding(horizontal = 4.dp)) {
+            val cell = remember(fontSize) { measurer.measure("M".repeat(20), style).size.let { Size(it.width / 20f, it.height.toFloat()) } }
+            val cols = with(density) { (maxWidth.toPx() / cell.width).toInt() }.coerceIn(20, 400)
+            val rows = with(density) { (maxHeight.toPx() / cell.height).toInt() }.coerceIn(5, 300)
+            LaunchedEffect(generation) { if (session == null) { session = open(cols, rows); delay(150); input?.showKeyboard() } }
+            LaunchedEffect(cols, rows) { session?.resize(cols, rows) }
+
+            val screen = st?.screen
+            val all = remember(screen) { screen?.all.orEmpty() }
+            val shown = screen?.rows ?: rows
+            val maxBack = (all.size - shown).coerceAtLeast(0)
+            var lastScrollback by remember { mutableIntStateOf(0) }
+            LaunchedEffect(screen?.scrollback?.size) {
+                val n = screen?.scrollback?.size ?: 0
+                if (back > 0f && n > lastScrollback) back += (n - lastScrollback)  // keep the rows being read in place
+                lastScrollback = n
+            }
+            val top = (all.size - shown - back.coerceIn(0f, maxBack.toFloat()).roundToInt()).coerceAtLeast(0)
+
+            val latest = rememberUpdatedState(Triple(all, top, cell))
+            val maxBackNow = rememberUpdatedState(maxBack)
+            val handleR = with(density) { 24.dp.toPx() }
+            fun pointAt(o: Offset): TermPoint {
+                val (_, t, c) = latest.value
+                return TermPoint((t + floor(o.y / c.height).toInt()).coerceAtLeast(0), floor(o.x / c.width).toInt().coerceAtLeast(0))
+            }
+            fun handleOffset(p: TermPoint, end: Boolean): Offset {
+                val (_, t, c) = latest.value
+                return Offset((p.col + if (end) 1 else 0) * c.width, (p.row - t + 1) * c.height)
+            }
+            fun scrollBy(rowsDelta: Float) { back = (back + rowsDelta).coerceIn(0f, maxBackNow.value.toFloat()) }
+
+            Canvas(Modifier.fillMaxSize().pointerInput(Unit) {
+                awaitEachGesture {
+                    val down = awaitFirstDown(requireUnconsumed = false)
+                    // Grabbing a selection handle moves that end of the selection.
+                    val sel0 = selection
+                    val grabbed = sel0?.let { s ->
+                        when {
+                            (handleOffset(s.start, false) - down.position).getDistance() < handleR -> 0
+                            (handleOffset(s.end, true) - down.position).getDistance() < handleR -> 1
+                            else -> null
+                        }
+                    }
+                    val kind = if (grabbed != null) Gesture.LONG else withTimeoutOrNull(viewConfiguration.longPressTimeoutMillis) {
+                        var k: Gesture? = null
+                        while (k == null) {
+                            val e = awaitPointerEvent()
+                            val c = e.changes.first()
+                            k = when {
+                                e.changes.size > 1 -> Gesture.MULTI
+                                !c.pressed -> Gesture.TAP
+                                (c.position - down.position).getDistance() > viewConfiguration.touchSlop -> Gesture.DRAG
+                                else -> null
+                            }
+                        }
+                        k
+                    } ?: Gesture.LONG
+                    when {
+                        grabbed != null && sel0 != null -> {
+                            val fixed = if (grabbed == 0) sel0.end else sel0.start
+                            while (true) {
+                                val c = awaitPointerEvent().changes.first()
+                                if (!c.pressed) break
+                                selection = TermSelection(fixed, pointAt(c.position - Offset(0f, handleR / 2)))
+                                c.consume()
+                            }
+                        }
+                        kind == Gesture.TAP -> if (selection != null) selection = null else input?.showKeyboard()
+                        kind == Gesture.LONG -> {
+                            haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                            val p = pointAt(down.position)
+                            val word = latest.value.first.getOrNull(p.row)?.let { wordAt(it, p.row, p.col) } ?: TermSelection(p, p)
+                            selection = word
+                            while (true) {
+                                val c = awaitPointerEvent().changes.first()
+                                if (!c.pressed) break
+                                val q = pointAt(c.position)
+                                selection = if (q < word.start) TermSelection(word.end, q) else TermSelection(word.start, maxOf(word.end, q))
+                                c.consume()
+                            }
+                        }
+                        kind == Gesture.MULTI -> while (true) {
+                            val e = awaitPointerEvent()
+                            if (e.changes.none { it.pressed }) break
+                            val z = e.calculateZoom()
+                            if (z != 1f) fontSize = (fontSize * z).coerceIn(7f, 28f)
+                            e.changes.forEach { it.consume() }
+                        }
+                        else -> {  // swipe through the scrollback, with a fling
+                            val tracker = VelocityTracker()
+                            tracker.addPosition(down.uptimeMillis, down.position)
+                            while (true) {
+                                val c = awaitPointerEvent().changes.first()
+                                if (!c.pressed) break
+                                tracker.addPosition(c.uptimeMillis, c.position)
+                                scrollBy(c.positionChange().y / latest.value.third.height)
+                                c.consume()
+                            }
+                            var v = tracker.calculateVelocity().y / latest.value.third.height  // rows per second
+                            if (abs(v) > 3f) scope.launch {
+                                while (abs(v) > 1f) { scrollBy(v * 0.016f); v *= 0.94f; delay(16) }
                             }
                         }
                     }
-                    if (st.status == TermStatus.CLOSED || st.status == TermStatus.FAILED) {
-                        Surface(color = MaterialTheme.colorScheme.surfaceContainerHigh, shape = RoundedCornerShape(14.dp),
-                            modifier = Modifier.align(Alignment.BottomCenter).padding(12.dp)) {
-                            Row(Modifier.padding(start = 14.dp), verticalAlignment = Alignment.CenterVertically) {
-                                Text(st.message ?: "Disconnected", style = MaterialTheme.typography.bodyMedium)
-                                TextButton(onClick = { session?.close(); session = null; generation++ }) { Text("New shell") }
-                            }
-                        }
-                    } else if (st.status == TermStatus.CONNECTING) {
-                        Box(Modifier.align(Alignment.Center)) { TypingDots(Gold) }
+                }
+            }) {
+                val s = screen ?: return@Canvas
+                val sel = selection
+                val cursorRow = s.scrollback.size + s.cursorY
+                val showCursor = s.cursorVisible && st.status == TermStatus.OPEN
+                for (i in 0 until shown) {
+                    val r = top + i
+                    val line = all.getOrNull(r) ?: continue
+                    val y = i * cell.height
+                    sel?.colsOn(r)?.let { range ->
+                        val to = range.last.coerceAtMost(cols - 1)
+                        if (to >= range.first) drawRect(SelectionColor, Offset(range.first * cell.width, y),
+                            Size((to - range.first + 1) * cell.width, cell.height))
+                    }
+                    val cur = if (showCursor && r == cursorRow) s.cursorX else null
+                    if (line.isEmpty() && cur == null) continue
+                    drawText(measurer.measure(lineText(line, cur), style, softWrap = false, maxLines = 1), topLeft = Offset(0f, y))
+                }
+                if (sel != null) listOf(handleOffset(sel.start, false), handleOffset(sel.end, true)).forEach { h ->
+                    drawCircle(HandleColor, radius = 7.dp.toPx(), center = h + Offset(0f, 7.dp.toPx()))
+                }
+            }
+
+            if (back >= 1f) Surface(color = MaterialTheme.colorScheme.surfaceContainerHighest, shape = RoundedCornerShape(14.dp),
+                modifier = Modifier.align(Alignment.BottomEnd).padding(10.dp).clickable { back = 0f }) {
+                Text("↓ ${back.roundToInt()} lines", Modifier.padding(horizontal = 10.dp, vertical = 6.dp), style = MaterialTheme.typography.labelMedium)
+            }
+            selection?.let { sel ->
+                Surface(color = MaterialTheme.colorScheme.surfaceContainerHighest, shape = RoundedCornerShape(12.dp), shadowElevation = 6.dp,
+                    modifier = Modifier.align(Alignment.TopCenter).padding(top = 6.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        TextButton(onClick = { clipboard.setText(AnnotatedString(selectedText(all, sel))); selection = null }) { Text("Copy") }
+                        TextButton(onClick = { paste() }) { Text("Paste") }
+                        TextButton(onClick = {
+                            selection = TermSelection(TermPoint(0, 0), TermPoint((all.size - 1).coerceAtLeast(0), cols))
+                        }) { Text("Select all") }
+                        IconButton(onClick = { selection = null }) { Icon(Glyphs.Close, "Clear selection", modifier = Modifier.size(18.dp)) }
                     }
                 }
             }
-            TerminalInput(session, fontSize)
+            when (st?.status) {
+                null -> Text("Not connected to your PC.", color = TermFg, modifier = Modifier.padding(12.dp))
+                TermStatus.CONNECTING -> Box(Modifier.align(Alignment.Center)) { TypingDots(Gold) }
+                TermStatus.CLOSED, TermStatus.FAILED -> Surface(color = MaterialTheme.colorScheme.surfaceContainerHigh, shape = RoundedCornerShape(14.dp),
+                    modifier = Modifier.align(Alignment.BottomCenter).padding(12.dp)) {
+                    Row(Modifier.padding(start = 14.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Text(st.message ?: "Disconnected", style = MaterialTheme.typography.bodyMedium)
+                        TextButton(onClick = { session?.close(); session = null; generation++ }) { Text("New shell") }
+                    }
+                }
+                else -> {}
+            }
+            // The keyboard target: invisible, takes every key and sends it straight to the shell.
+            AndroidView(factory = { ctx -> TermInputView(ctx).also { input = it } }, modifier = Modifier.size(1.dp).alpha(0f),
+                update = { v ->
+                    v.onInput = { s -> back = 0f; selection = null; send(s) }
+                    v.modifiers = { ctrl to alt }
+                    v.clearModifiers = { ctrl = false; alt = false }
+                })
+        }
+        ExtraKeys(ctrl, alt, onCtrl = { ctrl = !ctrl }, onAlt = { alt = !alt }, onKeyboard = { input?.showKeyboard() }) { seq ->
+            val out = (if (alt) TermKeys.ESC else "") + seq
+            ctrl = false; alt = false; back = 0f
+            send(out)
         }
     }
 }
 
+/** Termux's default extra keys, two rows under the screen. CTRL/ALT latch for the next key. */
 @Composable
-private fun TerminalInput(session: TerminalSession?, fontSize: androidx.compose.runtime.MutableIntState) {
-    var text by remember { mutableStateOf("") }
-    var ctrl by remember { mutableStateOf(false) }
-    fun send(s: String) { session?.send(s) }
-    Surface(color = MaterialTheme.colorScheme.surfaceContainer) {
-        Column(Modifier.fillMaxWidth()) {
-            Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 4.dp, vertical = 2.dp),
-                horizontalArrangement = Arrangement.spacedBy(2.dp)) {
-                Key("Esc") { send(TermKeys.ESC) }
-                Key("Tab") { send(TermKeys.TAB) }
-                Key("Ctrl", active = ctrl) { ctrl = !ctrl }
-                Key("^C") { send("\u0003") }
-                Key("^D") { send("\u0004") }
-                Key("^L") { send("\u000c") }
-                Key("←") { send(TermKeys.LEFT) }
-                Key("↑") { send(TermKeys.UP) }
-                Key("↓") { send(TermKeys.DOWN) }
-                Key("→") { send(TermKeys.RIGHT) }
-                Key("Home") { send(TermKeys.HOME) }
-                Key("End") { send(TermKeys.END) }
-                Key("PgUp") { send(TermKeys.PGUP) }
-                Key("PgDn") { send(TermKeys.PGDN) }
-                Key("⌫") { send(TermKeys.BACKSPACE) }
-                Key("A-") { fontSize.intValue = (fontSize.intValue - 1).coerceAtLeast(8) }
-                Key("A+") { fontSize.intValue = (fontSize.intValue + 1).coerceAtMost(20) }
+private fun ExtraKeys(ctrl: Boolean, alt: Boolean, onCtrl: () -> Unit, onAlt: () -> Unit, onKeyboard: () -> Unit, send: (String) -> Unit) {
+    val rows = listOf(
+        listOf("ESC" to TermKeys.ESC, "/" to "/", "-" to "-", "HOME" to TermKeys.HOME, "↑" to TermKeys.UP, "END" to TermKeys.END, "PGUP" to TermKeys.PGUP),
+        listOf("TAB" to TermKeys.TAB, "CTRL" to "", "ALT" to "", "←" to TermKeys.LEFT, "↓" to TermKeys.DOWN, "→" to TermKeys.RIGHT, "⌨" to ""),
+    )
+    Column(Modifier.fillMaxWidth().background(KeysBg).padding(vertical = 2.dp)) {
+        rows.forEach { row ->
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
+                row.forEach { (label, seq) ->
+                    val active = (label == "CTRL" && ctrl) || (label == "ALT" && alt)
+                    Box(Modifier.weight(1f).height(40.dp).clickable {
+                        when (label) {
+                            "CTRL" -> onCtrl(); "ALT" -> onAlt(); "⌨" -> onKeyboard()
+                            "/", "-" -> send(if (ctrl) TermKeys.ctrl(label[0]) else label)
+                            else -> send(seq)
+                        }
+                    }, contentAlignment = Alignment.Center) {
+                        Text(label, color = if (active) HandleColor else TermFg, fontFamily = FontFamily.Monospace,
+                            fontSize = 13.sp, fontWeight = if (active) FontWeight.Bold else null)
+                    }
+                }
             }
-            Row(Modifier.fillMaxWidth().padding(start = 8.dp, end = 4.dp, bottom = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-                OutlinedTextField(text, { new ->
-                    // With Ctrl latched, the next typed letter goes as ^letter immediately.
-                    if (ctrl && new.length == text.length + 1) {
-                        send(TermKeys.ctrl(new.last())); ctrl = false
-                    } else text = new
-                }, singleLine = true, modifier = Modifier.weight(1f),
-                    placeholder = { Text("Type a command") },
-                    textStyle = TextStyle(fontFamily = FontFamily.Monospace, fontSize = 14.sp),
-                    keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.None, autoCorrectEnabled = false,
-                        keyboardType = KeyboardType.Ascii, imeAction = ImeAction.Send),
-                    keyboardActions = KeyboardActions(onSend = { send(text + TermKeys.ENTER); text = "" }),
-                    shape = RoundedCornerShape(14.dp))
-                IconButton(onClick = { send(text + TermKeys.ENTER); text = "" }) { Icon(Glyphs.Send, "Run") }
-            }
-        }
-    }
-}
-
-@Composable
-private fun Key(label: String, active: Boolean = false, onClick: () -> Unit) {
-    key(label) {
-        Surface(color = if (active) Gold else MaterialTheme.colorScheme.surfaceContainerHighest, shape = RoundedCornerShape(8.dp),
-            modifier = Modifier.clickable(onClick = onClick)) {
-            Text(label, Modifier.padding(horizontal = 10.dp, vertical = 8.dp), fontFamily = FontFamily.Monospace,
-                style = MaterialTheme.typography.labelMedium,
-                color = if (active) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface)
         }
     }
 }

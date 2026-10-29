@@ -3,27 +3,100 @@
 Releases are git tags; the version in the app comes from the tag. `git log v0.9.0..vX.Y.Z` is the
 authoritative history — this file only summarises what is worth knowing before upgrading.
 
-## Unreleased
+## Contributors
+
+Thank you to everyone who sends pull requests. Credits are on each changelog line, with the pull
+request number.
+
+- **@LastNyx** (Benediktus Aprianto): the Windows tray app (#2), tray *Start at logon* and *Stop
+  trusting* fixes (#4), sign in to a gated gateway from the phone (#14), the Hermes Remote
+  desktop app for Windows and Linux with a PowerShell-free Windows bridge (#19), and keep working in
+  the background with fast reattach, bridge socket parking and linked gateway + bridge hosts (#20).
+- **@Justcallmesu** (Suwanto Ardi Winata): Linux tray install (#5), Hermes profiles (#6, #9, #13),
+  the Linux tray devices fix (#7), roadmap (#8), scheduled jobs (#10), app refactors (#11),
+  subagents (#12), share to Hermes (#15), message search (#16), subagent output and steer (#17)
+  and bridge metrics (#18).
+
+## v1.27.0
+
+Thanks to **@LastNyx** for this release.
 
 - Keep connected in the background (Settings, on by default): after you swipe the app away, the
   phone stays connected while Hermes works on the PC: a running turn, a subagent, a background
   process, or an active `/loop` or `/heartbeat`. It keeps going for 5 minutes after the last of
   them ends (1 or 15 minutes can be chosen). Turn it off to stop the connection as soon as the
-  reply is done.
+  reply is done. By **@LastNyx** (#20)
 - A dropped connection (Wi-Fi change, airplane mode, a sleeping screen) reconnects at once and
-  resumes every running or waiting chat, not only the open one.
+  resumes every running or waiting chat, not only the open one. By **@LastNyx** (#20)
 - Bridge: when the phone drops, the bridge keeps its connection to Hermes open for the device for
   `park_seconds` (default 300; 0 turns this off), so a quick return picks the same session back
-  up. Needs the updated bridge.
+  up. Needs the updated bridge. By **@LastNyx** (#20)
 - Bridge: the phone may call the read-only `session.control.read`, which shows `/loop` and
-  `/heartbeat` state. Needs the updated bridge.
+  `/heartbeat` state. Needs the updated bridge. By **@LastNyx** (#20)
 - A PC that has both a bridge and a gateway sign-in can be linked into one entry tagged
   "Gateway + Bridge". The app uses the bridge and falls back to the gateway when the bridge cannot
   be reached, then returns to the bridge when it answers again. The connection row says "via
   Bridge" or "via Gateway". After a gateway sign-in the app offers to pair the PC's bridge too;
-  the host menu has *Link with...* and *Unlink*.
+  the host menu has *Link with...* and *Unlink*. By **@LastNyx** (#20)
 - Chats resumed from the phone are now labelled `desktop` in Hermes' live session, like new ones
-  already were (they were labelled `tui` before). The stored chat row is not changed.
+  already were (they were labelled `tui` before). The stored chat row is not changed. By **@LastNyx** (#20)
+
+## v1.26.0
+
+Thanks to **@LastNyx** and **@Justcallmesu**: most of this release is theirs.
+
+### Terminal
+- The Terminal now works like Termux on the PC's shell: the screen is a character grid in Konsole's
+  Breeze colours, and typing goes straight to the shell (no text box), so Tab completion, arrow keys,
+  Ctrl+C, vim, htop and less behave like on the PC. A hardware keyboard works too, F1 to F12 included.
+- Long press selects a word; drag to extend it, or drag either handle. *Copy*, *Paste* and *Select all*
+  sit above the selection. *Paste* in the top bar pastes the clipboard; multi-line text is pasted as one
+  block where the shell supports it, instead of running each line.
+- Swipe to scroll back through the output (with fling), tap *↓ N lines* to jump back to the bottom.
+  Pinch to zoom, or A− / A+.
+- Termux's extra keys under the screen: ESC / - HOME ↑ END PGUP and TAB CTRL ALT ← ↓ → plus a
+  keyboard button. CTRL and ALT latch for the next key.
+- Bridge: screen frames say when the shell turned on bracketed paste. Older bridges still work
+  (pastes are sent plain).
+
+### Subagents
+- Subagents look like the desktop app: each `delegate_task` call becomes a card in the chat with one
+  row per subagent showing its goal, model and running time, a spinner, check or red mark, and one line
+  of what it is doing now (`Read File("README.md")`, its thinking, then its summary). The line ticks
+  over as it works.
+- Tap a row for its last few steps, *Output* (live transcript), *Steer*, *Stop*, *Open chat* (the
+  subagent's own session) and its token use. A background delegation that nothing is watching shows a
+  grey dot instead of spinning forever. A timed-out subagent shows as failed, with the reason.
+- Subagents with no card on screen (a child of a child, or one whose call is outside the loaded
+  history) are listed under the transcript as before.
+
+### Bridge
+- A bridge restart or update no longer kills Hermes. The bridge is only a tunnel now: the Hermes it
+  starts runs in its own systemd scope, outside the bridge service, so running chats, subagents and
+  background jobs keep going while the bridge restarts. Needs the updated bridge.
+
+### From contributors
+- Share to Hermes: pick *Hermes Remote* in another app's share menu (Chrome, WhatsApp, Files,
+  Gallery) to bring text, links, pictures or files into a chat. A sheet asks for *New chat* or the
+  chat on screen; the text lands in the composer and the rest is attached, nothing is sent until you
+  tap Send. Usual limits apply (6 pictures, 6 files of 10 MB); anything over them is left out with a
+  note. By **@Justcallmesu** (#15)
+- Drawer search now finds chats by what was said in them, not only by title. After a short pause
+  (two or more characters) the app asks Hermes' own message search on the PC; chats it finds that
+  the list doesn't already show appear under *In messages* with the matching line. Needs the
+  updated bridge (`GET /v1/sessions/search`); an older bridge keeps the title filter. By **@Justcallmesu** (#16)
+- Subagents: a running subagent has *Output*, its live transcript (refreshed every couple of
+  seconds while open), and *Steer*, to send it an instruction it picks up after its current step.
+  Needs the updated bridge. By **@Justcallmesu** (#17)
+- Bridge metrics: `GET /metrics` serves Prometheus text with REST request counts and durations,
+  live-socket connections and frames (forwarded and refused, by reason), Hermes RPC round-trip time
+  by method, how long approvals and clarify questions wait for an answer, turns by outcome, and how
+  many devices are connected. It needs a token even on loopback: the new
+  `~/.config/hermes-remote/metrics.token` (opens the metrics only, for a scraper) or a device token.
+  Labels are route templates and allowlisted method names; no ids, titles, prompts, paths or device
+  names. `hermes-remote-bridge metrics [--json]` prints a summary. Off with `metrics = false`. By **@Justcallmesu** (#18)
+
+### Desktop app (Windows and Linux), by **@LastNyx** (#19)
 - New desktop app, **Hermes Remote**, for Windows and Linux (`desktop/`). It sets up the bridge on first run, shows status, devices, trusted networks and the doctor report, pairs phones with an inline QR code, and has a Settings page.
 - Windows: the app starts and stops the bridge itself, so quitting the app stops the bridge. If the app crashes, nothing restarts it; start Hermes Remote from the Start menu. Start at logon is a "Hermes Remote" entry under Run (visible in Task Manager > Startup).
 - Windows: the tray icon opens a flyout at the taskbar corner (left click); right click gives Open, Start/Stop bridge, Pair a device and Quit. Installer is per user, needs no admin, and is unsigned, so SmartScreen shows "More info > Run anyway".
@@ -125,19 +198,19 @@ authoritative history — this file only summarises what is worth knowing before
 - Switching between paired PCs no longer loses the profile dropdown. A reply from the PC you just
   left (its profile list, chats, scheduled jobs, settings or vault) could land on the one you
   switched to and replace its data; every reply is now checked against the PC and profile it was
-  asked for.
+  asked for. By **@Justcallmesu** (#13)
 - Subagents. When the agent delegates work, a card under the chat shows each subagent: its task,
   current tool, tool count, model and running time, then how it ended. *Stop* ends one subagent
-  without stopping the chat. Opening a chat mid-run catches up on the ones already running.
-- Bridge: the phone may call `subagent.list` and `subagent.interrupt` (needs the updated bridge).
+  without stopping the chat. Opening a chat mid-run catches up on the ones already running. By **@Justcallmesu** (#12)
+- Bridge: the phone may call `subagent.list` and `subagent.interrupt` (needs the updated bridge). By **@Justcallmesu** (#12)
 - Sign in to a gateway: the phone can now connect straight to a gated Hermes gateway (`hermes serve`
   behind its own login), with no bridge and nothing installed on the PC. In Add host, choose
   "Sign in to a gateway" and type its address. The gateway's login page opens in a browser tab; you
   type the password there, never in the app. Tokens are kept in the Android Keystore and refreshed
-  automatically. Plain `http` is accepted only for Tailscale or LAN addresses. Pairing a bridge is unchanged.
+  automatically. Plain `http` is accepted only for Tailscale or LAN addresses. Pairing a bridge is unchanged. By **@LastNyx** (#14)
 - Gateway hosts hide the features that need the bridge: the project
   description (IDEA.md), chat file download, the bridge status card, and the default-model and
-  approval settings. Notifications while the app is closed do not work for a gateway host yet.
+  approval settings. Notifications while the app is closed do not work for a gateway host yet. By **@LastNyx** (#14)
 - Updates can be installed before pairing: the pairing screen shows "Version X is available" when a
   newer app is out; tap it for what's new and Update now. Before, the update was only offered in the
   drawer and Settings, which an unpaired phone never reaches.
@@ -293,20 +366,22 @@ authoritative history — this file only summarises what is worth knowing before
   under the PC name; tap it to switch. The chat list, Settings (approval mode, default model) and
   new chats then belong to that profile. Each PC remembers its choice, and a notification opens
   its chat in the right profile. Needs the updated bridge (run `./install.sh` on the PC); with an
-  older bridge the app stays on the default profile as before.
+  older bridge the app stays on the default profile as before. By **@Justcallmesu** (#6)
 - The chat header names the Hermes profile the chat runs in (next to its status), when the PC has
-  more than one profile.
+  more than one profile. By **@Justcallmesu** (#9)
 - Bridge: `GET /v1/profiles` lists them, and the sessions, approvals and default model endpoints
   take `?profile=` so they act on one profile. The default profile works exactly as before. A new
-  `allowed_profiles` key in `config.toml` limits which profiles the phone may use (empty: all).
+  `allowed_profiles` key in `config.toml` limits which profiles the phone may use (empty: all). By **@Justcallmesu** (#6)
 - Scheduled jobs. *Scheduled* in the drawer lists the cron jobs of the Hermes profile in use with
   their schedule, next and last run and last error; tap one for its recent runs. Run now, pause and
-  resume work from the phone; creating and editing jobs stays on the PC.
+  resume work from the phone; creating and editing jobs stays on the PC. By **@Justcallmesu** (#10)
 - Bridge: `GET /v1/cron/jobs`, `GET /v1/cron/jobs/{id}/runs` and `POST /v1/cron/jobs/{id}/pause|resume|trigger`,
-  all per profile. Prompts, scripts and delivery targets are not sent to the phone.
+  all per profile. Prompts, scripts and delivery targets are not sent to the phone. By **@Justcallmesu** (#10)
 - Bridge: a request naming a profile is authenticated first, so an unpaired caller gets 401 and
   learns nothing about which profiles exist.
-- Linux tray: a revoked device no longer stays in the Devices menu.
+- Linux tray: a revoked device no longer stays in the Devices menu. By **@Justcallmesu** (#7)
+- Linux: the tray installs as an app that starts at login, and the bridge CLI goes on PATH. By **@Justcallmesu** (#5)
+- Windows tray: *Start at logon* and *Stop trusting* now actually work. By **@LastNyx** (#4)
 
 ## v1.9.3
 

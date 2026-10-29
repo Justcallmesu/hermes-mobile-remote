@@ -108,6 +108,10 @@ object Glyphs {
     val Folder = line("M3 6h6l2 2h10v11H3z")
     val Person = line("M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8z", "M4 21a8 8 0 0 1 16 0")
     val Clock = line("M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18z", "M12 7v5l3 2")
+    /** The desktop's "agent" codicon: a small robot head. */
+    val Agent = line("M6 8h12v10H6z", "M12 4v4", "M9.5 12.5h.01", "M14.5 12.5h.01", "M10 15.5h4", "M3 12v3", "M21 12v3")
+    val Alert = line("M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18z", "M12 8v5", "M12 16h.01")
+    val CheckCircle = line("M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18z", "M8 12.5l2.5 2.5L16 9.5")
 }
 
 /** A status dot that breathes while [pulse] is on (live run, reconnecting). */
