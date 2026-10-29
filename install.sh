@@ -76,6 +76,11 @@ mkdir -p "$CONF_DIR"; chmod 700 "$CONF_DIR"
 [[ -f "$CONF_DIR/config.toml" ]] || printf '# See bridge/hermes_remote_bridge/config.py for all keys.\nlan = true\n' > "$CONF_DIR/config.toml"
 mkdir -p "$LOCAL_BIN"
 link_command "$BIN" hermes-remote-bridge
+# The notes skill, so Hermes can read and edit the app's Notes. Never overwrite one the user changed.
+SKILL_DST="$HERMES_HOME/skills/productivity/personal-notes"
+if [[ ! -e "$SKILL_DST/SKILL.md" ]]; then
+  mkdir -p "$SKILL_DST" && cp "$BRIDGE/skills/personal-notes/SKILL.md" "$SKILL_DST/SKILL.md" && info "Hermes skill installed: personal-notes"
+fi
 info "installed into $BRIDGE/.venv; command: hermes-remote-bridge"
 [[ ":$PATH:" == *":$LOCAL_BIN:"* ]] || info "Add $LOCAL_BIN to your PATH to use it without the full path."
 
