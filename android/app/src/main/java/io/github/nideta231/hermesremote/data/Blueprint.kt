@@ -34,16 +34,19 @@ object BpLimits {
  * [agingDays] 0 = off. A null field is "not chosen": a board then follows the global default, and the
  * global default follows the built-in one.
  */
-data class BpSettings(val newCards: String? = null, val agingDays: Int? = null) {
+data class BpSettings(val newCards: String? = null, val agingDays: Int? = null, val stickyAdd: Boolean? = null) {
     /** This over [fallback], field by field, then the built-in values. */
-    fun over(fallback: BpSettings) = BpSettings(newCards ?: fallback.newCards ?: NEW_CARDS[0], agingDays ?: fallback.agingDays ?: AGING_DAYS[0])
+    fun over(fallback: BpSettings) = BpSettings(newCards ?: fallback.newCards ?: NEW_CARDS[0], agingDays ?: fallback.agingDays ?: AGING_DAYS[0],
+        stickyAdd ?: fallback.stickyAdd ?: false)
     fun toJson(): JSONObject = JSONObject().put("new_cards", newCards ?: "default").put("aging_days", agingDays ?: "default")
+        .put("sticky_add", stickyAdd ?: "default")
 
     companion object {
         val NEW_CARDS = listOf("bottom", "top")
         val AGING_DAYS = listOf(0, 3, 7, 14, 30)
         fun parse(o: JSONObject?) = BpSettings(o?.optString("new_cards")?.takeIf { it in NEW_CARDS },
-            o?.takeIf { it.has("aging_days") }?.optInt("aging_days", -1)?.takeIf { it in AGING_DAYS })
+            o?.takeIf { it.has("aging_days") }?.optInt("aging_days", -1)?.takeIf { it in AGING_DAYS },
+            (o?.opt("sticky_add") as? Boolean))
     }
 }
 

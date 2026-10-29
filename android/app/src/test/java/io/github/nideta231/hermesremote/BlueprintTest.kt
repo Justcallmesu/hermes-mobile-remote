@@ -51,17 +51,17 @@ class BlueprintSettingsTest {
              "diagram":{"nodes":[],"edges":[]},
              "board":{"columns":[{"id":"w","name":"Working","limit":2},{"id":"d","name":"Done"}],"cards":[]},"log":[]}"""))
         org.junit.Assert.assertEquals(io.github.nideta231.hermesremote.data.BpSettings("top", 7), bp.settings)
-        org.junit.Assert.assertEquals(io.github.nideta231.hermesremote.data.BpSettings("top", 7), bp.effective)
+        org.junit.Assert.assertEquals(io.github.nideta231.hermesremote.data.BpSettings("top", 7, false), bp.effective)
         org.junit.Assert.assertEquals(2, bp.columns[0].limit)
         org.junit.Assert.assertTrue(bp.columns[0].over(3) && !bp.columns[0].over(2))
         org.junit.Assert.assertEquals(null, bp.columns[1].limit)
         val old = io.github.nideta231.hermesremote.data.Blueprint.parse(org.json.JSONObject("""{"project":{"id":"p"},"settings":{"new_cards":"sideways","aging_days":5}}"""))
         org.junit.Assert.assertEquals(io.github.nideta231.hermesremote.data.BpSettings(), old.settings)
-        org.junit.Assert.assertEquals(io.github.nideta231.hermesremote.data.BpSettings("bottom", 0), old.effective)
+        org.junit.Assert.assertEquals(io.github.nideta231.hermesremote.data.BpSettings("bottom", 0, false), old.effective)
         // A board without its own choice follows the global default; its own choice wins.
         val mixed = io.github.nideta231.hermesremote.data.Blueprint.parse(org.json.JSONObject(
-            """{"project":{"id":"p"},"settings":{"aging_days":3},"defaults":{"new_cards":"top","aging_days":14}}"""))
-        org.junit.Assert.assertEquals(io.github.nideta231.hermesremote.data.BpSettings("top", 3), mixed.effective)
+            """{"project":{"id":"p"},"settings":{"aging_days":3},"defaults":{"new_cards":"top","aging_days":14,"sticky_add":true}}"""))
+        org.junit.Assert.assertEquals(io.github.nideta231.hermesremote.data.BpSettings("top", 3, true), mixed.effective)
         org.junit.Assert.assertEquals("default", io.github.nideta231.hermesremote.data.BpSettings(agingDays = 3).toJson().getString("new_cards"))
     }
 

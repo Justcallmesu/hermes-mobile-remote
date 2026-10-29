@@ -39,3 +39,6 @@ internal fun edgeScroll(pos: Float, start: Float, end: Float, zone: Float, max: 
         else -> 0f
     }
 }
+
+/** The index a dragged column lands at among the other columns, from their centre x (left to right). */
+internal fun columnSlot(centers: List<Float>, fingerX: Float): Int = centers.count { it < fingerX }

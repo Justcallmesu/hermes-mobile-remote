@@ -34,6 +34,12 @@ request number.
   every board on the PC. A board's own Board settings now offer *Global (…)* for each choice (the
   default) or a value of its own, with a link to the global ones. Hermes follows the same settings.
   Needs the updated bridge.
+- **Drag columns**: long-press a column's header and drag it left or right; a gold bar shows where it
+  lands and the board scrolls near the edges. The column menu's Move left/right still works.
+- **Sticky Add card** (Board settings > Add card button): pins "+ Add card" at the bottom of each column
+  instead of after the last card. Per board or global, like the other board settings.
+- **More instruction templates**: "work on Working first, ask which Todo card", "attach the result",
+  "check open pull requests first", "comment how it was tested", "commit per card, release once" and more.
 
 ## v1.35.0
 

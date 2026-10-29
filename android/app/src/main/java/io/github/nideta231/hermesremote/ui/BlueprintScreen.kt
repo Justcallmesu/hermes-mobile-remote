@@ -223,7 +223,8 @@ fun BlueprintScreen(projectId: String, projectName: String, state: BlueprintStat
     if (boardSettings && bp != null) BoardSettingsDialog(bp.settings, bp.defaults.over(BpSettings()), onDismiss = { boardSettings = false },
         onGlobal = { boardSettings = false; actions.openGlobalSettings() }) { st ->
         boardSettings = false
-        if (st != bp.settings) actions.apply(arrayOf(BpOp.of("settings.set", "new_cards" to (st.newCards ?: "default"), "aging_days" to (st.agingDays ?: "default")))) {}
+        if (st != bp.settings) actions.apply(arrayOf(BpOp.of("settings.set", "new_cards" to (st.newCards ?: "default"), "aging_days" to (st.agingDays ?: "default"),
+            "sticky_add" to (st.stickyAdd ?: "default")))) {}
     }
     if (confirmTrash) AlertDialog(onDismissRequest = { confirmTrash = false }, title = { Text("Remove this blueprint?") },
         text = { Text("It goes to the trash (drawer > project long-press > Blueprint trash) and can be restored.") },
@@ -543,7 +544,28 @@ private fun BoardView(bp: Blueprint, actions: BlueprintActions) {
             }
         }
     }
+    // Column drag: long-press a column's header and drag it sideways.
+    var draggingCol by remember { mutableStateOf<String?>(null) }
+    var colFinger by remember { mutableStateOf(Offset.Zero) }
+    var colStart by remember { mutableStateOf(Offset.Zero) }
+    var colStartScroll by remember { mutableStateOf(0) }
+    fun columnTarget(): Int? {
+        val id = draggingCol ?: return null
+        val centers = bpNow.columns.filter { it.id != id }.mapNotNull { c -> colBounds[c.id]?.let { it.center.x } }
+        return columnSlot(centers, colFinger.x)
+    }
+    LaunchedEffect(draggingCol) {
+        if (draggingCol == null) return@LaunchedEffect
+        val zone = with(density) { 64.dp.toPx() }
+        val speed = with(density) { 12.dp.toPx() }
+        while (true) {
+            withFrameNanos { }
+            boardBounds?.let { b -> edgeScroll(colFinger.x, b.left, b.right, zone, speed).takeIf { it != 0f }?.let { scroll.dispatchRawDelta(it) } }
+        }
+    }
+    val colTarget = columnTarget()
     val drop = dropTarget()
+    val sticky = bp.effective.stickyAdd == true
 
     Column(Modifier.fillMaxSize()) {
         if (bp.tags.isNotEmpty() || bp.needsYou.isNotEmpty()) Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 12.dp, vertical = 4.dp),
@@ -569,11 +591,35 @@ private fun BoardView(bp: Blueprint, actions: BlueprintActions) {
                     }
                     val slotHeight = with(density) { (dragged?.let { cardBounds[it.id]?.height } ?: 0f).toDp() }.coerceAtLeast(48.dp)
                     val tint = bpColor(col.color, dark)
-                    Surface(Modifier.width(280.dp).fillMaxHeight().onGloballyPositioned { colBounds[col.id] = it.boundsInRoot() },
+                    val movingCol = draggingCol == col.id
+                    Surface(Modifier.width(280.dp).fillMaxHeight().onGloballyPositioned { if (!movingCol) colBounds[col.id] = it.boundsInRoot() }
+                        .zIndex(if (movingCol) 5f else 0f)
+                        .graphicsLayer {
+                            if (movingCol) {
+                                translationX = colFinger.x - colStart.x + (scroll.value - colStartScroll)
+                                alpha = 0.92f; scaleX = 1.02f; scaleY = 1.02f
+                            }
+                        },
                         shape = RoundedCornerShape(16.dp), color = MaterialTheme.colorScheme.surfaceContainer,
-                        border = if (target) BorderStroke(2.dp, Gold) else null) {
+                        shadowElevation = if (movingCol) 12.dp else 0.dp,
+                        border = if (target || movingCol) BorderStroke(2.dp, Gold) else null) {
                         Column {
-                            Row(Modifier.fillMaxWidth().padding(start = 12.dp, end = 2.dp, top = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Row(Modifier.fillMaxWidth()
+                                .pointerInput(col.id) {
+                                    detectDragGesturesAfterLongPress(
+                                        onDragStart = { at ->
+                                            draggingCol = col.id; colStartScroll = scroll.value
+                                            colFinger = (colBounds[col.id]?.topLeft ?: Offset.Zero) + at; colStart = colFinger
+                                        },
+                                        onDrag = { ch, d -> ch.consume(); colFinger += d },
+                                        onDragEnd = {
+                                            val id = draggingCol; val to = columnTarget(); draggingCol = null
+                                            if (id != null && to != null && to != bpNow.columns.indexOfFirst { it.id == id })
+                                                actions.apply(arrayOf(BpOp.of("column.move", "id" to id, "index" to to))) {}
+                                        },
+                                        onDragCancel = { draggingCol = null })
+                                }
+                                .padding(start = 12.dp, end = 2.dp, top = 6.dp), verticalAlignment = Alignment.CenterVertically) {
                                 if (tint != Color.Unspecified) Box(Modifier.size(10.dp).background(tint, CircleShape))
                                 Spacer(Modifier.width(8.dp))
                                 Text(col.name, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f), maxLines = 1)
@@ -644,11 +690,15 @@ private fun BoardView(bp: Blueprint, actions: BlueprintActions) {
                                     }
                                 }
                                 if (placeAt == cards.size) item(key = "drop-slot") { DropSlot(slotHeight, Modifier.animateItem()) }
-                                item {
+                                if (!sticky) item {
                                     TextButton(onClick = { addingTo = col.id }, modifier = Modifier.fillMaxWidth()) {
                                         Icon(Glyphs.Plus, null, Modifier.size(16.dp)); Spacer(Modifier.width(6.dp)); Text("Add card")
                                     }
                                 }
+                            }
+                            // Sticky: pinned under the list, reachable however long the column is.
+                            if (sticky) TextButton(onClick = { addingTo = col.id }, modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp)) {
+                                Icon(Glyphs.Plus, null, Modifier.size(16.dp)); Spacer(Modifier.width(6.dp)); Text("Add card")
                             }
                         }
                     }
@@ -659,6 +709,16 @@ private fun BoardView(bp: Blueprint, actions: BlueprintActions) {
                         Icon(Glyphs.Plus, null, Modifier.size(16.dp)); Spacer(Modifier.width(6.dp)); Text("Add column")
                     }
                 }
+            }
+            // Where a dragged column will land: a gold bar between columns (drawn over them, so nothing shifts).
+            draggingCol?.let { id ->
+                val others = bp.columns.filter { it.id != id }
+                val to = colTarget ?: return@let
+                val gap = with(density) { 5.dp.toPx() }
+                val x = (if (to < others.size) colBounds[others[to].id]?.left?.minus(gap) else others.lastOrNull()?.let { colBounds[it.id]?.right?.plus(gap) }) ?: return@let
+                val left = boardBounds?.left ?: 0f
+                Box(Modifier.fillMaxHeight().width(4.dp).offset { IntOffset((x - left - 2.dp.toPx()).roundToInt(), 0) }
+                    .background(Gold, RoundedCornerShape(2.dp)))
             }
             // The card under the finger while dragging.
             dragging?.let { c ->
@@ -737,6 +797,16 @@ internal fun BoardSettingsFields(st: BpSettings, global: BpSettings?, onChange: 
         if (global != null) FilterChip(st.agingDays == null, { onChange(st.copy(agingDays = null)) }, { Text("Global (${agingLabel(global.agingDays)})") }, colors = themedChip())
         BpSettings.AGING_DAYS.forEach { d ->
             FilterChip(st.agingDays == d || (global == null && st.agingDays == null && d == 0), { onChange(st.copy(agingDays = d)) }, { Text(agingLabel(d)) }, colors = themedChip())
+        }
+    }
+    Text("Add card button", style = MaterialTheme.typography.labelLarge)
+    Text("Sticky keeps \"+ Add card\" pinned at the bottom of each column instead of after the last card.",
+        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        fun label(v: Boolean?) = if (v == true) "Sticky" else "After the cards"
+        if (global != null) FilterChip(st.stickyAdd == null, { onChange(st.copy(stickyAdd = null)) }, { Text("Global (${label(global.stickyAdd)})") }, colors = themedChip())
+        listOf(true, false).forEach { v ->
+            FilterChip(st.stickyAdd == v || (global == null && st.stickyAdd == null && !v), { onChange(st.copy(stickyAdd = v)) }, { Text(label(v)) }, colors = themedChip())
         }
     }
 }
@@ -969,6 +1039,19 @@ private fun CommentsSection(card: BpCard, bp: Blueprint, actions: BlueprintActio
         }
 }
 
+/** Ready-made rules for the agent instructions dialog, short enough to read at a glance. */
+internal val InstructionTemplates = listOf(
+    "Read the project docs first.",
+    "Work on the Working column first. Ask me which Todo card to take, unless I said to finish them all.",
+    "Always attach the result (file, screenshot or report) to the card when work is done.",
+    "Check for open pull requests first and put them at the top of Todo.",
+    "Never touch LIVE unless I ask.",
+    "Ask on the card before anything risky.",
+    "Comment on each card how it was tested and what was not checked.",
+    "Commit and push after every finished card; release once at the end.",
+    "Do every Todo card, then report on Telegram.",
+)
+
 /** Standing rules for any agent on this project; sent with every ask and shown first in Hermes' view of the blueprint. */
 @Composable
 private fun InstructionsDialog(initial: String, handOver: Boolean, onDismiss: () -> Unit, onSave: (String) -> Unit) {
@@ -979,9 +1062,10 @@ private fun InstructionsDialog(initial: String, handOver: Boolean, onDismiss: ()
                 style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             OutlinedTextField(text, { text = it }, minLines = 5, modifier = Modifier.fillMaxWidth(),
                 placeholder = { Text("e.g. Never deploy to LIVE unless I ask. Read the docs folder first. Report on Telegram when a card is done.") })
-            Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                listOf("Never touch LIVE unless I ask.", "Read the project docs first.", "Do every Todo card, then report on Telegram.",
-                    "Ask on the card before anything risky.").forEach { s ->
+            Text("Templates (tap to add or remove)", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            @OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+            androidx.compose.foundation.layout.FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                InstructionTemplates.forEach { s ->
                     FilterChip(s in text, { text = if (s in text) text.replace(s, "").replace(Regex("\n{2,}"), "\n").trim() else (text.trim() + "\n" + s).trim() },
                         { Text(s) }, colors = themedChip())
                 }

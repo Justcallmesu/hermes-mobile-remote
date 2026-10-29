@@ -1,5 +1,6 @@
 package io.github.nideta231.hermesremote
 
+import io.github.nideta231.hermesremote.ui.columnSlot
 import io.github.nideta231.hermesremote.ui.dropSlot
 import io.github.nideta231.hermesremote.ui.edgeScroll
 import io.github.nideta231.hermesremote.ui.fullIndex
@@ -40,5 +41,12 @@ class BoardDragTest {
         assertEquals(10f, edgeScroll(1200f, 0f, 1000f, 100f, 10f), 0f)
         assertEquals(5f, edgeScroll(950f, 0f, 1000f, 100f, 10f), 0.001f)
         assertEquals(0f, edgeScroll(10f, 0f, 150f, 100f, 10f), 0f) // too short to have edges
+    }
+
+    @Test fun columnLandsBetweenTheCentresAroundTheFinger() {
+        val centers = listOf(100f, 400f, 700f)
+        assertEquals(0, columnSlot(centers, 50f))
+        assertEquals(2, columnSlot(centers, 500f))
+        assertEquals(3, columnSlot(centers, 900f))
     }
 }
