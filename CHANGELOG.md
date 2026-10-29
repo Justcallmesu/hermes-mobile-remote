@@ -17,6 +17,15 @@ request number.
   subagents (#12), share to Hermes (#15), message search (#16), subagent output and steer (#17)
   and bridge metrics (#18).
 
+## Unreleased
+
+- Bridge stats on the phone: the PC page has a *Bridge* card with what `hermes-remote-bridge
+  metrics` prints (devices connected, requests and failures, Hermes reply time, approvals waiting
+  and how long they took, turns). It folds to one line; tap to unfold. Uses the bridge's metrics
+  (1.26+) with the phone's own token, so nothing to set up. **@Justcallmesu** (#21)
+- Linux tray: an *Activity* line (devices connected, turns, approvals waiting) and *Bridge
+  stats...*, which shows the full summary. **@Justcallmesu** (#21)
+
 ## v1.34.0
 
 - **File and picture info**: an *i* button on every file card and in the full-screen picture viewer

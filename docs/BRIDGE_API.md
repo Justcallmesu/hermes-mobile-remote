@@ -116,6 +116,10 @@ phone. Either token works:
 - a paired device's token. Works, but a device token can drive Hermes: don't put one in a
   Prometheus config.
 
+**Where people see it.** The app's PC page has a *Bridge* card (the phone reads `?format=json`
+with its own device token every ~15 s while the page is open); the Linux tray shows an *Activity*
+line and *Bridge stats...* (the `metrics` CLI). Both hide themselves on a bridge without metrics.
+
 **What is never in it.** Labels come from closed sets only: route templates
 (`/v1/sessions/{session_id}`, never the path or query), allowlisted RPC method names, fixed
 reasons and outcomes. No session ids or titles, prompts, message text, file paths, device names or

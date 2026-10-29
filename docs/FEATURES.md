@@ -68,6 +68,12 @@ swap, network and disk I/O, per-core bars, and a CPU/RAM/temperature history (1 
 recorded by the bridge every 10 s. Alerts show when the CPU stayed above 90 °C or RAM above 95%
 for 5 minutes. Refreshes every 3 s while open; nothing polls when it is closed.
 
+**Bridge stats.** A *Bridge* card on the PC page: version and uptime, devices connected, requests
+and failures, how fast Hermes answers (average and p95), live-link traffic, approvals asked and
+how long they waited, and turns started/finished. Tap to unfold. The counters start at zero when
+the bridge restarts. Needs a bridge with metrics (1.26+); the Linux tray has the same figures under
+*Bridge stats...*.
+
 **Processes.** Every process with CPU% and memory, sortable and filterable by name, command or
 PID. Tap one to Stop (ask it to quit) or Force stop (kill).
 

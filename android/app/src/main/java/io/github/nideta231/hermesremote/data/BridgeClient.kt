@@ -241,6 +241,9 @@ class BridgeClient(
 
     suspend fun monitorNow(live: Boolean = false): PcNow = parseNow(call("GET", "/v1/monitor/now", mapOf("live" to live)))
 
+    /** The bridge's own metrics (this device's token opens them). 404: an older bridge, or `metrics = false`. */
+    suspend fun bridgeStats(): BridgeStats = parseBridgeStats(call("GET", "/metrics", mapOf("format" to "json")))
+
     suspend fun monitorHistory(range: String): PcHistory = parseHistory(call("GET", "/v1/monitor/history", mapOf("range" to range)))
 
     /** (total matching, the first [limit] sorted by [sort]). */
