@@ -150,6 +150,22 @@ def test_board_settings_new_cards_on_top_and_column_limits(tmp_path):
         s.apply("p1", [{"op": "column.update", "id": "Working", "limit": "lots"}])
 
 
+def test_comments_and_start_remember_the_hermes_chat(tmp_path):
+    s = bp.BlueprintStore(tmp_path)
+    s.create("p1", "Shop")
+    doc, ap = s.apply("p1", [{"op": "card.add", "title": "Login", "column": "Todo"}])
+    cid = ap[0]["id"]
+    doc, _ = s.apply("p1", [{"op": "card.update", "id": cid, "agent": "Hermes", "session": "20261029_1"}], by="hermes")
+    assert doc["board"]["cards"][0]["session"] == "20261029_1"
+    doc, _ = s.apply("p1", [{"op": "card.comment", "id": cid, "kind": "question", "text": "Stripe?", "session": "20261029_2"}], by="hermes")
+    card = doc["board"]["cards"][0]
+    assert card["session"] == "20261029_2" and card["comments"][-1]["session"] == "20261029_2"
+    doc, _ = s.apply("p1", [{"op": "card.comment", "id": cid, "text": "yes", "resolves": True}])
+    assert "session" not in doc["board"]["cards"][0]["comments"][-1] and doc["board"]["cards"][0]["session"] == "20261029_2"
+    latest = bp.summary(doc)["latest_comment"]  # the phone's own reply never counts as unread
+    assert latest["card"] == cid and latest["text"] == "Stripe?" and latest["by"] == "hermes"
+
+
 def test_routes(tmp_path):
     cfg = Config(devices_file=tmp_path / "d.json", audit_log=tmp_path / "a.log", trust_file=tmp_path / "n.json",
                  blueprints_dir=tmp_path / "bp")

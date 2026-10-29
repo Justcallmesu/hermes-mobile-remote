@@ -183,6 +183,8 @@ def _card_fields(doc: dict, card: dict, f: dict) -> None:
         card["color"] = f["color"] if f["color"] in COLORS else "default"
     if "agent" in f:
         card["agent"] = _text(f["agent"], 40) or None
+    if "session" in f:  # the Hermes chat working on it: the phone's "Tell Hermes I replied" goes there
+        card["session"] = _text(f["session"], 80) or None
 
 
 def open_asks(card: dict) -> list[dict]:
@@ -437,6 +439,9 @@ def apply_op(doc: dict, op: dict, by: str = "phone") -> str | None:
         if not text and not files:
             raise BlueprintError("A comment needs text or a file")
         m = {"id": op.get("comment_id") or _id("m"), "at": time.time(), "by": by, "kind": ck, "text": text, "resolved": False, "files": files}
+        if _text(op.get("session"), 80):  # the Hermes chat that wrote it
+            m["session"] = _text(op["session"], 80)
+            card["session"] = m["session"]
         card["comments"] = ((card.get("comments") or []) + [m])[-MAX_COMMENTS:]
         if op.get("resolves"):  # an answer closes what it answers
             for q in open_asks(card):
@@ -521,10 +526,20 @@ def apply_ops(doc: dict, ops: list[dict], by: str = "phone") -> tuple[dict, list
     return new, applied
 
 
+def latest_comment(doc: dict) -> dict | None:
+    """The newest comment not written from the phone (Hermes or another agent), for unread badges and alerts."""
+    best = None
+    for c in doc["board"]["cards"]:
+        for m in c.get("comments") or []:
+            if m.get("by") != "phone" and (best is None or m["at"] > best["at"]):
+                best = {"card": c["id"], "title": c["title"], "at": m["at"], "by": m["by"], "kind": m["kind"], "text": m["text"][:300]}
+    return best
+
+
 def summary(doc: dict) -> dict:
     cards = doc["board"]["cards"]
     cols = doc["board"]["columns"]
-    return {"project": doc["project"], "version": doc["version"], "updated": doc["updated"], "control": doc.get("control", "shared"),
+    return {"latest_comment": latest_comment(doc),"project": doc["project"], "version": doc["version"], "updated": doc["updated"], "control": doc.get("control", "shared"),
             "nodes": len(doc["diagram"]["nodes"]), "cards": len(cards),
             "needs_you": sum(1 for c in cards if open_asks(c)), "working": sum(1 for c in cards if c.get("agent")),
             "columns": [{"id": c["id"], "name": c["name"], "count": sum(1 for x in cards if x["column"] == c["id"]), "limit": c.get("limit")}

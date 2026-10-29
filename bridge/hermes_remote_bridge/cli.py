@@ -602,7 +602,8 @@ def cmd_blueprint(cfg: Config, args: argparse.Namespace) -> None:
                 cols = need(project())["board"]["columns"]
                 col = args.column or next((c["name"] for c in cols if c["name"].lower() in ("working", "in progress", "doing")), "Working")
                 run([{"op": "card.move", "id": rest[0], "column": col},
-                     {"op": "card.update", "id": rest[0], "assignee": "hermes", "agent": args.agent or "Hermes"}])
+                     {"op": "card.update", "id": rest[0], "assignee": "hermes", "agent": args.agent or "Hermes",
+                      **({"session": os.environ["HERMES_SESSION_ID"]} if os.environ.get("HERMES_SESSION_ID") else {})}])
             elif sub == "stop":  # stays in its column, nobody actively on it
                 run([{"op": "card.update", "id": rest[0], "agent": None}])
             elif sub == "done":
@@ -613,7 +614,8 @@ def cmd_blueprint(cfg: Config, args: argparse.Namespace) -> None:
                 missing = [f for f in files if not os.path.isfile(f)]
                 if missing:
                     raise bp.BlueprintError("No such file: " + ", ".join(missing))
-                run([{"op": "card.comment", "id": rest[0], "kind": kind, "text": text(1), "files": files}])
+                run([{"op": "card.comment", "id": rest[0], "kind": kind, "text": text(1), "files": files,
+                      **({"session": os.environ["HERMES_SESSION_ID"]} if os.environ.get("HERMES_SESSION_ID") else {})}])
             elif sub == "resolve":
                 run([{"op": "comment.resolve", "id": rest[0], **({"comment_id": rest[1]} if len(rest) > 1 else {})}])
             else:
