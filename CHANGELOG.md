@@ -17,6 +17,20 @@ request number.
   subagents (#12), share to Hermes (#15), message search (#16), subagent output and steer (#17)
   and bridge metrics (#18).
 
+## v1.28.0
+
+- Graph: a new map of your chats, like Obsidian's graph view (the dots icon in the drawer). Every
+  chat is a dot, linked to its project (gold), to topics its title shares with other chats (purple)
+  and, if you turn it on, to the model it used (green). The dots pop in one by one and fly apart
+  into clusters as the map settles. Pinch to zoom, drag to move around, drag a dot to pull it, tap a
+  dot to light up its links, then *Open* a chat. *Fit* brings the whole map back on screen.
+- Links in chat can be tapped: a small box offers *Open* (in the browser) or *Copy*. Works in replies,
+  tables and your own messages, for plain `https://` addresses and markdown links.
+- @mentions (like **@LastNyx** in this changelog) can be tapped too: *Open* goes to their GitHub profile.
+- Gateway hosts (signed in without a bridge) now have the PC page, with what Hermes itself reports:
+  CPU, RAM, disk, load and uptime. History, temperature, network, processes, Claude usage and the
+  Terminal still need the Hermes Remote bridge on that PC: pair it and link it with the gateway entry.
+
 ## v1.27.0
 
 Thanks to **@LastNyx** for this release.
