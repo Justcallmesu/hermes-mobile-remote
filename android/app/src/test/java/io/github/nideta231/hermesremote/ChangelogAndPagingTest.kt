@@ -132,4 +132,13 @@ class ChangelogAndPagingTest {
         org.junit.Assert.assertTrue(more.canShowLess)
         org.junit.Assert.assertEquals(first.items.size + 3, more.items.size)
     }
+
+    @Test fun releaseNotesWithFoldedOlderVersionsParseClean() {
+        val notes = "**Download: [HermesRemote-1.2.0.apk](https://x/HermesRemote-1.2.0.apk)**\n\n## v1.2.0\n- new\n\n" +
+            "<details><summary>Earlier versions</summary>\n\n## v1.1.0\n- old\n\n</details>\n"
+        val e = parseChangelog(notes)
+        assertEquals(listOf("1.2.0", "1.1.0"), e.map { it.version })
+        assertEquals("- old", e[1].body)
+        assertEquals("## v1.2.0\n- new\n\n## v1.1.0\n- old", changesBetween(notes, "1.0.0", "1.2.0"))
+    }
 }

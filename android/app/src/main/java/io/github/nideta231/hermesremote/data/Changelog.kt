@@ -19,6 +19,8 @@ fun parseChangelog(md: String): List<ChangelogEntry> {
         when {
             m != null -> { flush(); version = m.groupValues[1] }
             line.startsWith("## ") -> { flush(); version = null }
+            // GitHub release notes fold older versions in <details>: markup, not changes.
+            line.trimStart().startsWith("<details") || line.trim() == "</details>" -> {}
             version != null -> body.append(line).append('\n')
         }
     }

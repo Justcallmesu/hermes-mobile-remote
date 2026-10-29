@@ -17,6 +17,11 @@ request number.
   subagents (#12), share to Hermes (#15), message search (#16), subagent output and steer (#17)
   and bridge metrics (#18).
 
+## Unreleased
+
+- **GitHub release page: download link first**: each release now starts with a direct link to the APK
+  (and its SHA-256); older versions are folded under *Earlier versions* instead of filling the page.
+
 ## v1.35.0
 
 - Bridge stats on the phone: the PC page has a *Bridge* card with what `hermes-remote-bridge
