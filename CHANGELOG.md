@@ -17,6 +17,11 @@ request number.
   subagents (#12), share to Hermes (#15), message search (#16), subagent output and steer (#17)
   and bridge metrics (#18).
 
+## v1.28.1
+
+- Drawer top bar is tidier: only Scheduled and Settings stay as buttons. PC monitor, Terminal and
+  Graph moved into the three-dot menu next to them.
+
 ## v1.28.0
 
 - Graph: a new map of your chats, like Obsidian's graph view (the dots icon in the drawer). Every

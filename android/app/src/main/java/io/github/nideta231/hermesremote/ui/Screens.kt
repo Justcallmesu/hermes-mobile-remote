@@ -124,6 +124,23 @@ import java.util.Date
 
 // ================================================================ Sessions
 
+/** The drawer's less used pages (PC, Terminal, Graph) behind a three-dot menu, so the top bar stays clear. */
+@Composable
+private fun DrawerMoreMenu(actions: SessionActions) {
+    var open by remember { mutableStateOf(false) }
+    Box {
+        IconButton(modifier = Modifier.size(40.dp), onClick = { open = true }) { Icon(Glyphs.More, "More", modifier = Modifier.size(20.dp)) }
+        androidx.compose.material3.DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+            @Composable fun item(label: String, icon: androidx.compose.ui.graphics.vector.ImageVector, onClick: () -> Unit) =
+                androidx.compose.material3.DropdownMenuItem(text = { Text(label) },
+                    leadingIcon = { Icon(icon, null, Modifier.size(18.dp)) }, onClick = { open = false; onClick() })
+            actions.openPc?.let { item("PC monitor", Glyphs.Chip, it) }
+            actions.openTerminal?.let { item("Terminal", Glyphs.Terminal, it) }
+            item("Graph", Glyphs.Graph, actions.openGraph)
+        }
+    }
+}
+
 class SessionActions(
     val open: (String) -> Unit,
     val refresh: () -> Unit,
@@ -245,9 +262,6 @@ fun SessionsPane(
                 }
                 Icon(Glyphs.Chevron, "Switch PC", modifier = Modifier.padding(start = 4.dp).size(18.dp))
             }
-            actions.openPc?.let { IconButton(modifier = Modifier.size(40.dp), onClick = it) { Icon(Glyphs.Chip, "PC", modifier = Modifier.size(20.dp)) } }
-            actions.openTerminal?.let { IconButton(modifier = Modifier.size(40.dp), onClick = it) { Icon(Glyphs.Terminal, "Terminal", modifier = Modifier.size(20.dp)) } }
-            IconButton(modifier = Modifier.size(40.dp), onClick = actions.openGraph) { Icon(Glyphs.Graph, "Graph", modifier = Modifier.size(20.dp)) }
             IconButton(modifier = Modifier.size(40.dp), onClick = actions.openScheduled) {
                 Box {
                     Icon(Glyphs.Clock, "Scheduled", modifier = Modifier.size(20.dp))
@@ -260,6 +274,7 @@ fun SessionsPane(
                 }
             }
             IconButton(modifier = Modifier.size(40.dp), onClick = actions.openSettings) { Icon(Glyphs.Settings, "Settings", modifier = Modifier.size(20.dp)) }
+            DrawerMoreMenu(actions)
         }
         if (pcSheet) PcSheet(pcs, actions, onDismiss = { pcSheet = false })
         // Only when the PC has more than one profile: with just the default there is nothing to pick.
