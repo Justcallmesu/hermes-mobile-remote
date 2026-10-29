@@ -241,6 +241,8 @@ class BridgeClient(
 
     // PC monitor (bridge 1.18+; older bridges answer 404).
 
+    suspend fun setMonitorTracking(group: String, on: Boolean) = call("PUT", "/v1/monitor/tracking", body = JSONObject().put(group, on))
+
     suspend fun monitorNow(live: Boolean = false): PcNow = parseNow(call("GET", "/v1/monitor/now", mapOf("live" to live)))
 
     /** The bridge's own metrics (this device's token opens them). 404: an older bridge, or `metrics = false`. */

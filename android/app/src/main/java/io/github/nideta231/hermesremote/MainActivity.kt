@@ -446,7 +446,7 @@ class MainActivity : ComponentActivity() {
             setRange = vm.monitor::setRange, setSort = vm.monitor::setSort, setQuery = vm.monitor::setQuery,
             stopProcess = vm.monitor::stopProcess, refreshClaude = vm.monitor::refreshClaude,
             openTerminal = if (hasTerminal) ({ page = Page.TERMINAL }) else null,
-            runSpeedTest = if ("speedtest" in features) vm.monitor::runSpeedTest else null)
+            runSpeedTest = if ("speedtest" in features) vm.monitor::runSpeedTest else null, setTracking = vm.monitor::setTracking)
         val cronActions = CronActions(refresh = vm.cron::refresh, loadRuns = vm.cron::loadRuns,
             pause = vm.cron::pause, resume = vm.cron::resume, runNow = vm.cron::runNow, create = vm.cron::create)
         val openUpdate = { scope.launch { drawer.close() }; updateSheet = true }

@@ -49,6 +49,9 @@ import androidx.compose.ui.unit.dp
 import io.github.nideta231.hermesremote.data.ClaudeUsage
 import io.github.nideta231.hermesremote.data.PcHistory
 import io.github.nideta231.hermesremote.data.PcProcess
+import io.github.nideta231.hermesremote.data.PcStats
+import io.github.nideta231.hermesremote.data.TrackingGroups
+import io.github.nideta231.hermesremote.data.tracks
 import io.github.nideta231.hermesremote.data.PcState
 import io.github.nideta231.hermesremote.data.ProcessSort
 import io.github.nideta231.hermesremote.data.fmtClock
@@ -77,6 +80,8 @@ class PcActions(
     val openTerminal: (() -> Unit)? = null,
     /** Runs an internet speed test on the PC; null when the bridge has no speed test. */
     val runSpeedTest: (() -> Unit)? = null,
+    /** Turn a monitor group on/off on the PC. */
+    val setTracking: (String, Boolean) -> Unit = { _, _ -> },
 )
 
 /** The PC page: what was PC Glance. Live numbers poll every 3 s while the page is open. */
@@ -124,13 +129,13 @@ private fun PcContent(state: PcState, actions: PcActions, onStop: (PcProcess) ->
             Text(a, color = Bad, modifier = Modifier.padding(12.dp), style = MaterialTheme.typography.bodyMedium)
         }
     }
-    // Big three
-    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-        Gauge("CPU", s.cpu, "%.0f%%".format(s.cpu), "${s.cores} cores" + (s.load1?.let { " · load %.2f".format(it) } ?: ""), CpuColor, Modifier.weight(1f))
-        Gauge("RAM", s.mem, "%.0f%%".format(s.mem), "%.1f / %.1f GB".format(s.memUsedGb, s.memTotalGb), MemColor, Modifier.weight(1f))
+    // Big three (a group switched off on the PC is left out)
+    if (now.basic || s.tracks("cpu") || s.tracks("memory") || s.tracks("temp")) Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+        if (now.basic || s.tracks("cpu")) Gauge("CPU", s.cpu, "%.0f%%".format(s.cpu), "${s.cores} cores" + (s.load1?.let { " · load %.2f".format(it) } ?: ""), CpuColor, Modifier.weight(1f))
+        if (now.basic || s.tracks("memory")) Gauge("RAM", s.mem, "%.0f%%".format(s.mem), "%.1f / %.1f GB".format(s.memUsedGb, s.memTotalGb), MemColor, Modifier.weight(1f))
         if (now.basic) Gauge("Disk", s.disk ?: 0.0, s.disk?.let { "%.0f%%".format(it) } ?: "--",
             "%.0f / %.0f GB".format(s.diskUsedGb ?: 0.0, s.diskTotalGb ?: 0.0), TempColor, Modifier.weight(1f))
-        else Gauge("Temp", s.temp?.coerceIn(0.0, 100.0) ?: 0.0, s.temp?.let { "%.0f°C".format(it) } ?: "--", "CPU package", TempColor, Modifier.weight(1f))
+        else if (s.tracks("temp")) Gauge("Temp", s.temp?.coerceIn(0.0, 100.0) ?: 0.0, s.temp?.let { "%.0f°C".format(it) } ?: "--", "CPU package", TempColor, Modifier.weight(1f))
     }
     if (now.basic) {
         Panel {
@@ -145,10 +150,10 @@ private fun PcContent(state: PcState, actions: PcActions, onStop: (PcProcess) ->
     }
     Panel {
         StatRow("Up", fmtUptime(s.uptimeS))
-        StatRow("Disk", s.disk?.let { "%.0f%%  ·  %.0f / %.0f GB".format(it, s.diskUsedGb ?: 0.0, s.diskTotalGb ?: 0.0) } ?: "--")
-        StatRow("Swap", "%.0f%%  ·  %.1f GB".format(s.swap, s.swapUsedGb))
-        StatRow("Network", "↓ ${fmtRate(s.rx)}   ↑ ${fmtRate(s.tx)}")
-        StatRow("Disk I/O", "read ${fmtRate(s.rd)}   write ${fmtRate(s.wr)}")
+        if (s.tracks("disk")) StatRow("Disk", s.disk?.let { "%.0f%%  ·  %.0f / %.0f GB".format(it, s.diskUsedGb ?: 0.0, s.diskTotalGb ?: 0.0) } ?: "--")
+        if (s.tracks("memory")) StatRow("Swap", "%.0f%%  ·  %.1f GB".format(s.swap, s.swapUsedGb))
+        if (s.tracks("network")) StatRow("Network", "↓ ${fmtRate(s.rx)}   ↑ ${fmtRate(s.tx)}")
+        if (s.tracks("disk")) StatRow("Disk I/O", "read ${fmtRate(s.rd)}   write ${fmtRate(s.wr)}")
     }
     if (now.corePct.isNotEmpty()) Panel {
         Column(Modifier.padding(horizontal = 16.dp, vertical = 10.dp)) {
@@ -177,22 +182,48 @@ private fun PcContent(state: PcState, actions: PcActions, onStop: (PcProcess) ->
                     h.ts, 140.dp, Modifier.fillMaxWidth())
                 Text("Peak CPU %.0f%% · peak RAM %.0f%%".format(h["cpu_max"].maxOf { it ?: 0.0 }, h["mem_max"].maxOf { it ?: 0.0 }),
                     style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                Spacer(Modifier.size(14.dp))
-                Text("Network", style = MaterialTheme.typography.labelLarge)
-                LineChart(listOf(ChartSeries("Down", h["rx"], NetDownColor, ::fmtRate), ChartSeries("Up", h["tx"], NetUpColor, ::fmtRate)),
-                    h.ts, 100.dp, Modifier.fillMaxWidth(), maxValue = null, axisFormat = ::fmtRate)
-                Spacer(Modifier.size(14.dp))
-                Text("Disk I/O", style = MaterialTheme.typography.labelLarge)
-                LineChart(listOf(ChartSeries("Read", h["rd"], MemColor, ::fmtRate), ChartSeries("Write", h["wr"], TempColor, ::fmtRate)),
-                    h.ts, 100.dp, Modifier.fillMaxWidth(), maxValue = null, axisFormat = ::fmtRate)
+                if (s.tracks("network") || h["rx"].any { it != null }) {
+                    Spacer(Modifier.size(14.dp))
+                    Text("Network", style = MaterialTheme.typography.labelLarge)
+                    LineChart(listOf(ChartSeries("Down", h["rx"], NetDownColor, ::fmtRate), ChartSeries("Up", h["tx"], NetUpColor, ::fmtRate)),
+                        h.ts, 100.dp, Modifier.fillMaxWidth(), maxValue = null, axisFormat = ::fmtRate)
+                }
+                if (s.tracks("disk") || h["rd"].any { it != null }) {
+                    Spacer(Modifier.size(14.dp))
+                    Text("Disk I/O", style = MaterialTheme.typography.labelLarge)
+                    LineChart(listOf(ChartSeries("Read", h["rd"], MemColor, ::fmtRate), ChartSeries("Write", h["wr"], TempColor, ::fmtRate)),
+                        h.ts, 100.dp, Modifier.fillMaxWidth(), maxValue = null, axisFormat = ::fmtRate)
+                }
             }
         }
     }
     actions.runSpeedTest?.let { SpeedTestPanel(state, it) }
-    ClaudePanel(now.claude, state.claudeHistory, actions.refreshClaude)
+    if (s.tracks("claude")) ClaudePanel(now.claude, state.claudeHistory, actions.refreshClaude)
     actions.openTerminal?.let { open -> Panel { PanelRow("Terminal", "A shell on this PC", Glyphs.Terminal, onClick = open) } }
     state.bridge?.let { BridgeStatsPanel(it) }
-    ProcessPanel(state, actions, onStop)
+    if (s.tracks("processes")) ProcessPanel(state, actions, onStop)
+    if (s.tracking.isNotEmpty()) TrackingPanel(s, actions.setTracking)
+}
+
+/** Which monitor groups the PC reads; switching one off stops reading it there (saves CPU and disk writes). */
+@Composable
+private fun TrackingPanel(s: PcStats, set: (String, Boolean) -> Unit) {
+    var open by androidx.compose.runtime.saveable.rememberSaveable { androidx.compose.runtime.mutableStateOf(false) }
+    Panel {
+        val off = TrackingGroups.count { !s.tracks(it.first) }
+        PanelRow("What to track", if (off == 0) "Everything is tracked" else "$off switched off to save resources", Glyphs.Settings,
+            onClick = { open = !open })
+        if (open) Column(Modifier.padding(start = 16.dp, end = 8.dp, bottom = 8.dp)) {
+            Text("Off means the PC stops reading it (no history either). Turn it back on any time.",
+                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            TrackingGroups.forEach { (key, label) ->
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Text(label, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
+                    androidx.compose.material3.Switch(s.tracks(key), { set(key, it) })
+                }
+            }
+        }
+    }
 }
 
 @Composable

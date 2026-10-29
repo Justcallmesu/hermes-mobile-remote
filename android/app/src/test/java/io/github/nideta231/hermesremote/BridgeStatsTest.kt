@@ -4,6 +4,7 @@ import io.github.nideta231.hermesremote.data.BridgeStats
 import io.github.nideta231.hermesremote.data.Timing
 import io.github.nideta231.hermesremote.data.formatSeconds
 import io.github.nideta231.hermesremote.data.parseBridgeStats
+import io.github.nideta231.hermesremote.data.tracks
 import io.github.nideta231.hermesremote.ui.headline
 import io.github.nideta231.hermesremote.ui.timingSuffix
 import org.json.JSONObject
@@ -83,5 +84,14 @@ class BridgeStatsTest {
         assertEquals(" · avg 6 ms · p95 ≤ 10 ms", timingSuffix(Timing(4, 0.006, 0.01)))
         val h = headline(parseBridgeStats(sample))
         assertTrue(h, h.startsWith("v1.0.0 · up ") && h.endsWith("1 connected · Hermes 6 ms avg · 1 approval(s) waiting"))
+    }
+}
+
+class TrackingParseTest {
+    @org.junit.Test fun trackingDefaultsOnAndReadsOffGroups() {
+        val s = io.github.nideta231.hermesremote.data.parseStats(org.json.JSONObject("""{"cpu":5,"tracking":{"network":false,"cpu":true}}"""))
+        org.junit.Assert.assertTrue(s.tracks("cpu") && s.tracks("temp") && !s.tracks("network"))
+        val old = io.github.nideta231.hermesremote.data.parseStats(org.json.JSONObject("""{"cpu":5}"""))
+        org.junit.Assert.assertTrue(io.github.nideta231.hermesremote.data.TrackingGroups.all { old.tracks(it.first) })
     }
 }

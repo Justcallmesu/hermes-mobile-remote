@@ -40,6 +40,10 @@ request number.
   instead of after the last card. Per board or global, like the other board settings.
 - **More instruction templates**: "work on Working first, ask which Todo card", "attach the result",
   "check open pull requests first", "comment how it was tested", "commit per card, release once" and more.
+- **Choose what the PC monitor tracks**: PC page > *What to track* switches CPU, memory, temperature,
+  disk, network, top processes and Claude usage on or off. Off means the PC stops reading it (less CPU
+  and fewer disk writes); its gauge, row or chart disappears and its history has a gap. Needs the
+  updated bridge.
 
 ## v1.35.0
 

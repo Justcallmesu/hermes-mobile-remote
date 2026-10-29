@@ -34,6 +34,8 @@ data class PcStats(
     val diskTotalGb: Double? = null,
     val uptimeS: Long = 0,
     val cores: Int = 0,
+    /** Monitor groups the bridge reads (cpu, memory, temp, disk, network, processes, claude); empty = older bridge, all on. */
+    val tracking: Map<String, Boolean> = emptyMap(),
 )
 
 data class PcProcess(val pid: Int, val name: String, val cpu: Double, val memMb: Long, val user: String = "",
@@ -94,8 +96,18 @@ fun parseStats(o: JSONObject?): PcStats {
         rx = o.optDouble("rx", 0.0), tx = o.optDouble("tx", 0.0), rd = o.optDouble("rd", 0.0), wr = o.optDouble("wr", 0.0),
         memUsedGb = o.optDouble("mem_used_gb", 0.0), memTotalGb = o.optDouble("mem_total_gb", 0.0),
         swapUsedGb = o.optDouble("swap_used_gb", 0.0), diskUsedGb = o.dbl("disk_used_gb"), diskTotalGb = o.dbl("disk_total_gb"),
-        uptimeS = o.optLong("uptime_s"), cores = o.optInt("cores"))
+        uptimeS = o.optLong("uptime_s"), cores = o.optInt("cores"),
+        tracking = o.optJSONObject("tracking")?.let { t -> t.keys().asSequence().associateWith { t.optBoolean(it, true) } }.orEmpty())
 }
+
+/** Whether the monitor group [group] is read on the PC (true when the bridge doesn't say). */
+fun PcStats.tracks(group: String) = tracking[group] != false
+
+/** The groups the phone can switch, in display order, with what they cover. */
+val TrackingGroups = listOf(
+    "cpu" to "CPU and load", "memory" to "Memory and swap", "temp" to "CPU temperature", "disk" to "Disk usage and I/O",
+    "network" to "Network traffic", "processes" to "Top processes", "claude" to "Claude usage",
+)
 
 /** Hermes' `GET /api/system/stats` (a gateway host has no bridge monitor): the numbers it has. */
 fun parseHermesSystemStats(o: JSONObject): PcNow {
@@ -322,6 +334,16 @@ class PcMonitor(
                 if (t is CancellationException) throw t
                 say(describe(t))
             }
+        }
+    }
+
+    /** Turn a monitor group on/off on the PC (off = not read at all, to save resources). */
+    fun setTracking(group: String, on: Boolean) {
+        val c = client() ?: return
+        _state.update { st -> st.copy(now = st.now?.let { n -> n.copy(stats = n.stats.copy(tracking = n.stats.tracking + (group to on))) }) }
+        scope.launch {
+            runCatching { c.setMonitorTracking(group, on) }.onFailure { if (it is CancellationException) throw it }
+            refreshNow(live = true)
         }
     }
 
