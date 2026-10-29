@@ -166,6 +166,25 @@ def test_comments_and_start_remember_the_hermes_chat(tmp_path):
     assert latest["card"] == cid and latest["text"] == "Stripe?" and latest["by"] == "hermes"
 
 
+def test_global_board_settings_apply_where_a_board_has_no_choice(tmp_path):
+    s = bp.BlueprintStore(tmp_path)
+    s.create("p1", "Shop")
+    s.create("p2", "Blog")
+    s.apply("p2", [{"op": "settings.set", "new_cards": "bottom"}])  # p2 chose for itself
+    assert s.set_defaults({"new_cards": "top", "aging_days": 14}) == {"new_cards": "top", "aging_days": 14}
+    assert [d["project"]["id"] for d in s.all()] == ["p1", "p2"]  # the defaults file is not a blueprint
+    titles = lambda doc: [c["title"] for c in sorted(doc["board"]["cards"], key=lambda c: c["order"])]
+    doc1, _ = s.apply("p1", [{"op": "card.add", "title": "A", "column": "Todo"}, {"op": "card.add", "title": "B", "column": "Todo"}])
+    doc2, _ = s.apply("p2", [{"op": "card.add", "title": "A", "column": "Todo"}, {"op": "card.add", "title": "B", "column": "Todo"}])
+    assert titles(doc1) == ["B", "A"] and titles(doc2) == ["A", "B"]
+    assert "_defaults" not in doc1 and "_defaults" not in s.get("p1")
+    assert bp.settings(doc2, s.defaults()) == {"new_cards": "bottom", "aging_days": 14}
+    doc2, _ = s.apply("p2", [{"op": "settings.set", "new_cards": "default"}])  # back to following the global one
+    assert bp.settings(doc2, s.defaults())["new_cards"] == "top"
+    with pytest.raises(bp.BlueprintError):
+        s.set_defaults({"aging_days": 5})
+
+
 def test_long_titles_are_refused_not_cut(tmp_path):
     s = bp.BlueprintStore(tmp_path)
     s.create("p1", "Shop")

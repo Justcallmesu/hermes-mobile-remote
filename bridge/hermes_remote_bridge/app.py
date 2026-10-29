@@ -519,7 +519,7 @@ def create_app(cfg: Config, *, locator: BackendLocator | None = None, tailnet: T
 
     def _bp(pid: str) -> dict:
         try:
-            return bp_store.get(pid)
+            return {**bp_store.get(pid), "defaults": bp_store.defaults()}  # the global board settings ride along
         except KeyError:
             raise ApiError(404, "no_blueprint", "This project has no blueprint")
 
@@ -527,7 +527,20 @@ def create_app(cfg: Config, *, locator: BackendLocator | None = None, tailnet: T
     async def list_blueprints(_: Device = Depends(device_auth)):
         _bp_on()
         docs = await asyncio.to_thread(bp_store.all)
-        return {"blueprints": [bp_mod.summary(d) for d in docs], "trash": await asyncio.to_thread(bp_store.trashed)}
+        return {"blueprints": [bp_mod.summary(d) for d in docs], "trash": await asyncio.to_thread(bp_store.trashed),
+                "defaults": await asyncio.to_thread(bp_store.defaults)}
+
+    @app.put("/v1/blueprints-settings")
+    async def blueprint_defaults(request: Request, device: Device = Depends(device_auth)):
+        """Global board settings: every board that has no choice of its own follows them."""
+        _bp_on()
+        body = await request.json()
+        try:
+            cur = await asyncio.to_thread(bp_store.set_defaults, body if isinstance(body, dict) else {})
+        except bp_mod.BlueprintError as exc:
+            raise ApiError(400, "bad_setting", str(exc))
+        audit_event({"event": "blueprint_defaults", "device": device.id})
+        return {"defaults": cur}
 
     @app.get("/v1/blueprints/{pid}")
     async def get_blueprint(pid: str, since: int = 0, _: Device = Depends(device_auth)):
@@ -561,7 +574,7 @@ def create_app(cfg: Config, *, locator: BackendLocator | None = None, tailnet: T
             doc, applied = await asyncio.to_thread(bp_store.apply, pid, ops, "phone")
         except bp_mod.BlueprintError as exc:
             raise ApiError(400, "bad_op", str(exc), doc=await asyncio.to_thread(_bp, pid))
-        return {"doc": doc, "applied": applied}
+        return {"doc": {**doc, "defaults": await asyncio.to_thread(bp_store.defaults)}, "applied": applied}
 
     def _bp_file(pid: str, path: str) -> str:
         target = bp_mod.comment_file(_bp(pid), path)

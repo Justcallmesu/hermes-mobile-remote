@@ -328,6 +328,7 @@ same files through `hermes-remote-bridge blueprint ...` (skill `project-blueprin
 | DELETE | `/v1/blueprints/{project}` | move to the trash → `{trashed: id}` |
 | POST | `/v1/blueprints-trash/{id}/restore` | restore |
 | DELETE | `/v1/blueprints-trash/{id}` | delete for good |
+| PUT | `/v1/blueprints-settings` | global board settings (`new_cards`, `aging_days`; `default` clears one); boards without their own choice follow them. `GET /v1/blueprints` and every blueprint carry them as `defaults` |
 
 Ops are applied to the newest copy under a file lock, so phone and Hermes edits merge:
 `node.add` (`kind` start/end/feature/flow/decision/note, `label`, `after` = node it follows; placed
@@ -340,7 +341,7 @@ column), `card.check`, `card.move` (`column`, `index`), `card.remove`, `card.com
 `comment.resolve` (`comment_id`, or every open ask; `resolved` false reopens), `comment.remove`,
 `instructions.set` (`text`: the user's standing rules, shown first in Hermes' Markdown view),
 `settings.set` (`new_cards` top/bottom: where cards added or moved into another column without an
-`index` land; `aging_days` 0/3/7/14/30: fade untouched cards), `control.set` (`shared`/`hermes`), `log`. Summaries carry `needs_you` (cards with an open
+`index` land; `aging_days` 0/3/7/14/30: fade untouched cards; `default` follows the global setting), `control.set` (`shared`/`hermes`), `log`. Summaries carry `needs_you` (cards with an open
 question/review) and `working`. Cards, nodes and columns can be named by id or by a unique title. Every
 change is logged with who made it (`phone`, `hermes`).
 

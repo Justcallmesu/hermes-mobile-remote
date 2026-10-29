@@ -216,14 +216,20 @@ def _limit(v) -> int | None:
     return n or None
 
 
-def settings(doc: dict) -> dict:
-    """The board settings with defaults filled in."""
-    have = doc.get("settings") or {}
-    return {k: have.get(k) if have.get(k) in allowed else allowed[0] for k, allowed in SETTINGS.items()}
+def clean_settings(v) -> dict:
+    """Only known keys with allowed values (a board's own overrides, or the global defaults)."""
+    v = v if isinstance(v, dict) else {}
+    return {k: v[k] for k, allowed in SETTINGS.items() if v.get(k) in allowed}
+
+
+def settings(doc: dict, defaults: dict | None = None) -> dict:
+    """The board's settings: its own choice, else the global default, else the built-in one."""
+    own, glob = clean_settings(doc.get("settings")), clean_settings(defaults)
+    return {k: own.get(k, glob.get(k, allowed[0])) for k, allowed in SETTINGS.items()}
 
 
 def _default_index(doc: dict) -> int | None:
-    return 0 if settings(doc)["new_cards"] == "top" else None
+    return 0 if settings(doc, doc.get("_defaults"))["new_cards"] == "top" else None
 
 
 def _order_after(cards: list[dict], column: str, index: int | None) -> float:
@@ -482,15 +488,18 @@ def apply_op(doc: dict, op: dict, by: str = "phone") -> str | None:
     if kind == "instructions.set":  # the user's standing rules for any agent working on this project
         doc["instructions"] = str(op.get("text") or "").strip()[:MAX_TEXT]
         return "Updated the agent instructions" if doc["instructions"] else "Cleared the agent instructions"
-    if kind == "settings.set":  # board settings: any of SETTINGS' keys
-        cur = settings(doc)
+    if kind == "settings.set":  # this board's settings: any of SETTINGS' keys; null/"default" = follow the global default
+        cur = clean_settings(doc.get("settings"))
         for k, v in op.items():
             if k == "op":
                 continue
             if k not in SETTINGS:
                 raise BlueprintError(f"Unknown setting '{k}' (known: {', '.join(SETTINGS)})")
+            if v in (None, "default", "global"):
+                cur.pop(k, None)
+                continue
             if v not in SETTINGS[k]:
-                raise BlueprintError(f"{k} must be one of {', '.join(map(str, SETTINGS[k]))}")
+                raise BlueprintError(f"{k} must be one of {', '.join(map(str, SETTINGS[k]))} or default")
             cur[k] = v
         doc["settings"] = cur
         return "Changed the board settings"
@@ -515,11 +524,12 @@ def apply_op(doc: dict, op: dict, by: str = "phone") -> str | None:
     raise BlueprintError(f"Unknown op '{kind}'")
 
 
-def apply_ops(doc: dict, ops: list[dict], by: str = "phone") -> tuple[dict, list[dict]]:
-    """Apply a batch to a copy: all ops land, or none (the first error is raised)."""
+def apply_ops(doc: dict, ops: list[dict], by: str = "phone", defaults: dict | None = None) -> tuple[dict, list[dict]]:
+    """Apply a batch to a copy: all ops land, or none (the first error is raised). [defaults]: global board settings."""
     if not isinstance(ops, list) or not ops:
         raise BlueprintError("ops must be a non-empty list")
     new = copy.deepcopy(doc)
+    new["_defaults"] = clean_settings(defaults)  # read by ops while applying; never saved
     now = time.time()
     applied = []
     for op in ops:
@@ -530,6 +540,7 @@ def apply_ops(doc: dict, ops: list[dict], by: str = "phone") -> tuple[dict, list
         applied.append(op)
         if line:
             new["log"].append({"at": now, "by": by, "text": line})
+    new.pop("_defaults", None)
     new["log"] = new["log"][-MAX_LOG:]
     new["version"] = int(doc.get("version", 0)) + 1
     new["updated"] = now
@@ -556,7 +567,7 @@ def summary(doc: dict) -> dict:
                         for c in cols]}
 
 
-def to_markdown(doc: dict) -> str:
+def to_markdown(doc: dict, defaults: dict | None = None) -> str:
     """What Hermes reads before working on the project: the flow, then the board, then recent activity."""
     p = doc["project"]
     d, b = doc["diagram"], doc["board"]
@@ -581,7 +592,7 @@ def to_markdown(doc: dict) -> str:
                      + (f"  -> {', '.join(nxt)}" if nxt else "")
                      + (f"  [card: {card['title']} in {cols.get(card['column'], '?')}]" if card else "")
                      + (f"\n  note: {n['note']}" if n.get("note") else ""))
-    st = settings(doc)
+    st = settings(doc, defaults)
     lines += ["", "## Board", f"settings: new and moved cards go to the {st['new_cards']} of a column"
               + (f", cards untouched for {st['aging_days']} days fade" if st["aging_days"] else "")]
     for col in b["columns"]:
@@ -702,10 +713,33 @@ class BlueprintStore:
             self._write(p, doc)
             return doc
 
+    # Global board settings (every board without its own choice uses them). Not *.json: all() skips it.
+    def defaults(self) -> dict:
+        try:
+            return clean_settings(json.loads((self.root / "defaults.settings").read_text(encoding="utf-8")))
+        except (OSError, ValueError):
+            return {}
+
+    def set_defaults(self, changes: dict) -> dict:
+        cur = self.defaults()
+        for k, v in (changes or {}).items():
+            if k not in SETTINGS:
+                raise BlueprintError(f"Unknown setting '{k}' (known: {', '.join(SETTINGS)})")
+            if v in (None, "default"):
+                cur.pop(k, None)
+            elif v in SETTINGS[k]:
+                cur[k] = v
+            else:
+                raise BlueprintError(f"{k} must be one of {', '.join(map(str, SETTINGS[k]))}")
+        with self._lock():
+            self._write(self.root / "defaults.settings", cur)
+        return cur
+
     def apply(self, project_id: str, ops: list[dict], by: str = "phone", base: int | None = None) -> tuple[dict, list[dict]]:
+        defaults = self.defaults()
         with self._lock():
             doc = self.get(project_id)
-            new, applied = apply_ops(doc, ops, by)
+            new, applied = apply_ops(doc, ops, by, defaults)
             self._write(self._path(project_id), new)
             return new, applied
 

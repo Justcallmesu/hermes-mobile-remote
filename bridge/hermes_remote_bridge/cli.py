@@ -565,7 +565,7 @@ def cmd_blueprint(cfg: Config, args: argparse.Namespace) -> None:
         elif a in ("show", "md"):
             p = project()
             doc = need(p)
-            print(json.dumps(doc, ensure_ascii=False, indent=1) if js else bp.to_markdown(doc), end="" if not js else "\n")
+            print(json.dumps(doc, ensure_ascii=False, indent=1) if js else bp.to_markdown(doc, store.defaults()), end="" if not js else "\n")
         elif a == "create":
             try:
                 p = project()
@@ -661,14 +661,22 @@ def cmd_blueprint(cfg: Config, args: argparse.Namespace) -> None:
             else:
                 t = text()
                 run([{"op": "instructions.set", "text": "" if t.strip() == "none" else t}])
-        elif a == "settings":  # no args: print; key=value ...: set (new_cards=top|bottom, aging_days=0|3|7|14|30)
-            if not rest:
-                print("\n".join(f"{k}={v}" for k, v in bp.settings(need(project())).items()))
+        elif a == "settings":  # no args: print; key=value ...: set (new_cards=top|bottom, aging_days=0|3|7|14|30, =default follows global)
+            glob = bool(rest) and rest[0] == "global"  # `settings global [key=value ...]`: every board's default
+            if glob:
+                rest.pop(0)
+            ch = {}
+            for kv in rest:
+                k, _, v = kv.partition("=")
+                ch[k] = int(v) if v.isdigit() else v
+            if glob:
+                cur = store.set_defaults(ch) if ch else store.defaults()
+                print("\n".join(f"{k}={cur.get(k, allowed[0])}" + ("" if k in cur else " (built-in)") for k, allowed in bp.SETTINGS.items()))
+            elif not ch:
+                doc, own = need(project()), {}
+                own = bp.clean_settings(doc.get("settings"))
+                print("\n".join(f"{k}={v}" + ("" if k in own else " (global)") for k, v in bp.settings(doc, store.defaults()).items()))
             else:
-                ch = {}
-                for kv in rest:
-                    k, _, v = kv.partition("=")
-                    ch[k] = int(v) if v.isdigit() else v
                 run([{"op": "settings.set", **ch}])
         elif a == "control":
             run([{"op": "control.set", "mode": rest[0] if rest else "shared"}])
