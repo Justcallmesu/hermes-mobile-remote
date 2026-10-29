@@ -191,6 +191,7 @@ private fun PcContent(state: PcState, actions: PcActions, onStop: (PcProcess) ->
     actions.runSpeedTest?.let { SpeedTestPanel(state, it) }
     ClaudePanel(now.claude, state.claudeHistory, actions.refreshClaude)
     actions.openTerminal?.let { open -> Panel { PanelRow("Terminal", "A shell on this PC", Glyphs.Terminal, onClick = open) } }
+    state.bridge?.let { BridgeStatsPanel(it) }
     ProcessPanel(state, actions, onStop)
 }
 

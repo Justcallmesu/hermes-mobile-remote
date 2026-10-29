@@ -2,7 +2,7 @@
 """Hermes Mobile Remote - Linux tray app.
 
 The Linux tray from before the desktop app (kept until D23's follow-up). Its menu: status, the doctor
-checks, start/stop/restart, network trust, devices (pair / revoke), logs, firewall, start at
+checks, bridge stats, start/stop/restart, network trust, devices (pair / revoke), logs, firewall, start at
 login, quit.
 
 One difference is deliberate. On Linux the bridge is a systemd *user service* (install.sh), so
@@ -113,7 +113,26 @@ def poll() -> dict:
         summary = "unknown"
     problem = next((c["message"] for c in checks if c.get("level") not in ("ok", None)), "all fine" if checks else "checking...")
     return {"state": state, "summary": summary, "problem": problem, "checks": checks,
-            "trust": bridge_json("trust", "--list", "--json"), "devices": bridge_json("devices", "--json")}
+            "trust": bridge_json("trust", "--list", "--json"), "devices": bridge_json("devices", "--json"),
+            "activity": activity_line(bridge_json("metrics", "--json")) if state == "running" else None}
+
+
+def _total(metrics: dict, name: str) -> float:
+    return sum(s.get("value", 0) for s in metrics.get(name, {}).get("samples", []))
+
+
+def activity_line(metrics: dict | None) -> str | None:
+    """One menu line from `metrics --json`: who is on, and anything waiting. None without metrics."""
+    if not metrics:
+        return None
+    parts = [f"{int(_total(metrics, 'bridge_live_devices'))} connected"]
+    turns = int(_total(metrics, "bridge_turns_started_total"))
+    if turns:
+        parts.append(f"{turns} turn(s)")
+    waiting = int(_total(metrics, "bridge_questions_open"))
+    if waiting:
+        parts.append(f"{waiting} approval(s) waiting")
+    return ", ".join(parts)
 
 
 # ---------------------------------------------------------------- icon
@@ -256,6 +275,8 @@ class Tray(QObject):
         label = {"running": "running", "stopped": "stopped", "missing": "not installed - run ./install.sh"}.get(state, state)
         self.add(m, f"Bridge: {label}")
         self.add(m, f"Checks: {h['problem']}")
+        if h.get("activity"):
+            self.add(m, f"Activity: {h['activity']}")
         m.addSeparator()
 
         if h["checks"]:
@@ -264,6 +285,7 @@ class Tray(QObject):
                 mark = {"ok": "\u2713", "warn": "!"}.get(check.get("level"), "\u2717")
                 self.add(details, f"{mark}  {check.get('message', '')}")
         self.add(m, "Run doctor...", self.run_doctor)
+        self.add(m, "Bridge stats...", self.show_stats, state == "running")
         self.add(m, "Refresh now", self.changed)
         m.addSeparator()
 
@@ -361,6 +383,25 @@ class Tray(QObject):
                           "Hermes Remote doctor", "\n".join(lines))
         box.exec()
         self.changed()
+
+    def show_stats(self) -> None:
+        """The bridge's counters since it started: the same summary `hermes-remote-bridge metrics` prints."""
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        try:
+            text = bridge("metrics").strip()
+        finally:
+            QApplication.restoreOverrideCursor()
+        if not text:
+            QMessageBox.warning(None, "Bridge stats", "The bridge did not answer. Run in a terminal:\n\n"
+                                f"'{BIN}' metrics\n\n(Bridges before 1.26 have no metrics; update with ./install.sh.)")
+            return
+        box = QMessageBox(QMessageBox.Icon.Information, "Hermes Remote bridge stats", text)
+        box.setInformativeText("Counted since the bridge started. Prometheus: GET /metrics (see docs/BRIDGE_API.md).")
+        box.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        font = QFont("monospace")
+        font.setStyleHint(QFont.StyleHint.Monospace)
+        box.setFont(font)
+        box.exec()
 
     def pair(self, replace: str | None = None) -> None:
         """Pair a new phone, or with [replace] re-pair that one: its old code stops working and

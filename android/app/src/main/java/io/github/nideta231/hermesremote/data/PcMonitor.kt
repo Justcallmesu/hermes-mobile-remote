@@ -210,6 +210,8 @@ data class PcState(
     val speedTests: List<SpeedResult> = emptyList(),
     val speedRunning: Boolean = false,
     val speedError: String? = null,
+    /** The bridge's own counters; null until read, or when the bridge has none (older, or turned off). */
+    val bridge: BridgeStats? = null,
 )
 
 /**
@@ -244,6 +246,7 @@ class PcMonitor(
             while (isActive) {
                 refreshNow(live = tick == 0)
                 if (tick == 0) loadSpeedTests()
+                if (tick % 5 == 0) loadBridgeStats()
                 if (tick % 20 == 0) loadHistory(_state.value.range)
                 tick++
                 delay(periodMs)
@@ -273,7 +276,12 @@ class PcMonitor(
 
     fun refresh() {
         _state.update { it.copy(loading = true) }
-        scope.launch { refreshNow(live = true); loadHistory(_state.value.range); _state.update { it.copy(loading = false) } }
+        scope.launch {
+            refreshNow(live = true)
+            loadHistory(_state.value.range)
+            loadBridgeStats()
+            _state.update { it.copy(loading = false) }
+        }
     }
 
     fun setRange(range: String) {
@@ -315,6 +323,13 @@ class PcMonitor(
                 say(describe(t))
             }
         }
+    }
+
+    /** Best effort: a bridge without metrics just shows no Bridge card. */
+    private suspend fun loadBridgeStats() {
+        val c = client() ?: return
+        val stats = runCatching { c.bridgeStats() }.onFailure { if (it is CancellationException) throw it }.getOrNull()
+        _state.update { it.copy(bridge = stats) }
     }
 
     private suspend fun loadSpeedTests() {
