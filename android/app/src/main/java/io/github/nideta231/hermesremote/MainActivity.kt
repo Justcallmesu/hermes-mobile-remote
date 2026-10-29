@@ -350,7 +350,7 @@ class MainActivity : ComponentActivity() {
 
         fun go(p: Page) {
             page = p
-            if (p == Page.SETTINGS) vm.settings.refresh()
+            if (p == Page.SETTINGS) { vm.settings.refresh(); if ("blueprints" in features) vm.blueprints.refreshList() }
             scope.launch { drawer.close() }
         }
 
@@ -439,6 +439,8 @@ class MainActivity : ComponentActivity() {
             repair = vm::startRepair,
             openBridge = if ("admin" in features) ({ page = Page.BRIDGE }) else null,
             bridgeUpdate = if ("bridge_update" in features) BridgeUpdateActions(bridgeUpdateState, vm.bridgeUpdate::check, vm.bridgeUpdate::start, heldUpdate, vm.bridgeAdmin::refresh) else null,
+            boardDefaults = if ("blueprints" in features) blueprintState.defaults else null,
+            setBoardDefaults = vm.blueprints::setDefaults,
         )
         val pcActions = PcActions(watch = { vm.monitor.watch() }, unwatch = vm.monitor::stop, refresh = vm.monitor::refresh,
             setRange = vm.monitor::setRange, setSort = vm.monitor::setSort, setQuery = vm.monitor::setQuery,
@@ -476,7 +478,8 @@ class MainActivity : ComponentActivity() {
                                 askHermes = { b, what -> vm.askHermesBlueprint(b, what); page = Page.CHAT },
                                 fetchFile = vm.blueprints::file, fileInfo = vm.blueprints::fileInfo,
                                 unread = { c -> seenTick.let { vm.blueprints.seen?.unread(pid, c) ?: 0 } },
-                                markSeen = { c -> vm.blueprints.markSeen(pid, c) }),
+                                markSeen = { c -> vm.blueprints.markSeen(pid, c) },
+                                openGlobalSettings = { vm.blueprints.refreshList(); page = Page.SETTINGS }),
                                 onBack = { vm.blueprints.refreshList(); page = Page.CHAT })
                         } ?: run { page = Page.CHAT }
                         Page.BRIDGE -> BridgeAdminScreen(bridgeAdminState, BridgeAdminActions(refresh = vm.bridgeAdmin::refresh,

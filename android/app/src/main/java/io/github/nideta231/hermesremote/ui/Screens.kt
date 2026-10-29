@@ -1057,6 +1057,9 @@ class SettingsActions(
     /** The PC bridge's self-update; null when the bridge can't do it (old, or turned off). */
     val openBridge: (() -> Unit)? = null,
     val bridgeUpdate: BridgeUpdateActions? = null,
+    /** Global blueprint board settings on this PC; null when the bridge has none (older, or blueprints off). */
+    val boardDefaults: io.github.nideta231.hermesremote.data.BpSettings? = null,
+    val setBoardDefaults: (io.github.nideta231.hermesremote.data.BpSettings) -> Unit = {},
 )
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -1111,6 +1114,15 @@ fun SettingsScreen(
                 }
                 SettingsSection("Chat list", "How the drawer lists your chats.") {
                     DrawerPanel()
+                }
+                actions.boardDefaults?.let { d ->
+                    SettingsSection("Blueprint boards", "Every project's board on this PC, unless that board chose otherwise (board ⋮ > Board settings). Hermes follows them too.") {
+                        Panel {
+                            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                                BoardSettingsFields(d, null, actions.setBoardDefaults)
+                            }
+                        }
+                    }
                 }
                 SettingsSection("About") {
                     Panel {

@@ -99,6 +99,7 @@ class BridgeClient(
     suspend fun blueprints() = call("GET", "/v1/blueprints")
     suspend fun blueprint(projectId: String, since: Int = 0) = call("GET", "/v1/blueprints/${enc(projectId)}", mapOf("since" to since.takeIf { it > 0 }))
     suspend fun createBlueprint(projectId: String, body: JSONObject) = call("POST", "/v1/blueprints/${enc(projectId)}", body = body)
+    suspend fun blueprintDefaults(body: JSONObject) = call("PUT", "/v1/blueprints-settings", body = body)
     suspend fun blueprintOps(projectId: String, ops: org.json.JSONArray) = call("POST", "/v1/blueprints/${enc(projectId)}/ops", body = JSONObject().put("ops", ops))
     suspend fun blueprintFileInfo(projectId: String, path: String) = call("GET", "/v1/blueprints/${enc(projectId)}/file/info", mapOf("path" to path))
 

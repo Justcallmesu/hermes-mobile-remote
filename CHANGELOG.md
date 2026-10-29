@@ -30,6 +30,10 @@ request number.
 - **Longer card titles, never cut off**: titles can be 600 characters (was 300), node labels 400,
   column names 120. Near the limit a counter shows; over it the field turns red and Save waits until
   you shorten it, instead of the text being silently cut. Needs the updated bridge.
+- **Global board settings**: Settings > *Blueprint boards* sets new card position and card aging for
+  every board on the PC. A board's own Board settings now offer *Global (…)* for each choice (the
+  default) or a value of its own, with a link to the global ones. Hermes follows the same settings.
+  Needs the updated bridge.
 
 ## v1.35.0
 

@@ -29,11 +29,21 @@ object BpLimits {
     const val COLUMN = 120
 }
 
-/** Board settings, shared with Hermes. [newCards] "top"/"bottom": where new and moved-in cards land. [agingDays] 0 = off. */
-data class BpSettings(val newCards: String = "bottom", val agingDays: Int = 0) {
+/**
+ * Board settings, shared with Hermes. [newCards] "top"/"bottom": where new and moved-in cards land.
+ * [agingDays] 0 = off. A null field is "not chosen": a board then follows the global default, and the
+ * global default follows the built-in one.
+ */
+data class BpSettings(val newCards: String? = null, val agingDays: Int? = null) {
+    /** This over [fallback], field by field, then the built-in values. */
+    fun over(fallback: BpSettings) = BpSettings(newCards ?: fallback.newCards ?: NEW_CARDS[0], agingDays ?: fallback.agingDays ?: AGING_DAYS[0])
+    fun toJson(): JSONObject = JSONObject().put("new_cards", newCards ?: "default").put("aging_days", agingDays ?: "default")
+
     companion object {
         val NEW_CARDS = listOf("bottom", "top")
         val AGING_DAYS = listOf(0, 3, 7, 14, 30)
+        fun parse(o: JSONObject?) = BpSettings(o?.optString("new_cards")?.takeIf { it in NEW_CARDS },
+            o?.takeIf { it.has("aging_days") }?.optInt("aging_days", -1)?.takeIf { it in AGING_DAYS })
     }
 }
 
@@ -79,8 +89,13 @@ data class Blueprint(
     val nodes: List<BpNode>, val edges: List<BpEdge>, val columns: List<BpColumn>, val cards: List<BpCard>, val log: List<BpLog>,
     /** The user's standing rules for any agent on this project (sent with every ask). */
     val instructions: String = "",
+    /** This board's own choices (null fields follow [defaults]). */
     val settings: BpSettings = BpSettings(),
+    /** The global board settings on this PC. */
+    val defaults: BpSettings = BpSettings(),
 ) {
+    /** What applies on this board. */
+    val effective: BpSettings get() = settings.over(defaults)
     val needsYou get() = cards.filter { it.openAsks.isNotEmpty() }
     val hermesControl get() = control == "hermes"
     fun cardsIn(column: String) = cards.filter { it.column == column }.sortedBy { it.order }
@@ -114,10 +129,8 @@ data class Blueprint(
                 },
                 o.optJSONArray("log").objects().map { BpLog(it.optDouble("at", 0.0), it.optString("by"), it.optString("text")) },
                 o.optString("instructions"),
-                (o.optJSONObject("settings") ?: JSONObject()).let { st ->
-                    BpSettings(st.optString("new_cards").takeIf { it in BpSettings.NEW_CARDS } ?: "bottom",
-                        st.optInt("aging_days", 0).takeIf { it in BpSettings.AGING_DAYS } ?: 0)
-                },
+                BpSettings.parse(o.optJSONObject("settings")),
+                BpSettings.parse(o.optJSONObject("defaults")),
             )
         }
     }
@@ -169,6 +182,8 @@ data class BlueprintState(
     val loading: Boolean = false,
     val error: String? = null,
     val unsupported: Boolean = false,
+    /** Global board settings on this PC (null: not read yet, or an older bridge). */
+    val defaults: BpSettings? = null,
 )
 
 /**
@@ -210,13 +225,26 @@ class BlueprintRepo(
                             })
                     }, trash = o.optJSONArray("trash").objects().map {
                         BlueprintTrash(it.optString("id"), it.optJSONObject("project")?.optString("name") ?: it.optString("id"), it.optDouble("removed_at", 0.0), it.optInt("cards"))
-                    }, unsupported = false)
+                    }, unsupported = false, defaults = if (o.has("defaults")) BpSettings.parse(o.optJSONObject("defaults")) else null)
                 }
                 checkNewComments()
             } catch (t: Throwable) {
                 if (t is CancellationException) throw t
                 if (t is BridgeException && t.httpCode == 404) _state.update { it.copy(unsupported = true) }
             }
+        }
+    }
+
+    /** Change the global board settings (every board without its own choice follows them). */
+    fun setDefaults(st: BpSettings) {
+        val c = client() ?: return
+        scope.launch {
+            try {
+                val r = c.blueprintDefaults(st.toJson())
+                val d = BpSettings.parse(r.optJSONObject("defaults"))
+                _state.update { s -> s.copy(defaults = d, open = s.open?.copy(defaults = d)) }
+                say("Saved for every board")
+            } catch (t: Throwable) { if (t is CancellationException) throw t; say(describe(t)) }
         }
     }
 

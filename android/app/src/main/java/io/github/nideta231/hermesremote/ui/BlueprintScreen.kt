@@ -126,6 +126,8 @@ class BlueprintActions(
     val unread: (BpCard) -> Int = { 0 },
     /** The user opened the card: its comments are read. */
     val markSeen: (BpCard) -> Unit = {},
+    /** Open the app's Settings at the global board settings. */
+    val openGlobalSettings: () -> Unit = {},
 )
 
 private fun bpColor(name: String, dark: Boolean): Color = when (name) {
@@ -218,9 +220,10 @@ fun BlueprintScreen(projectId: String, projectName: String, state: BlueprintStat
             if (hand) actions.askHermes(bp.copy(instructions = text), "control")
         }
     }
-    if (boardSettings && bp != null) BoardSettingsDialog(bp.settings, onDismiss = { boardSettings = false }) { st ->
+    if (boardSettings && bp != null) BoardSettingsDialog(bp.settings, bp.defaults.over(BpSettings()), onDismiss = { boardSettings = false },
+        onGlobal = { boardSettings = false; actions.openGlobalSettings() }) { st ->
         boardSettings = false
-        if (st != bp.settings) actions.apply(arrayOf(BpOp.of("settings.set", "new_cards" to st.newCards, "aging_days" to st.agingDays))) {}
+        if (st != bp.settings) actions.apply(arrayOf(BpOp.of("settings.set", "new_cards" to (st.newCards ?: "default"), "aging_days" to (st.agingDays ?: "default")))) {}
     }
     if (confirmTrash) AlertDialog(onDismissRequest = { confirmTrash = false }, title = { Text("Remove this blueprint?") },
         text = { Text("It goes to the trash (drawer > project long-press > Blueprint trash) and can be restored.") },
@@ -692,33 +695,50 @@ private fun BoardView(bp: Blueprint, actions: BlueprintActions) {
     openCard?.let { id -> bp.cards.firstOrNull { it.id == id }?.let { CardSheet(it, bp, actions, onDismiss = { openCard = null }) } ?: run { openCard = null } }
 }
 
-/** Board settings shared with Hermes: where new cards land and card aging. Column limits live in each column's menu. */
+/** One board's settings: each one follows the global default (Settings > Blueprint boards) or is set here. */
 @Composable
-private fun BoardSettingsDialog(initial: BpSettings, onDismiss: () -> Unit, onSave: (BpSettings) -> Unit) {
+private fun BoardSettingsDialog(initial: BpSettings, global: BpSettings, onDismiss: () -> Unit, onGlobal: () -> Unit, onSave: (BpSettings) -> Unit) {
     var st by remember { mutableStateOf(initial) }
     AlertDialog(onDismissRequest = onDismiss, title = { Text("Board settings") }, text = {
         Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            Text("New cards", style = MaterialTheme.typography.labelLarge)
-            Text("Where a new card, or one moved into another column, lands. Dragging still drops it where you let go.",
-                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                listOf("top" to "On top", "bottom" to "At the bottom").forEach { (v, label) ->
-                    FilterChip(st.newCards == v, { st = st.copy(newCards = v) }, { Text(label) }, colors = themedChip())
-                }
-            }
-            Text("Card aging", style = MaterialTheme.typography.labelLarge)
-            Text("Fade cards nobody has touched for a while, so stale work stands out. Cards waiting for you or being worked on never fade.",
-                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                BpSettings.AGING_DAYS.forEach { d ->
-                    FilterChip(st.agingDays == d, { st = st.copy(agingDays = d) }, { Text(if (d == 0) "Off" else "$d days") }, colors = themedChip())
-                }
-            }
+            BoardSettingsFields(st, global) { st = it }
             Text("Card limit per column: column menu > Card limit. The count turns red when a column holds more.",
                 style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            TextButton(onClick = onGlobal, contentPadding = androidx.compose.foundation.layout.PaddingValues(0.dp)) {
+                Icon(Glyphs.Settings, null, Modifier.size(16.dp)); Spacer(Modifier.width(6.dp)); Text("Global board settings (every board)")
+            }
         }
     }, confirmButton = { TextButton(onClick = { onSave(st) }) { Text("Save") } },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } })
+}
+
+private fun newCardsLabel(v: String?) = if (v == "top") "On top" else "At the bottom"
+private fun agingLabel(d: Int?) = if (d == null || d == 0) "Off" else "$d days"
+
+/**
+ * The board settings choices. With [global] (a single board) each row starts with "Global (…)",
+ * which follows the global default; without it (the global settings themselves) only real values.
+ */
+@Composable
+internal fun BoardSettingsFields(st: BpSettings, global: BpSettings?, onChange: (BpSettings) -> Unit) {
+    Text("New cards", style = MaterialTheme.typography.labelLarge)
+    Text("Where a new card, or one moved into another column, lands. Dragging still drops it where you let go.",
+        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        if (global != null) FilterChip(st.newCards == null, { onChange(st.copy(newCards = null)) }, { Text("Global (${newCardsLabel(global.newCards)})") }, colors = themedChip())
+        listOf("top", "bottom").forEach { v ->
+            FilterChip(st.newCards == v || (global == null && st.newCards == null && v == "bottom"), { onChange(st.copy(newCards = v)) }, { Text(newCardsLabel(v)) }, colors = themedChip())
+        }
+    }
+    Text("Card aging", style = MaterialTheme.typography.labelLarge)
+    Text("Fade cards nobody has touched for a while, so stale work stands out. Cards waiting for you, with new comments or being worked on never fade.",
+        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        if (global != null) FilterChip(st.agingDays == null, { onChange(st.copy(agingDays = null)) }, { Text("Global (${agingLabel(global.agingDays)})") }, colors = themedChip())
+        BpSettings.AGING_DAYS.forEach { d ->
+            FilterChip(st.agingDays == d || (global == null && st.agingDays == null && d == 0), { onChange(st.copy(agingDays = d)) }, { Text(agingLabel(d)) }, colors = themedChip())
+        }
+    }
 }
 
 /** Where a dragged card will land: an empty card-sized slot with a gold outline. */
@@ -746,7 +766,7 @@ private fun BoardCard(card: BpCard, bp: Blueprint, dark: Boolean, ghost: Boolean
     }
     // Card aging: untouched cards fade (board setting), unless something about them needs attention.
     val aged = if (lifted || asks.isNotEmpty() || working || unread > 0) 1f
-        else agingAlpha(card.updated, System.currentTimeMillis() / 1000.0, bp.settings.agingDays)
+        else agingAlpha(card.updated, System.currentTimeMillis() / 1000.0, bp.effective.agingDays ?: 0)
     Surface(modifier.fillMaxWidth().graphicsLayer { alpha = aged }.clickable(onClick = onOpen), shape = RoundedCornerShape(12.dp),
         color = if (tint != Color.Unspecified) tint else MaterialTheme.colorScheme.surfaceContainerHighest,
         shadowElevation = if (lifted) 10.dp else 0.dp, border = border) {
