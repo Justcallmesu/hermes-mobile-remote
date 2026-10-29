@@ -1361,6 +1361,9 @@ fun PairScreen(
     repairDevice: String? = null,
     /** False when an update strip already sits above this screen and took the status bar inset. */
     insetTop: Boolean = true,
+    /** Other saved PCs to go back to (this screen is also where an empty slot lands). */
+    otherPcs: List<PairedPc> = emptyList(),
+    onSwitchPc: (String) -> Unit = {},
 ) {
     val scope = rememberCoroutineScope()
     var gatewayMode by remember { mutableStateOf(false) }
@@ -1404,6 +1407,15 @@ fun PairScreen(
             onCancel != null -> "Each PC keeps its own chats. Switch between them from the side menu."
             else -> "Your Hermes agent, from your phone."
         }, style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        if (otherPcs.isNotEmpty() && repairDevice == null) {
+            Spacer(Modifier.size(20.dp))
+            SectionLabel("Your PCs")
+            Panel {
+                otherPcs.forEach { pc ->
+                    PanelRow(pc.name, if (pc.gateway) "Gateway" else "Bridge", Glyphs.Desktop, onClick = { onSwitchPc(pc.id) })
+                }
+            }
+        }
         Spacer(Modifier.size(28.dp))
         if (onSignInGateway != null && repairDevice == null) {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {

@@ -947,7 +947,9 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
         clearHostData(gone)
         // The legacy slot keeps its file names, so it stays in the list as the empty fallback.
         val next = profiles.remove(gone)
-        activate(next)
+        // Go to a PC that can still be used (a saved pairing or gateway sign-in), not an empty slot:
+        // an empty slot is the pairing screen, which has no way back to the other PCs.
+        activate(profiles.list().firstOrNull { usable(it) }?.id ?: next)
         enterActiveHost()
     }
 
@@ -968,6 +970,11 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
         profiles.remove(id)
         refreshPcs()
     }
+
+    /** A host with something to connect with: a saved bridge pairing or gateway credentials. */
+    private fun usable(p: io.github.nideta231.hermesremote.data.Profile): Boolean =
+        if (p.kind == HostKind.GATEWAY) GatewayCredentialStore(app, p.id).load() != null
+        else CredentialStore(app, ProfileStore.pairingFile(p.id)).load() != null
 
     /** The one step both [unpair] and [forgetPc] use: pairing, drafts and gateway credentials of host [id]. */
     private fun clearHostData(id: String) =

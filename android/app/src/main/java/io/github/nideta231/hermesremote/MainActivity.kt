@@ -232,6 +232,7 @@ class MainActivity : ComponentActivity() {
         val gw by vm.gatewayHost.collectAsState()
         val hasHost = pairing != null || gw != null
         val repairDevice by vm.repairDevice.collectAsState()
+        val pcs by vm.pcs.collectAsState()
         val update by vm.updates.update.collectAsState()
         var pairUpdateSheet by rememberSaveable { mutableStateOf(false) }
         AnimatedContent(rootScreen(pairing != null, gw?.signedOut, adding), transitionSpec = { fadeIn(tween(300)) togetherWith fadeOut(tween(200)) }, label = "root") { root ->
@@ -263,7 +264,8 @@ class MainActivity : ComponentActivity() {
                     }
                 }, onCancelSignIn = vm::cancelGatewaySignIn, imageError = imageError.value,
                     onCancel = if (hasHost) ({ pairUri.value = null; imageError.value = null; vm.cancelAddingPc() }) else null,
-                    repairDevice = repairDevice, insetTop = update.available == null && update.progress == null)
+                    repairDevice = repairDevice, insetTop = update.available == null && update.progress == null,
+                    otherPcs = pcs.filter { !it.active }, onSwitchPc = { vm.cancelAddingPc(); vm.switchPc(it) })
                 }
                 if (pairUpdateSheet && update.available != null)
                     UpdateSheet(update, onInstall = vm.updates::installUpdate, onDismiss = { pairUpdateSheet = false })
