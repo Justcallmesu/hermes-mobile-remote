@@ -312,7 +312,10 @@ private fun TableRow(cells: List<String>, align: List<CellAlign>, widths: List<a
     }
 }
 
-private val inlineRe = Regex("""\*\*(.+?)\*\*|`([^`]+)`|\[([^\]]+)\]\((?:[^)\s]+)\)|(?<![*\w])\*(?!\s)(.+?)(?<!\s)\*(?![*\w])""")
+private val inlineRe = Regex("""\*\*(.+?)\*\*|`([^`]+)`|\[([^\]]+)\]\((?:[^)\s]+)\)|(?<![*\w])\*(?!\s)(.+?)(?<!\s)\*(?![*\w])|(?<![\w/@.])(@[A-Za-z0-9](?:[A-Za-z0-9-]{0,38}))(?![\w-])""")
+
+/** A tagged GitHub user (@name): credited contributors stand out in the changelog. */
+private val mentionStyle = SpanStyle(fontWeight = FontWeight.Bold, color = Color(0xFF3DAEE9), background = Color(0x1F3DAEE9))
 
 private fun inline(src: String): AnnotatedString = buildAnnotatedString {
     src.lines().forEachIndexed { li, raw ->
@@ -345,10 +348,12 @@ private fun AnnotatedString.Builder.appendInline(s: String) {
     for (m in inlineRe.findAll(s)) {
         append(s.substring(i, m.range.first))
         when {
-            m.groups[1] != null -> withStyle(SpanStyle(fontWeight = FontWeight.Bold)) { append(m.groupValues[1]) }
+            m.groups[1] != null -> withStyle(SpanStyle(fontWeight = FontWeight.Bold)) { appendInline(m.groupValues[1]) }
+            m.groups[5] != null -> withStyle(mentionStyle) { append(m.groupValues[5]) }
             m.groups[2] != null -> withStyle(SpanStyle(fontFamily = FontFamily.Monospace, background = Color(0x33808080), fontSize = 13.sp)) { append(m.groupValues[2]) }
             m.groups[3] != null -> withStyle(SpanStyle(textDecoration = TextDecoration.Underline)) { append(m.groupValues[3]) }
-            else -> withStyle(SpanStyle(fontStyle = FontStyle.Italic)) { append(m.groupValues[4]) }
+            m.groups[4] != null -> withStyle(SpanStyle(fontStyle = FontStyle.Italic)) { append(m.groupValues[4]) }
+            else -> append(m.value)
         }
         i = m.range.last + 1
     }
