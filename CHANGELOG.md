@@ -17,7 +17,7 @@ request number.
   subagents (#12), share to Hermes (#15), message search (#16), subagent output and steer (#17)
   and bridge metrics (#18).
 
-## Unreleased
+## v1.36.0
 
 - **GitHub release page: download link first**: each release now starts with a direct link to the APK
   (and its SHA-256); older versions are folded under *Earlier versions* instead of filling the page.
