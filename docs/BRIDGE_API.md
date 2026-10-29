@@ -311,6 +311,8 @@ same files through `hermes-remote-bridge blueprint ...` (skill `project-blueprin
 | GET | `/v1/blueprints/{project}?since=N` | the document; `{version, unchanged: true}` when still at N |
 | POST | `/v1/blueprints/{project}` | create (`{name, path}`) |
 | POST | `/v1/blueprints/{project}/ops` | `{ops: [...]}` → `{doc, applied}`; all ops land or none (400 `bad_op` with the current `doc`) |
+| GET | `/v1/blueprints/{project}/file?path=` | a file a card comment attaches (`files`); 403 `not_attached` for any other path, relative paths resolve in the project folder |
+| GET | `/v1/blueprints/{project}/file/info?path=` | `{path, name, exists, size, modified, mime}` of such a file |
 | DELETE | `/v1/blueprints/{project}` | move to the trash → `{trashed: id}` |
 | POST | `/v1/blueprints-trash/{id}/restore` | restore |
 | DELETE | `/v1/blueprints-trash/{id}` | delete for good |
@@ -320,8 +322,13 @@ Ops are applied to the newest copy under a file lock, so phone and Hermes edits 
 and connected automatically), `node.update`, `node.remove`, `edge.add`, `edge.update`, `edge.remove`,
 `diagram.layout`, `column.add/update/move/remove`, `card.add` (`column`, `title`, `body`, `tags`,
 `checklist`, `priority` low/medium/high, `due` YYYY-MM-DD, `assignee` me/hermes, `node`),
-`card.update`, `card.check`, `card.move` (`column`, `index`), `card.remove`, `control.set`
-(`shared`/`hermes`), `log`. Cards, nodes and columns can be named by id or by a unique title. Every
+`card.update` (also `agent`: who is working on it now, cleared when the card reaches the last
+column), `card.check`, `card.move` (`column`, `index`), `card.remove`, `card.comment` (`text`,
+`kind` comment/question/review, `files` PC paths, `resolves` = also resolve open asks),
+`comment.resolve` (`comment_id`, or every open ask; `resolved` false reopens), `comment.remove`,
+`instructions.set` (`text`: the user's standing rules, shown first in Hermes' Markdown view),
+`control.set` (`shared`/`hermes`), `log`. Summaries carry `needs_you` (cards with an open
+question/review) and `working`. Cards, nodes and columns can be named by id or by a unique title. Every
 change is logged with who made it (`phone`, `hermes`).
 
 ## Bridge update

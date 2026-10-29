@@ -81,6 +81,49 @@ def test_markdown_and_resolve_by_folder(tmp_path):
     assert bp.resolve(s, "shop")["id"] == "p1"
 
 
+def test_comments_questions_and_resolving(tmp_path):
+    s = bp.BlueprintStore(tmp_path)
+    s.create("p1", "Shop")
+    doc, ap = s.apply("p1", [{"op": "card.add", "title": "Deploy", "column": "Working"}])
+    cid = ap[0]["id"]
+    doc, ap = s.apply("p1", [{"op": "card.comment", "id": "deploy", "kind": "question", "text": "Deploy to live now?"}], by="hermes")
+    q = ap[0]["comment_id"]
+    card = doc["board"]["cards"][0]
+    assert card["comments"][0]["by"] == "hermes" and bp.open_asks(card) and bp.summary(doc)["needs_you"] == 1
+    md = bp.to_markdown(doc)
+    assert "## Waiting for the user" in md and "NEEDS USER" in md and "question (OPEN): Deploy to live now?" in md
+    # the user's answer resolves the open question
+    doc, _ = s.apply("p1", [{"op": "card.comment", "id": cid, "text": "Yes, go", "resolves": True}], by="phone")
+    card = doc["board"]["cards"][0]
+    assert not bp.open_asks(card) and [m["kind"] for m in card["comments"]] == ["question", "comment"]
+    doc, _ = s.apply("p1", [{"op": "comment.resolve", "id": cid, "comment_id": q, "resolved": False}])
+    assert bp.open_asks(doc["board"]["cards"][0])
+    doc, _ = s.apply("p1", [{"op": "comment.resolve", "id": cid}])
+    assert bp.summary(doc)["needs_you"] == 0
+    with pytest.raises(bp.BlueprintError):
+        s.apply("p1", [{"op": "card.comment", "id": cid, "kind": "shout", "text": "x"}])
+    with pytest.raises(bp.BlueprintError):
+        s.apply("p1", [{"op": "card.comment", "id": cid, "text": "  "}])  # no text and no file
+    doc, _ = s.apply("p1", [{"op": "comment.remove", "id": cid, "comment_id": q}])
+    assert len(doc["board"]["cards"][0]["comments"]) == 1
+
+
+def test_agent_badge_clears_when_done_and_instructions_reach_hermes(tmp_path):
+    s = bp.BlueprintStore(tmp_path)
+    s.create("p1", "Shop")
+    doc, ap = s.apply("p1", [{"op": "card.add", "title": "Login", "column": "Todo"}])
+    cid = ap[0]["id"]
+    doc, _ = s.apply("p1", [{"op": "card.move", "id": cid, "column": "Working"}, {"op": "card.update", "id": cid, "agent": "Hermes"}], by="hermes")
+    assert doc["board"]["cards"][0]["agent"] == "Hermes" and "Hermes working" in bp.to_markdown(doc)
+    doc, _ = s.apply("p1", [{"op": "card.move", "id": cid, "column": "Done"}], by="hermes")
+    assert doc["board"]["cards"][0]["agent"] is None
+    doc, _ = s.apply("p1", [{"op": "instructions.set", "text": "Never deploy to LIVE unless asked.\nRead docs/ first."}])
+    md = bp.to_markdown(doc)
+    assert md.index("## Instructions from the user") < md.index("## Flow") and "Read docs/ first." in md
+    doc, _ = s.apply("p1", [{"op": "instructions.set", "text": ""}])
+    assert "## Instructions" not in bp.to_markdown(doc)
+
+
 def test_routes(tmp_path):
     cfg = Config(devices_file=tmp_path / "d.json", audit_log=tmp_path / "a.log", trust_file=tmp_path / "n.json",
                  blueprints_dir=tmp_path / "bp")
@@ -98,3 +141,33 @@ def test_routes(tmp_path):
     tid = c.delete("/v1/blueprints/p1", headers=h).json()["trashed"]
     assert c.get("/v1/blueprints", headers=h).json()["trash"][0]["id"] == tid
     assert c.post(f"/v1/blueprints-trash/{tid}/restore", headers=h).json()["project"]["name"] == "Shop"
+
+
+def test_comment_files_are_the_only_files_served(tmp_path):
+    cfg = Config(devices_file=tmp_path / "d.json", audit_log=tmp_path / "a.log", trust_file=tmp_path / "n.json",
+                 blueprints_dir=tmp_path / "bp")
+    proj = tmp_path / "shop"
+    proj.mkdir()
+    (proj / "result.csv").write_text("a,b\n1,2\n")
+    (proj / "secret.env").write_text("no")
+    store = DeviceStore(cfg.devices_file)
+    _, token = store.pair("phone")
+    app = create_app(cfg, locator=Locator(), http=httpx.AsyncClient(transport=httpx.MockTransport(lambda r: httpx.Response(404))),
+                     tailnet=Tailnet(), devices=store, owner_login="me@x")
+    c, h = TestClient(app, client=("100.64.0.10", 50000)), {"Authorization": f"Bearer {token}"}
+    s = bp.BlueprintStore(cfg.blueprints_dir)
+    s.create("p1", "Shop", str(proj))
+    s.apply("p1", [{"op": "card.add", "title": "Export", "column": "Working"},
+                   {"op": "card.comment", "id": "export", "kind": "review", "text": "", "files": [str(proj / "result.csv")]}], by="hermes")
+    get = lambda p, **kw: c.get("/v1/blueprints/p1/file", params={"path": p}, **kw)
+    r = get(str(proj / "result.csv"), headers=h)
+    assert r.status_code == 200 and r.content == b"a,b\n1,2\n"
+    assert get("result.csv", headers=h).status_code == 200  # relative to the project folder
+    assert get(str(proj / "secret.env"), headers=h).status_code == 403
+    assert get(str(proj / ".." / "shop" / "secret.env"), headers=h).status_code == 403
+    assert get(str(proj / "result.csv")).status_code == 401
+    info = c.get("/v1/blueprints/p1/file/info", params={"path": "result.csv"}, headers=h).json()
+    assert info["size"] == 8 and info["name"] == "result.csv"
+    assert "[file: " in bp.to_markdown(s.get("p1"))
+    (proj / "result.csv").unlink()
+    assert get("result.csv", headers=h).status_code == 404

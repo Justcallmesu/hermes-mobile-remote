@@ -9,10 +9,14 @@ bumps ``version``. Removing a blueprint moves the file to ``.trash/`` where it c
       "project": {"id": "...", "name": "Shop app", "path": "/home/me/shop"},
       "version": 12, "created": 1793200000.0, "updated": 1793200500.0,
       "control": "shared",                        # or "hermes": Hermes drives, the phone mostly reads
+      "instructions": "Never deploy to live unless asked",   # the user's standing rules for agents
       "diagram": {"nodes": [{"id": "n1", "kind": "start", "label": "Start", "x": 0, "y": 0, ...}],
                   "edges": [{"id": "e1", "from": "n1", "to": "n2", "label": ""}]},
       "board": {"columns": [{"id": "todo", "name": "Todo", "color": "blue"}],
-                "cards": [{"id": "c1", "column": "todo", "title": "...", "tags": [], "checklist": [...]}]},
+                "cards": [{"id": "c1", "column": "todo", "title": "...", "tags": [], "checklist": [...],
+                           "agent": "Hermes",           # who is actively working on it right now (or null)
+                           "comments": [{"id": "m1", "at": 0.0, "by": "hermes", "kind": "question",
+                                         "text": "Deploy now?", "resolved": false}]}]},
       "log": [{"at": 1793200500.0, "by": "hermes", "text": "Moved Login to Done"}]
     }
 """
@@ -33,6 +37,9 @@ COLORS = ("default", "red", "orange", "yellow", "green", "teal", "blue", "purple
 PRIORITIES = (None, "low", "medium", "high")
 ASSIGNEES = (None, "me", "hermes")
 CONTROL = ("shared", "hermes")
+COMMENT_KINDS = ("comment", "question", "review")  # question/review = waiting for the user until resolved
+MAX_COMMENTS = 200
+MAX_COMMENT_FILES = 10
 DEFAULT_COLUMNS = (("docs", "Docs", "purple"), ("todo", "Todo", "blue"), ("working", "Working", "orange"), ("done", "Done", "green"))
 NODE_SIZE = {"start": (120, 56), "end": (120, 56), "decision": (150, 90), "feature": (180, 64), "flow": (180, 56), "note": (170, 70)}
 MAX_LOG = 300
@@ -170,6 +177,17 @@ def _card_fields(doc: dict, card: dict, f: dict) -> None:
         card["node"] = _node_ref(doc, f["node"])["id"] if f["node"] else None
     if "color" in f:
         card["color"] = f["color"] if f["color"] in COLORS else "default"
+    if "agent" in f:
+        card["agent"] = _text(f["agent"], 40) or None
+
+
+def open_asks(card: dict) -> list[dict]:
+    """The card's questions and review requests nobody has resolved yet."""
+    return [m for m in card.get("comments") or [] if m.get("kind") in ("question", "review") and not m.get("resolved")]
+
+
+def _last_column(doc: dict) -> str:
+    return doc["board"]["columns"][-1]["id"]
 
 
 def _order_after(cards: list[dict], column: str, index: int | None) -> float:
@@ -370,8 +388,50 @@ def apply_op(doc: dict, op: dict, by: str = "phone") -> str | None:
         col = _column(doc, op.get("column") or card["column"])
         others = [c for c in b["cards"] if c is not card]
         card["column"], card["order"] = col["id"], _order_after(others, col["id"], op.get("index"))
+        if col["id"] == _last_column(doc):  # finished: nobody is working on it any more
+            card["agent"] = None
         card["updated"] = time.time()
         return f"Moved '{card['title']}' to {col['name']}"
+    if kind == "card.comment":  # a note on a card; question/review = needs the user's answer
+        card = _card_ref(doc, op.get("id"))
+        text = str(op.get("text") or "").strip()[:MAX_TEXT]
+        ck = op.get("kind") or "comment"
+        if ck not in COMMENT_KINDS:
+            raise BlueprintError("comment kind is comment, question or review")
+        files = [str(f).strip() for f in (op.get("files") or []) if str(f).strip()][:MAX_COMMENT_FILES]
+        if not text and not files:
+            raise BlueprintError("A comment needs text or a file")
+        m = {"id": op.get("comment_id") or _id("m"), "at": time.time(), "by": by, "kind": ck, "text": text, "resolved": False, "files": files}
+        card["comments"] = ((card.get("comments") or []) + [m])[-MAX_COMMENTS:]
+        if op.get("resolves"):  # an answer closes what it answers
+            for q in open_asks(card):
+                if q is not m:
+                    q["resolved"] = True
+        card["updated"] = time.time()
+        op["comment_id"] = m["id"]
+        word = {"comment": "Commented on", "question": "Asked about", "review": "Asked for a review of"}[ck]
+        return f"{word} '{card['title']}': {text[:120] or ', '.join(os.path.basename(f) for f in files)}"
+    if kind == "comment.resolve":  # resolve (or reopen) one comment, or every open ask on the card
+        card = _card_ref(doc, op.get("id"))
+        done = bool(op.get("resolved", True))
+        cid = op.get("comment_id")
+        targets = [m for m in card.get("comments") or [] if m["id"] == cid] if cid else open_asks(card)
+        if cid and not targets:
+            raise BlueprintError(f"No comment '{cid}' on '{card['title']}'")
+        for m in targets:
+            m["resolved"] = done
+        card["updated"] = time.time()
+        return f"{'Resolved' if done else 'Reopened'} {len(targets)} on '{card['title']}'" if targets else None
+    if kind == "comment.remove":
+        card = _card_ref(doc, op.get("id"))
+        before = len(card.get("comments") or [])
+        card["comments"] = [m for m in card.get("comments") or [] if m["id"] != op.get("comment_id")]
+        if len(card["comments"]) == before:
+            raise BlueprintError(f"No comment '{op.get('comment_id')}'")
+        return None
+    if kind == "instructions.set":  # the user's standing rules for any agent working on this project
+        doc["instructions"] = str(op.get("text") or "").strip()[:MAX_TEXT]
+        return "Updated the agent instructions" if doc["instructions"] else "Cleared the agent instructions"
     if kind == "card.remove":
         card = _card_ref(doc, op.get("id"))
         b["cards"].remove(card)
@@ -419,6 +479,7 @@ def summary(doc: dict) -> dict:
     cols = doc["board"]["columns"]
     return {"project": doc["project"], "version": doc["version"], "updated": doc["updated"], "control": doc.get("control", "shared"),
             "nodes": len(doc["diagram"]["nodes"]), "cards": len(cards),
+            "needs_you": sum(1 for c in cards if open_asks(c)), "working": sum(1 for c in cards if c.get("agent")),
             "columns": [{"id": c["id"], "name": c["name"], "count": sum(1 for x in cards if x["column"] == c["id"])} for c in cols]}
 
 
@@ -428,7 +489,15 @@ def to_markdown(doc: dict) -> str:
     d, b = doc["diagram"], doc["board"]
     by_id = {n["id"]: n for n in d["nodes"]}
     lines = [f"# Blueprint: {p['name']}", f"project id {p['id']}" + (f", folder {p['path']}" if p.get("path") else "")
-             + f", version {doc['version']}, control: {doc.get('control', 'shared')}", "", "## Flow"]
+             + f", version {doc['version']}, control: {doc.get('control', 'shared')}", ""]
+    if (doc.get("instructions") or "").strip():
+        lines += ["## Instructions from the user (always follow these on this project)", doc["instructions"].strip(), ""]
+    asks = [(c, m) for c in b["cards"] for m in open_asks(c)]
+    if asks:
+        lines += ["## Waiting for the user (open questions and reviews)"]
+        lines += [f"- {c['title']}  `{c['id']}`: {m['kind']} by {m['by']}: {m['text'][:200]}" for c, m in asks]
+        lines.append("")
+    lines.append("## Flow")
     cards_by_node = {c["node"]: c for c in b["cards"] if c.get("node")}
     cols = {c["id"]: c["name"] for c in b["columns"]}
     for n in sorted(d["nodes"], key=lambda n: (n["y"], n["x"])):
@@ -451,6 +520,10 @@ def to_markdown(doc: dict) -> str:
                 meta.append(f"due {c['due']}")
             if c.get("assignee"):
                 meta.append(f"@{c['assignee']}")
+            if c.get("agent"):
+                meta.append(f"{c['agent']} working")
+            if open_asks(c):
+                meta.append("NEEDS USER")
             if c.get("node") and c["node"] in by_id:
                 meta.append(f"node: {by_id[c['node']]['label']}")
             done = sum(1 for i in c["checklist"] if i["done"])
@@ -460,6 +533,10 @@ def to_markdown(doc: dict) -> str:
             if c["body"].strip():
                 lines += ["  " + l for l in c["body"].strip().splitlines()[:12]]
             lines += [f"  - [{'x' if i['done'] else ' '}] {i['text']}" for i in c["checklist"]]
+            for m in (c.get("comments") or [])[-6:]:
+                state = "" if m["kind"] == "comment" else (" (resolved)" if m.get("resolved") else " (OPEN)")
+                lines.append(f"  > {m['by']} {m['kind']}{state}: " + " ".join(m["text"].split())[:300]
+                             + "".join(f" [file: {f}]" for f in m.get("files") or []))
     if doc["log"]:
         lines += ["", "## Recent activity"]
         lines += [f"- {time.strftime('%Y-%m-%d %H:%M', time.localtime(l['at']))} {l['by']}: {l['text']}" for l in doc["log"][-8:]]
@@ -599,6 +676,28 @@ class BlueprintStore:
     def purge(self, trash_id: str) -> None:
         with self._lock():
             self._trash_path(trash_id).unlink()
+
+
+def comment_file(doc: dict, path: str) -> str | None:
+    """Real path of [path] when a comment on this blueprint attaches it (the phone may fetch only these)."""
+    root = (doc.get("project") or {}).get("path")
+
+    def real(p: str) -> str | None:
+        p = os.path.expanduser(p)
+        if not os.path.isabs(p):
+            if not root:
+                return None
+            p = os.path.join(root, p)
+        return os.path.realpath(p)
+
+    wanted = real(path)
+    if wanted is None:
+        return None
+    for c in doc["board"]["cards"]:
+        for m in c.get("comments") or []:
+            if any(real(f) == wanted for f in m.get("files") or []):
+                return wanted
+    return None
 
 
 def hermes_projects(hermes_home: Path) -> list[dict]:

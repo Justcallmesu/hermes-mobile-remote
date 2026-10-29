@@ -561,6 +561,35 @@ def create_app(cfg: Config, *, locator: BackendLocator | None = None, tailnet: T
             raise ApiError(400, "bad_op", str(exc), doc=await asyncio.to_thread(_bp, pid))
         return {"doc": doc, "applied": applied}
 
+    def _bp_file(pid: str, path: str) -> str:
+        target = bp_mod.comment_file(_bp(pid), path)
+        if target is None:
+            raise ApiError(403, "not_attached", "No comment on this board attaches that file")
+        return target
+
+    @app.get("/v1/blueprints/{pid}/file")
+    async def get_blueprint_file(pid: str, path: str, _: Device = Depends(device_auth)):
+        """A file a card comment attaches (a result Hermes shared), for the phone to open or save."""
+        _bp_on()
+        target = await asyncio.to_thread(_bp_file, pid, path)
+        if not os.path.isfile(target):
+            raise ApiError(404, "not_found", "File not found on the PC")
+        if os.path.getsize(target) > CHAT_FILE_MAX_BYTES:
+            raise ApiError(413, "too_large", "File too large to send to the phone")
+        return FileResponse(target, media_type=mimetypes.guess_type(target)[0] or "application/octet-stream",
+                            filename=os.path.basename(target), headers={"Cache-Control": "private, no-cache"})
+
+    @app.get("/v1/blueprints/{pid}/file/info")
+    async def get_blueprint_file_info(pid: str, path: str, _: Device = Depends(device_auth)):
+        _bp_on()
+        target = await asyncio.to_thread(_bp_file, pid, path)
+        try:
+            st = await asyncio.to_thread(os.stat, target)
+        except OSError:
+            return {"path": target, "name": os.path.basename(target), "exists": False}
+        return {"path": target, "name": os.path.basename(target), "exists": True, "size": st.st_size,
+                "modified": int(st.st_mtime), "mime": mimetypes.guess_type(target)[0] or "application/octet-stream"}
+
     @app.delete("/v1/blueprints/{pid}")
     async def trash_blueprint(pid: str, device: Device = Depends(device_auth)):
         _bp_on()

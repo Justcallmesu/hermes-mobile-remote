@@ -545,6 +545,8 @@ def cmd_blueprint(cfg: Config, args: argparse.Namespace) -> None:
             f["assignee"] = None if args.assignee == "none" else args.assignee
         if args.node:
             f["node"] = None if args.node == "none" else args.node
+        if args.agent:
+            f["agent"] = None if args.agent == "none" else args.agent
         return f
 
     try:
@@ -596,8 +598,26 @@ def cmd_blueprint(cfg: Config, args: argparse.Namespace) -> None:
                 run([{"op": "card.check", "id": rest[0], "text": " ".join(rest[1:]), "done": sub == "check"}])
             elif sub == "rm":
                 run([{"op": "card.remove", "id": rest[0]}])
+            elif sub == "start":  # move to Working, mine, and show me as working on it
+                cols = need(project())["board"]["columns"]
+                col = args.column or next((c["name"] for c in cols if c["name"].lower() in ("working", "in progress", "doing")), "Working")
+                run([{"op": "card.move", "id": rest[0], "column": col},
+                     {"op": "card.update", "id": rest[0], "assignee": "hermes", "agent": args.agent or "Hermes"}])
+            elif sub == "stop":  # stays in its column, nobody actively on it
+                run([{"op": "card.update", "id": rest[0], "agent": None}])
+            elif sub == "done":
+                run([{"op": "card.move", "id": rest[0], "column": args.column or need(project())["board"]["columns"][-1]["name"]}])
+            elif sub in ("comment", "ask", "review"):
+                kind = {"comment": "comment", "ask": "question", "review": "review"}[sub]
+                files = [os.path.abspath(os.path.expanduser(f)) for f in args.file or []]
+                missing = [f for f in files if not os.path.isfile(f)]
+                if missing:
+                    raise bp.BlueprintError("No such file: " + ", ".join(missing))
+                run([{"op": "card.comment", "id": rest[0], "kind": kind, "text": text(1), "files": files}])
+            elif sub == "resolve":
+                run([{"op": "comment.resolve", "id": rest[0], **({"comment_id": rest[1]} if len(rest) > 1 else {})}])
             else:
-                raise bp.BlueprintError("card add|move|edit|check|uncheck|rm")
+                raise bp.BlueprintError("card add|move|start|stop|done|edit|check|uncheck|comment|ask|review|resolve|rm")
         elif a == "node":
             sub = rest.pop(0) if rest else ""
             if sub == "add":
@@ -631,6 +651,12 @@ def cmd_blueprint(cfg: Config, args: argparse.Namespace) -> None:
             run([{"op": "diagram.layout"}])
         elif a == "log":
             run([{"op": "log", "text": text()}])
+        elif a == "instructions":  # no text: print them; text or '-' (stdin): set; 'none': clear
+            if not rest:
+                print(need(project()).get("instructions") or "(no instructions)")
+            else:
+                t = text()
+                run([{"op": "instructions.set", "text": "" if t.strip() == "none" else t}])
         elif a == "control":
             run([{"op": "control.set", "mode": rest[0] if rest else "shared"}])
         elif a == "path":
@@ -829,7 +855,7 @@ def main(argv: list[str] | None = None) -> None:
     doc = sub.add_parser("doctor", help="Check why the phone can't connect")
     doc.add_argument("--json", action="store_true", help="Machine-readable checks (for the tray app)")
     bpp = sub.add_parser("blueprint", help="Project blueprints (flow diagram + task board) for Hermes")
-    bpp.add_argument("action", choices=("list", "show", "md", "create", "trash", "restore", "card", "node", "column", "layout", "log", "control", "op", "path"))
+    bpp.add_argument("action", choices=("list", "show", "md", "create", "trash", "restore", "card", "node", "column", "layout", "log", "control", "instructions", "op", "path"))
     bpp.add_argument("args", nargs="*", help="Sub-action and its arguments (see the blueprint skill)")
     bpp.add_argument("-p", "--project", help="Project id, name or folder (default: the current folder's project)")
     bpp.add_argument("--here", action="store_true", help="Use the project that owns the current folder")
@@ -838,6 +864,8 @@ def main(argv: list[str] | None = None) -> None:
     bpp.add_argument("--body", "-b")
     bpp.add_argument("--tag", action="append")
     bpp.add_argument("--item", action="append", help="Checklist item (repeat)")
+    bpp.add_argument("--file", action="append", help="Attach a PC file to a comment (repeat); the phone can open it")
+    bpp.add_argument("--agent", help="Name shown on a card while an agent works on it (card start/edit)")
     bpp.add_argument("--priority", choices=("low", "medium", "high", "none"))
     bpp.add_argument("--due", help="YYYY-MM-DD or none")
     bpp.add_argument("--assignee", choices=("me", "hermes", "none"))
