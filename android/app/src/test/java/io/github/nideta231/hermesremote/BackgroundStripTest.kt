@@ -46,4 +46,13 @@ class BackgroundStripTest {
         val state = ChatState(items = listOf(tool), subagents = listOf(sub("a", "fix bug"), sub("b", "other")))
         assertEquals("1 subagent", summary(state))
     }
+
+    @Test fun `the expanded body holds every process and the unclaimed subagents`() {
+        val tool = ChatItem.Tool("t1", Delegate.TOOL, "", status = ToolStatus.RUNNING, goals = listOf("fix bug"))
+        val procs = listOf(proc("p"), proc("old", "exited"))
+        val strip = backgroundStrip(ChatState(items = listOf(tool), processes = procs,
+            subagents = listOf(sub("a", "fix bug"), sub("b", "other"))), loop = false, heartbeat = false)!!
+        assertEquals(listOf("p", "old"), strip.processes.map { it.id })
+        assertEquals(listOf("b"), strip.subagents.map { it.id })
+    }
 }
