@@ -69,6 +69,7 @@ def test_local_changes_still_allow_a_plain_restart(monkeypatch):
 
 
 import io
+import os
 import tarfile
 
 import pytest
@@ -117,6 +118,7 @@ def _stub_apply(monkeypatch, archive, sync_rc=(0,), healthy=(True, True)):
     return syncs
 
 
+@pytest.mark.skipif(os.name == "nt", reason="desktop-app self-update is Linux only; Windows updates with the app")
 def test_app_install_checks_github_tags(app_install, monkeypatch):
     monkeypatch.setattr(selfupdate, "_api_tags", lambda: ["v1.1.0", "v1.2.0", "junk"])
     info = selfupdate.check()
@@ -129,6 +131,7 @@ def test_app_install_checks_github_tags(app_install, monkeypatch):
     assert not info["can_update"] and "reach the update server" in info["reason"]
 
 
+@pytest.mark.skipif(os.name == "nt", reason="desktop-app self-update is Linux only; Windows updates with the app")
 def test_app_install_apply_swaps_dir_and_syncs_existing_venv(app_install, monkeypatch):
     syncs = _stub_apply(monkeypatch, _archive(app_install, GOOD))
     assert selfupdate.apply(log=lambda m: None) == "v1.2.0"
@@ -143,6 +146,7 @@ def test_app_install_apply_swaps_dir_and_syncs_existing_venv(app_install, monkey
     assert kw["env"]["UV_PROJECT_ENVIRONMENT"] == str(app_install / "venv")
 
 
+@pytest.mark.skipif(os.name == "nt", reason="desktop-app self-update is Linux only; Windows updates with the app")
 @pytest.mark.parametrize("sync_rc,healthy", [((1, 0), (True,)), ((0, 0), (False, True))])
 def test_app_install_failure_restores_old_dir_and_resyncs(app_install, monkeypatch, sync_rc, healthy):
     syncs = _stub_apply(monkeypatch, _archive(app_install, GOOD), sync_rc=sync_rc, healthy=healthy)
@@ -154,6 +158,7 @@ def test_app_install_failure_restores_old_dir_and_resyncs(app_install, monkeypat
     assert selfupdate._installed_tag() is None
 
 
+@pytest.mark.skipif(os.name == "nt", reason="desktop-app self-update is Linux only; Windows updates with the app")
 def test_app_install_error_after_the_swap_restores_old_dir_and_resyncs(app_install, monkeypatch):
     syncs = _stub_apply(monkeypatch, _archive(app_install, GOOD))
 
@@ -168,6 +173,7 @@ def test_app_install_error_after_the_swap_restores_old_dir_and_resyncs(app_insta
     assert selfupdate._installed_tag() is None
 
 
+@pytest.mark.skipif(os.name == "nt", reason="desktop-app self-update is Linux only; Windows updates with the app")
 def test_app_install_failed_second_rename_leaves_old_dir_in_place(app_install, monkeypatch):
     syncs = _stub_apply(monkeypatch, _archive(app_install, GOOD))
     real = selfupdate.Path.rename
@@ -183,6 +189,7 @@ def test_app_install_failed_second_rename_leaves_old_dir_in_place(app_install, m
     assert selfupdate._installed_tag() is None
 
 
+@pytest.mark.skipif(os.name == "nt", reason="desktop-app self-update is Linux only; Windows updates with the app")
 def test_app_install_refuses_unsafe_archive_members(app_install, monkeypatch):
     evil = _archive(app_install, {"proj/bridge/../../evil.txt": b"x", "proj/bridge/ok.txt": b"ok"})
     _stub_apply(monkeypatch, evil)
