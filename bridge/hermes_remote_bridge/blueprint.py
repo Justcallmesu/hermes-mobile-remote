@@ -42,7 +42,7 @@ COMMENT_KINDS = ("comment", "question", "review")  # question/review = waiting f
 MAX_COMMENTS = 200
 # Board settings, shared by the phone and Hermes. new_cards: where a card added (or moved into another
 # column) without an explicit position lands. aging_days: fade cards untouched that long (0 = off).
-SETTINGS = {"new_cards": ("bottom", "top"), "aging_days": (0, 3, 7, 14, 30)}
+SETTINGS = {"new_cards": ("bottom", "top"), "aging_days": (0, 3, 7, 14, 30), "sticky_add": (False, True)}
 MAX_COMMENT_FILES = 10
 DEFAULT_COLUMNS = (("docs", "Docs", "purple"), ("todo", "Todo", "blue"), ("working", "Working", "orange"), ("done", "Done", "green"))
 NODE_SIZE = {"start": (120, 56), "end": (120, 56), "decision": (150, 90), "feature": (180, 64), "flow": (180, 56), "note": (170, 70)}
@@ -216,10 +216,16 @@ def _limit(v) -> int | None:
     return n or None
 
 
+def _allowed(k: str, v) -> bool:
+    # bool is an int in Python: keep True/False out of the number settings and numbers out of the flags
+    flag = isinstance(SETTINGS[k][0], bool)
+    return (isinstance(v, bool) == flag) and v in SETTINGS[k]
+
+
 def clean_settings(v) -> dict:
     """Only known keys with allowed values (a board's own overrides, or the global defaults)."""
     v = v if isinstance(v, dict) else {}
-    return {k: v[k] for k, allowed in SETTINGS.items() if v.get(k) in allowed}
+    return {k: v[k] for k in SETTINGS if k in v and _allowed(k, v[k])}
 
 
 def settings(doc: dict, defaults: dict | None = None) -> dict:
@@ -498,7 +504,7 @@ def apply_op(doc: dict, op: dict, by: str = "phone") -> str | None:
             if v in (None, "default", "global"):
                 cur.pop(k, None)
                 continue
-            if v not in SETTINGS[k]:
+            if not _allowed(k, v):
                 raise BlueprintError(f"{k} must be one of {', '.join(map(str, SETTINGS[k]))} or default")
             cur[k] = v
         doc["settings"] = cur
@@ -727,7 +733,7 @@ class BlueprintStore:
                 raise BlueprintError(f"Unknown setting '{k}' (known: {', '.join(SETTINGS)})")
             if v in (None, "default"):
                 cur.pop(k, None)
-            elif v in SETTINGS[k]:
+            elif _allowed(k, v):
                 cur[k] = v
             else:
                 raise BlueprintError(f"{k} must be one of {', '.join(map(str, SETTINGS[k]))}")

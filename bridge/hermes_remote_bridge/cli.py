@@ -668,7 +668,7 @@ def cmd_blueprint(cfg: Config, args: argparse.Namespace) -> None:
             ch = {}
             for kv in rest:
                 k, _, v = kv.partition("=")
-                ch[k] = int(v) if v.isdigit() else v
+                ch[k] = int(v) if v.isdigit() else {"true": True, "false": False}.get(v.lower(), v)
             if glob:
                 cur = store.set_defaults(ch) if ch else store.defaults()
                 print("\n".join(f"{k}={cur.get(k, allowed[0])}" + ("" if k in cur else " (built-in)") for k, allowed in bp.SETTINGS.items()))

@@ -129,7 +129,7 @@ def test_board_settings_new_cards_on_top_and_column_limits(tmp_path):
     s.create("p1", "Shop")
     titles = lambda doc, col: [c["title"] for c in sorted(doc["board"]["cards"], key=lambda c: c["order"]) if c["column"] == col]
     doc, _ = s.apply("p1", [{"op": "card.add", "title": "A", "column": "Todo"}, {"op": "card.add", "title": "B", "column": "Todo"}])
-    assert titles(doc, "todo") == ["A", "B"] and bp.settings(doc) == {"new_cards": "bottom", "aging_days": 0}
+    assert titles(doc, "todo") == ["A", "B"] and bp.settings(doc) == {"new_cards": "bottom", "aging_days": 0, "sticky_add": False}
     doc, _ = s.apply("p1", [{"op": "settings.set", "new_cards": "top", "aging_days": 7}])
     doc, _ = s.apply("p1", [{"op": "card.add", "title": "C", "column": "Todo"}, {"op": "card.add", "title": "D", "column": "Todo", "index": 9}])
     assert titles(doc, "todo") == ["C", "A", "B", "D"]  # top by default; an explicit index still wins
@@ -137,7 +137,9 @@ def test_board_settings_new_cards_on_top_and_column_limits(tmp_path):
     assert titles(doc, "working") == ["B", "A"]
     doc, _ = s.apply("p1", [{"op": "card.move", "id": "C", "column": "Todo"}])  # same column, no index: to the end
     assert titles(doc, "todo") == ["D", "C"]
-    for bad in ({"new_cards": "middle"}, {"aging_days": 5}, {"colour": "x"}):
+    doc, _ = s.apply("p1", [{"op": "settings.set", "sticky_add": True}])
+    assert bp.settings(doc)["sticky_add"] is True
+    for bad in ({"new_cards": "middle"}, {"aging_days": 5}, {"colour": "x"}, {"sticky_add": 1}, {"aging_days": True}):
         with pytest.raises(bp.BlueprintError):
             s.apply("p1", [{"op": "settings.set", **bad}])
     doc, _ = s.apply("p1", [{"op": "column.update", "id": "Working", "limit": 1}])
@@ -178,7 +180,7 @@ def test_global_board_settings_apply_where_a_board_has_no_choice(tmp_path):
     doc2, _ = s.apply("p2", [{"op": "card.add", "title": "A", "column": "Todo"}, {"op": "card.add", "title": "B", "column": "Todo"}])
     assert titles(doc1) == ["B", "A"] and titles(doc2) == ["A", "B"]
     assert "_defaults" not in doc1 and "_defaults" not in s.get("p1")
-    assert bp.settings(doc2, s.defaults()) == {"new_cards": "bottom", "aging_days": 14}
+    assert bp.settings(doc2, s.defaults()) == {"new_cards": "bottom", "aging_days": 14, "sticky_add": False}
     doc2, _ = s.apply("p2", [{"op": "settings.set", "new_cards": "default"}])  # back to following the global one
     assert bp.settings(doc2, s.defaults())["new_cards"] == "top"
     with pytest.raises(bp.BlueprintError):
