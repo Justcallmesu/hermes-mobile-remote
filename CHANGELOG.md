@@ -30,7 +30,7 @@ request number.
   tap to open the Stop and steer actions. It hides when nothing runs or a question is open.
 - **A bridge installed by the desktop app can update itself from the phone (Linux)**: it checks the newest
   `vX.Y.Z` tag on GitHub, swaps in that release's `bridge/` keeping the old copy as `bridge.old`, and
-  restores it if the sync or the health check fails. `self_update = false` still turns it off.
+  restores it, re-syncs and restarts it if any step fails after the swap. `self_update = false` still turns it off.
 - **Bridge keeps a parked socket while its chats have work**: a dropped phone's Hermes socket now stays
   open while a turn, subagent, /loop, /heartbeat or background process is running, so a
   `terminal(background=true, notify=true)` watcher is no longer killed. It is released `park_seconds`
