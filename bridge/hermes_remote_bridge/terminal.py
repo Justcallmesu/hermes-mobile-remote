@@ -234,7 +234,9 @@ class Screen:
         out = {"type": "screen", "cols": s.columns, "rows": s.lines, "full": self.full,
                "cursor": [s.cursor.x, s.cursor.y, not s.cursor.hidden],
                "lines": {str(y): self._runs(s.buffer[y], s.columns) for y in sorted(dirty) if y < s.lines},
-               "title": getattr(s, "title", "") or ""}
+               "title": getattr(s, "title", "") or "",
+               # The shell asked for bracketed paste (DECSET 2004): the phone wraps pastes in it.
+               "paste": (2004 << 5) in s.mode}
         if scrolled:
             out["scrolled"] = [self._runs(line, s.columns) for line in scrolled]
         s.dirty.clear()

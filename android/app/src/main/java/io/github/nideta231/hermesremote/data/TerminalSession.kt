@@ -31,6 +31,8 @@ data class TermScreen(
     val cursorY: Int = 0,
     val cursorVisible: Boolean = true,
     val title: String = "",
+    /** The shell turned on bracketed paste (needs the updated bridge; false otherwise). */
+    val bracketedPaste: Boolean = false,
 ) {
     companion object { const val SCROLLBACK = 2000 }
 
@@ -49,8 +51,11 @@ data class TermScreen(
             scrollback = if (scrolled.isEmpty()) scrollback else (scrollback + scrolled).takeLast(SCROLLBACK),
             cursorX = cursor?.optInt(0) ?: cursorX, cursorY = cursor?.optInt(1) ?: cursorY,
             cursorVisible = cursor?.optBoolean(2, true) ?: cursorVisible,
-            title = f.optString("title", title))
+            title = f.optString("title", title), bracketedPaste = f.optBoolean("paste", bracketedPaste))
     }
+
+    /** Scrollback then the visible rows: what the view scrolls through and selects from. */
+    val all: List<TermLine> get() = scrollback + lines
 
     private fun parseLine(a: JSONArray?): TermLine = if (a == null) emptyList() else (0 until a.length()).mapNotNull { i ->
         val r = a.optJSONArray(i) ?: return@mapNotNull null
@@ -78,8 +83,54 @@ object TermKeys {
     const val PGUP = "\u001b[5~"
     const val PGDN = "\u001b[6~"
 
-    /** Ctrl + a letter: ^A = 0x01 ... ^Z = 0x1a. Other characters pass through. */
-    fun ctrl(c: Char): String = c.lowercaseChar().let { if (it in 'a'..'z') (it - 'a' + 1).toChar().toString() else it.toString() }
+    const val DELETE = "\u001b[3~"
+    const val INSERT = "\u001b[2~"
+
+    /** Ctrl + a key: ^A = 0x01 ... ^Z = 0x1a, ^@ ^[ ^\ ^] ^^ ^_, ^Space = NUL, ^? = DEL. Others pass through. */
+    fun ctrl(c: Char): String = when (val l = c.lowercaseChar()) {
+        in 'a'..'z' -> (l - 'a' + 1).toChar().toString()
+        ' ', '@', '2' -> "\u0000"
+        '[', '3' -> ESC
+        '\\', '4' -> "\u001c"
+        ']', '5' -> "\u001d"
+        '^', '6' -> "\u001e"
+        '_', '-', '7' -> "\u001f"
+        '?', '8' -> BACKSPACE
+        else -> c.toString()
+    }
+
+    /** F1..F12 (xterm). */
+    fun f(n: Int): String = when (n) {
+        1 -> "\u001bOP"; 2 -> "\u001bOQ"; 3 -> "\u001bOR"; 4 -> "\u001bOS"
+        5 -> "\u001b[15~"; 6 -> "\u001b[17~"; 7 -> "\u001b[18~"; 8 -> "\u001b[19~"
+        9 -> "\u001b[20~"; 10 -> "\u001b[21~"; 11 -> "\u001b[23~"; else -> "\u001b[24~"
+    }
+
+    /** Escape sequence for an Android key code that isn't a printable character, or null. */
+    fun forKeyCode(code: Int): String? = when (code) {
+        android.view.KeyEvent.KEYCODE_ENTER, android.view.KeyEvent.KEYCODE_NUMPAD_ENTER -> ENTER
+        android.view.KeyEvent.KEYCODE_DEL -> BACKSPACE
+        android.view.KeyEvent.KEYCODE_FORWARD_DEL -> DELETE
+        android.view.KeyEvent.KEYCODE_TAB -> TAB
+        android.view.KeyEvent.KEYCODE_ESCAPE -> ESC
+        android.view.KeyEvent.KEYCODE_DPAD_UP -> UP
+        android.view.KeyEvent.KEYCODE_DPAD_DOWN -> DOWN
+        android.view.KeyEvent.KEYCODE_DPAD_LEFT -> LEFT
+        android.view.KeyEvent.KEYCODE_DPAD_RIGHT -> RIGHT
+        android.view.KeyEvent.KEYCODE_MOVE_HOME -> HOME
+        android.view.KeyEvent.KEYCODE_MOVE_END -> END
+        android.view.KeyEvent.KEYCODE_PAGE_UP -> PGUP
+        android.view.KeyEvent.KEYCODE_PAGE_DOWN -> PGDN
+        android.view.KeyEvent.KEYCODE_INSERT -> INSERT
+        in android.view.KeyEvent.KEYCODE_F1..android.view.KeyEvent.KEYCODE_F12 -> f(code - android.view.KeyEvent.KEYCODE_F1 + 1)
+        else -> null
+    }
+
+    /** Pasted text: newlines as Enter, wrapped in bracketed-paste markers so shells don't run each line. */
+    fun paste(text: String, bracketed: Boolean = true): String {
+        val t = text.replace("\r\n", "\n").replace('\n', '\r')
+        return if (bracketed) "\u001b[200~$t\u001b[201~" else t
+    }
 }
 
 /**
