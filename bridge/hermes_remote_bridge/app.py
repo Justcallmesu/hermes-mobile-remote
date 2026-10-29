@@ -252,7 +252,8 @@ def create_app(cfg: Config, *, locator: BackendLocator | None = None, tailnet: T
     def audit_event(entry: dict) -> None:
         audit.info(json.dumps({"ts": round(time.time(), 3), **entry}))
 
-    parked = ParkedUpstreams(cfg.park_seconds, sleep=park_sleep, audit=audit_event)
+    parked = ParkedUpstreams(cfg.park_seconds, sleep=park_sleep, audit=audit_event,
+                             park_max_seconds=cfg.park_max_seconds)
 
     @contextlib.asynccontextmanager
     async def lifespan(_: FastAPI):

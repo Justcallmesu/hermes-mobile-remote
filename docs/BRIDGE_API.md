@@ -256,12 +256,20 @@ same one the desktop app uses. The bridge adds only:
    revision, updated_at}}`; `loop` and `heartbeat` are `null` when none is set, else carry `status`
    (`active | paused | done | cleared`). Read-only; the phone cannot change them. The same object arrives
    pushed as a `session.control.update` event while the socket is attached.
-9. **Dropped sockets are parked:** when a phone's socket closes, the bridge keeps its Hermes socket open for
-   `park_seconds` (config, default 300, `0` = off) so Hermes does not start its 20 s reap of the chat. The same
-   device connecting again inside that time gets the parked socket: the bridge sends it the stored
-   `gateway.ready` first, then relays as usual, and the app should `session.resume` its open chats. Events
-   Hermes emits while no phone is attached are dropped, not replayed. A second live connection from the same
-   device closes the first. Audit events: `ws_park`, `ws_reattach`, `ws_park_expired`.
+9. **Dropped sockets are parked while their chats have work:** when a phone's socket closes, the bridge keeps its
+   Hermes socket open so Hermes does not start its 20 s reap of the chat (which would kill a background process).
+   It learns the chats attached on the socket from the `session_id` in the `session.create` / `session.resume`
+   results it relays (a relayed `session.close` drops one). Every 30 s while parked it asks Hermes
+   (`session.active_list`, `process.list`, `subagent.list`, `session.control.read`, with ids starting `brg-`) whether
+   any of them has work: a running turn, a live subagent, an active /loop or /heartbeat, or a running process.
+   It keeps the socket while so, and releases it after `park_seconds` of idle (config, default 600, `0` = parking
+   off) or after `park_max_seconds` (default 86400) regardless. A probe that fails, is refused or times out counts
+   as work. Probe replies are consumed by the bridge and never forwarded, also to a phone that reattaches
+   meanwhile. The same device connecting again gets the parked socket: the bridge sends it the stored
+   `gateway.ready` first, then relays as usual, and the app should `session.resume` its open chats. Events and
+   questions (approvals, clarify) Hermes emits while no phone is attached are not answered or replayed; Hermes
+   re-offers questions on resume. A second live connection from the same device closes the first. Audit events:
+   `ws_park`, `ws_reattach`, `ws_park_expired`, `ws_park_cap`.
 
 ### Events the app renders
 

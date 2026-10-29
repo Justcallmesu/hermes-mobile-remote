@@ -692,6 +692,169 @@ def test_bridge_shutdown_closes_every_parked_socket(tmp_path, parkable_hermes):
     _wait(lambda: len(closed) == 2, "shutdown closing both")
 
 
+@pytest.fixture
+def workable_hermes():
+    """A Hermes whose attached session `s1` reports work as the test sets it, and that records the
+    bridge's own probe requests (ids `brg-...`). `state["mode"]`: ok | error | silent."""
+    state = {"turn": False, "process": False, "subagent": False, "loop": False, "heartbeat": False,
+             "mode": "ok", "hold": None}
+    conns, closed, probes = [], [], []
+
+    def answer(frame):
+        m = frame["method"]
+        if m in ("session.create", "session.resume"):
+            return {"session_id": "s1"}
+        if m == "session.active_list":
+            return {"sessions": [{"id": "s1", "status": "working" if state["turn"] else "idle"}]}
+        if m == "process.list":
+            return {"processes": [{"status": "running" if state["process"] else "exited"}]}
+        if m == "subagent.list":
+            return {"subagents": [{"id": "x"}] if state["subagent"] else []}
+        if m == "session.control.read":
+            return {"control": {k: ({"status": "active"} if state[k] else {"status": "done"})
+                                for k in ("loop", "heartbeat")}}
+        return {"ok": True}
+
+    def handler(conn):
+        conns.append(conn)
+        conn.send(json.dumps({"jsonrpc": "2.0", "method": "event", "params": {"type": "gateway.ready", "payload": {}}}))
+        for raw in conn:
+            frame = json.loads(raw)
+            if "method" not in frame:
+                continue
+            if str(frame["id"]).startswith("brg-"):
+                probes.append(frame)
+                if state["hold"] is not None:
+                    state["hold"].wait()
+                if state["mode"] == "silent":
+                    continue
+                if state["mode"] == "error":
+                    conn.send(json.dumps({"jsonrpc": "2.0", "id": frame["id"], "error": {"code": -1, "message": "no"}}))
+                    continue
+            conn.send(json.dumps({"jsonrpc": "2.0", "id": frame["id"], "result": answer(frame)}))
+        closed.append(conn)
+
+    server = serve(handler, "127.0.0.1", 0)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    yield server.socket.getsockname()[1], state, closed, probes
+    server.shutdown()
+
+
+class _Clock:
+    """Virtual time: a sleep adds its length at once (plus a tiny real yield), so minutes pass in a blink."""
+
+    def __init__(self):
+        self.t = 0.0
+
+    async def sleep(self, d):
+        await asyncio.sleep(0.01)
+        self.t += d
+
+
+def _work_app(tmp_path, port, park_seconds=60, park_max_seconds=86400):
+    clock = _Clock()
+    cfg = Config(devices_file=tmp_path / "d.json", audit_log=tmp_path / "a.log", park_seconds=park_seconds,
+                 park_max_seconds=park_max_seconds)
+    store = DeviceStore(cfg.devices_file)
+    token = store.pair("phone")[1]
+    app = create_app(cfg, locator=FakeLocator(Backend(port, "tok")), http=fake_http(),
+                     tailnet=FakeTailnet({PHONE: "me@example.com"}), devices=store,
+                     owner_login="me@example.com", park_sleep=clock.sleep)
+    return app, token, clock, cfg
+
+
+def _attach_and_drop(c, token, attach=True):
+    with c.websocket_connect("/v1/ws", headers=auth(token)) as ws:
+        ws.receive_json()
+        if attach:
+            ws.send_text(json.dumps({"jsonrpc": "2.0", "id": 5, "method": "session.create", "params": {}}))
+            assert ws.receive_json()["result"] == {"session_id": "s1"}
+
+
+def _stays_open_for(clock, seconds, closed):
+    start = clock.t
+    _wait(lambda: clock.t - start >= seconds, "virtual time")
+    assert closed == []
+
+
+def test_parked_socket_with_a_running_process_stays_open_until_it_stops(tmp_path, workable_hermes):
+    port, state, closed, _ = workable_hermes
+    app, token, clock, cfg = _work_app(tmp_path, port)
+    state["process"] = True
+    with client(app, PHONE) as c:
+        _attach_and_drop(c, token)
+        _wait(lambda: '"ws_park"' in _log(cfg), "ws_park")
+        _stays_open_for(clock, 3 * 60, closed)
+        state["process"] = False
+        stopped = clock.t
+        _wait(lambda: '"ws_park_expired"' in _log(cfg) and len(closed) == 1, "idle release")
+        assert clock.t - stopped >= 60 - 30  # park_seconds of idle, to the 30 s check
+
+
+@pytest.mark.parametrize("signal", ["turn", "subagent", "loop", "heartbeat", "process"])
+def test_each_work_signal_alone_keeps_the_parked_socket_open(tmp_path, workable_hermes, signal):
+    port, state, closed, _ = workable_hermes
+    app, token, clock, cfg = _work_app(tmp_path, port)
+    state[signal] = True
+    with client(app, PHONE) as c:
+        _attach_and_drop(c, token)
+        _wait(lambda: '"ws_park"' in _log(cfg), "ws_park")
+        _stays_open_for(clock, 3 * 60, closed)
+        assert '"ws_park_expired"' not in _log(cfg)
+
+
+def test_no_attached_session_is_a_plain_idle_park(tmp_path, workable_hermes):
+    port, state, closed, probes = workable_hermes
+    app, token, clock, cfg = _work_app(tmp_path, port)
+    with client(app, PHONE) as c:
+        _attach_and_drop(c, token, attach=False)
+        _wait(lambda: '"ws_park_expired"' in _log(cfg) and len(closed) == 1, "idle release")
+        assert clock.t >= 60 - 30 and probes == []
+
+
+def test_park_max_seconds_releases_a_socket_that_always_has_work(tmp_path, workable_hermes):
+    port, state, closed, _ = workable_hermes
+    app, token, clock, cfg = _work_app(tmp_path, port, park_max_seconds=200)
+    state["process"] = True
+    with client(app, PHONE) as c:
+        _attach_and_drop(c, token)
+        _wait(lambda: '"ws_park_cap"' in _log(cfg) and len(closed) == 1, "cap release")
+        assert '"ws_park_expired"' not in _log(cfg)
+
+
+def test_probe_replies_never_reach_a_phone_that_reattaches_mid_probe(tmp_path, workable_hermes):
+    port, state, closed, probes = workable_hermes
+    app, token, clock, cfg = _work_app(tmp_path, port)
+    hold = state["hold"] = threading.Event()
+    with client(app, PHONE) as c:
+        _attach_and_drop(c, token)
+        _wait(lambda: probes, "a probe in flight")
+        with c.websocket_connect("/v1/ws", headers=auth(token)) as ws:
+            ws.receive_json()
+            hold.set()
+            time.sleep(0.3)  # Hermes answers the probe now
+            ws.send_text(json.dumps({"jsonrpc": "2.0", "id": 7, "method": "ping"}))
+            seen = []
+            while (frame := ws.receive_json()).get("id") != 7:
+                seen.append(frame)
+            assert seen == [] and frame["result"] == {"ok": True}
+        assert closed == []
+
+
+@pytest.mark.parametrize("mode", ["error", "silent"])
+def test_a_failed_probe_counts_as_work(tmp_path, workable_hermes, monkeypatch, mode):
+    from hermes_remote_bridge import relay
+    monkeypatch.setattr(relay, "PROBE_TIMEOUT", 0.2)
+    port, state, closed, _ = workable_hermes
+    app, token, clock, cfg = _work_app(tmp_path, port)
+    state["mode"] = mode
+    with client(app, PHONE) as c:
+        _attach_and_drop(c, token)
+        _wait(lambda: '"ws_park"' in _log(cfg), "ws_park")
+        _stays_open_for(clock, 3 * 60, closed)
+        assert '"ws_park_expired"' not in _log(cfg)
+
+
 def test_phone_can_read_loop_state_but_not_call_outside_the_list():
     ok = json.dumps({"jsonrpc": "2.0", "id": 1, "method": "session.control.read", "params": {"session_id": "a"}})
     assert check_frame(ok, 1000) == (ok, None)

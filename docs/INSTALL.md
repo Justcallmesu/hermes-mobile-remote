@@ -276,7 +276,8 @@ allowed_profiles = []           # Hermes profiles the phone may switch to; empty
 max_body_bytes = 1_000_000
 requests_per_minute = 240
 frames_per_minute = 600         # per live connection
-park_seconds = 300              # keep Hermes' socket open this long after the phone drops; 0 = off
+park_seconds = 600              # after the phone drops, keep Hermes' socket while its chats have work, then this long idle; 0 = off
+park_max_seconds = 86400        # release a parked socket after this long even if a chat still has work
 self_update = true              # let a paired phone update this bridge (git checkout installs only)
 notes = true                    # the Notes page; files in ~/.config/hermes-remote/notes (notes_dir)
 blueprints = true               # project blueprints; files in ~/.config/hermes-remote/blueprints (blueprints_dir)

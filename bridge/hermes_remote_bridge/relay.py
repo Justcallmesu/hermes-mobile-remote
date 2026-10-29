@@ -145,20 +145,51 @@ class _Live:
         self.done = asyncio.Event()
 
 
-class ParkedUpstreams:
-    """Hermes sockets kept open, per device, for a while after the phone's socket dropped.
+PROBE_PREFIX = "brg-"  # ids of the bridge's own requests; replies to them are never forwarded
+PROBE_INTERVAL = 30.0  # seconds between work checks on a parked socket
+PROBE_TIMEOUT = 10.0  # seconds to wait for one probe reply
 
-    Hermes reaps a session 20 s after its socket detaches. Holding the upstream socket for
-    `park_seconds` lets a phone that comes back (app reopened, network change) re-attach to the
-    same one. Frames Hermes sends meanwhile are dropped: the phone's `session.resume` rebuilds state.
+
+class _Parked:
+    def __init__(self, upstream: Any, ready: str, sessions: set):
+        self.upstream = upstream
+        self.ready = ready
+        self.sessions = sessions  # runtime session ids attached on this socket
+        self.tasks: list[asyncio.Task] = []
+        self.pending: dict[str, asyncio.Future] = {}
+        self.seq = 0
+
+
+def _is_probe_frame(text: str) -> dict | None:
+    """The parsed frame when `text` is a reply to one of the bridge's own probes."""
+    if f'"{PROBE_PREFIX}' not in text:
+        return None
+    try:
+        frame = json.loads(text)
+    except ValueError:
+        return None
+    rid = frame.get("id") if isinstance(frame, dict) else None
+    return frame if isinstance(rid, str) and rid.startswith(PROBE_PREFIX) else None
+
+
+class ParkedUpstreams:
+    """Hermes sockets kept open, per device, after the phone's socket dropped.
+
+    Hermes reaps a session 20 s after its socket detaches (and never waits for a background
+    process). While parked, the bridge asks Hermes every 30 s whether a session attached on the
+    socket still has work (a turn, subagent, /loop, /heartbeat or running process) and keeps it
+    open while so. Once none has, it is released after `park_seconds` of idle; `park_max_seconds`
+    releases it regardless. A phone that comes back re-attaches to the same socket. Frames Hermes
+    sends meanwhile are dropped: the phone's `session.resume` rebuilds state.
     """
 
     def __init__(self, park_seconds: float = 0, *, sleep: Callable[[float], Awaitable[Any]] = asyncio.sleep,
-                 audit: Callable[[dict], None] = lambda e: None):
+                 audit: Callable[[dict], None] = lambda e: None, park_max_seconds: float = 86400):
         self.park_seconds = park_seconds
+        self.park_max_seconds = park_max_seconds
         self._sleep = sleep
         self._audit = audit
-        self._parked: dict[str, tuple[Any, str, list[asyncio.Task]]] = {}
+        self._parked: dict[str, _Parked] = {}
         self.live: dict[str, _Live] = {}
         self._closing: set[asyncio.Task] = set()
 
@@ -166,45 +197,96 @@ class ParkedUpstreams:
     def enabled(self) -> bool:
         return self.park_seconds > 0
 
-    def park(self, device: str, upstream: Any, ready: str) -> None:
+    def park(self, device: str, upstream: Any, ready: str, sessions: Iterable[str] = ()) -> None:
         self._discard(device)
+        entry = _Parked(upstream, ready, set(sessions))
 
-        async def expire() -> None:
-            await self._sleep(self.park_seconds)
-            self._audit({"event": "ws_park_expired", "device": device})
+        async def watch() -> None:
+            elapsed = idle = 0.0  # time is what the sleeps add up to, so a fake sleep is a fake clock
+            while True:
+                step = min(PROBE_INTERVAL, max(self.park_seconds - idle, 0.0), self.park_max_seconds - elapsed)
+                await self._sleep(step)
+                elapsed += step
+                if elapsed >= self.park_max_seconds:
+                    self._audit({"event": "ws_park_cap", "device": device})
+                    break
+                idle = 0.0 if await self._has_work(entry) else idle + step
+                if idle >= self.park_seconds:
+                    self._audit({"event": "ws_park_expired", "device": device})
+                    break
             self._discard(device)
 
         async def drain() -> None:
             with contextlib.suppress(Exception):
-                async for _ in upstream:
-                    pass
+                async for raw in upstream:
+                    frame = _is_probe_frame(raw if isinstance(raw, str) else raw.decode(errors="replace"))
+                    waiter = entry.pending.get(frame["id"]) if frame else None
+                    if waiter is not None and not waiter.done():
+                        waiter.set_result(frame)
             self._discard(device)  # Hermes closed (or errored) while parked
 
-        self._parked[device] = (upstream, ready, [asyncio.create_task(expire()), asyncio.create_task(drain())])
+        self._parked[device] = entry
+        entry.tasks = [asyncio.create_task(watch()), asyncio.create_task(drain())]
 
-    def claim(self, device: str) -> tuple[Any, str] | None:
+    async def _ask(self, entry: _Parked, method: str, params: dict) -> Any:
+        entry.seq += 1
+        rid = f"{PROBE_PREFIX}{entry.seq}"
+        waiter = entry.pending[rid] = asyncio.get_running_loop().create_future()
+        try:
+            await entry.upstream.send(json.dumps({"jsonrpc": "2.0", "id": rid, "method": method, "params": params}))
+            frame = await asyncio.wait_for(waiter, PROBE_TIMEOUT)
+        finally:
+            entry.pending.pop(rid, None)
+        if "error" in frame:
+            raise RuntimeError(f"{method} refused")
+        return frame.get("result") or {}
+
+    async def _has_work(self, entry: _Parked) -> bool:
+        """Whether any attached session has work. A failed or refused probe counts as work."""
+        if not entry.sessions:
+            return False
+        try:
+            listing = await self._ask(entry, "session.active_list", {})
+            if any(row.get("id") in entry.sessions and row.get("status") != "idle"
+                   for row in listing.get("sessions") or []):
+                return True
+            for sid in list(entry.sessions):
+                params = {"session_id": sid}
+                if any(p.get("status") == "running"
+                       for p in (await self._ask(entry, "process.list", params)).get("processes") or []):
+                    return True
+                if (await self._ask(entry, "subagent.list", params)).get("subagents"):
+                    return True
+                control = (await self._ask(entry, "session.control.read", params)).get("control") or {}
+                if any((control.get(k) or {}).get("status") == "active" for k in ("loop", "heartbeat")):
+                    return True
+        except Exception:  # noqa: BLE001 - never destructive: when unsure, keep the socket
+            return True
+        return False
+
+    def claim(self, device: str) -> tuple[Any, str, set] | None:
         entry = self._parked.pop(device, None)
         if entry is None:
             return None
-        for t in entry[2]:
+        for t in entry.tasks:
             t.cancel()
-        return entry[0], entry[1]
+        return entry.upstream, entry.ready, entry.sessions
 
     def _discard(self, device: str) -> None:
         entry = self._parked.pop(device, None)
         if entry is not None:
-            for t in entry[2]:
+            for t in entry.tasks:
                 t.cancel()
-            task = asyncio.get_running_loop().create_task(_close_quietly(entry[0]))
+            task = asyncio.get_running_loop().create_task(_close_quietly(entry.upstream))
             self._closing.add(task)  # keep a reference until it is done
             task.add_done_callback(self._closing.discard)
 
     async def close_all(self) -> None:
         entries, self._parked = list(self._parked.values()), {}
-        for upstream, _, tasks in entries:
-            for t in tasks:
+        for entry in entries:
+            for t in entry.tasks:
                 t.cancel()
-            await _close_quietly(upstream)
+            await _close_quietly(entry.upstream)
 
 
 async def _close_quietly(upstream: Any) -> None:
@@ -243,8 +325,10 @@ class Relay:
                 await asyncio.wait_for(old.done.wait(), 5)
         claimed = parked.claim(device_name)
         ready: str | None = None
+        sessions: set = set()  # runtime session ids attached on this upstream socket
+        asked: dict[Any, str] = {}  # id of a relayed session.create/resume -> its method
         if claimed is not None:
-            upstream, ready = claimed
+            upstream, ready, sessions = claimed
         else:
             try:
                 upstream = await websockets.connect(backend.ws, max_size=None, ping_interval=20, ping_timeout=20,
@@ -287,6 +371,11 @@ class Relay:
                     method = verdict.frame.get("method")
                     if isinstance(method, str):
                         methods[method] = methods.get(method, 0) + 1
+                    rid = verdict.frame.get("id")
+                    if method in ("session.create", "session.resume") and isinstance(rid, (int, str)):
+                        asked[rid] = method
+                    elif method == "session.close":
+                        sessions.discard((verdict.frame.get("params") or {}).get("session_id"))
                     stats.from_phone(verdict.frame)
                     await upstream.send(verdict.forward)
 
@@ -298,6 +387,10 @@ class Relay:
                 text = raw if isinstance(raw, str) else raw.decode(errors="replace")
                 if ready is None and "gateway.ready" in text and _is_ready(text):
                     ready = text
+                if _is_probe_frame(text) is not None:
+                    continue  # the answer to a probe sent while parked: the bridge's, not the phone's
+                if asked and '"result"' in text:
+                    _note_session(text, asked, sessions)
                 stats.from_hermes(text)
                 await phone.send_text(text)
 
@@ -335,7 +428,7 @@ class Relay:
             with contextlib.suppress(BaseException):
                 await asyncio.gather(*tasks, return_exceptions=True)
             if keep:
-                parked.park(device_name, upstream, ready)
+                parked.park(device_name, upstream, ready, sessions)
                 self.audit({"event": "ws_park", "device": device_name})
             if parked.live.get(device_name) is live:
                 del parked.live[device_name]
@@ -346,6 +439,20 @@ class Relay:
                 if (phone.application_state != WebSocketState.DISCONNECTED
                         and phone.client_state != WebSocketState.DISCONNECTED):
                     await phone.close(code=1012 if reason.startswith("hermes") else 1000)
+
+
+def _note_session(text: str, asked: dict, sessions: set) -> None:
+    """Remember the runtime session id a relayed session.create/resume answered with."""
+    try:
+        frame = json.loads(text)
+    except ValueError:
+        return
+    rid = frame.get("id") if isinstance(frame, dict) else None
+    if isinstance(rid, (int, str)) and rid in asked:
+        del asked[rid]
+        sid = (frame.get("result") or {}).get("session_id") if isinstance(frame.get("result"), dict) else None
+        if isinstance(sid, str):
+            sessions.add(sid)
 
 
 def _is_ready(raw: str) -> bool:

@@ -25,6 +25,10 @@ request number.
   (1.26+) with the phone's own token, so nothing to set up. **@Justcallmesu** (#21)
 - Linux tray: an *Activity* line (devices connected, turns, approvals waiting) and *Bridge
   stats...*, which shows the full summary. **@Justcallmesu** (#21)
+- **Bridge keeps a parked socket while its chats have work**: a dropped phone's Hermes socket now stays
+  open while a turn, subagent, /loop, /heartbeat or background process is running, so a
+  `terminal(background=true, notify=true)` watcher is no longer killed. It is released `park_seconds`
+  (default now 600) after the last work ends, or after `park_max_seconds` (default 86400) regardless.
 
 ## v1.34.0
 
