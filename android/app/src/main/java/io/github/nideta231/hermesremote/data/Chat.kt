@@ -28,6 +28,8 @@ sealed interface ChatItem {
         val callId: String? = null,
         /** Pictures the tool returned (e.g. vision_analyze, screenshots), as `data:` urls. */
         val images: List<String> = emptyList(),
+        /** delegate_task only: the goals it dispatched, in task order (the delegate card's rows). */
+        val goals: List<String> = emptyList(),
     ) : ChatItem
     /** [decided]: the choice made (here or on another screen), null while it waits. */
     data class Approval(override val key: String, val request: ApprovalRequest, val decided: String? = null) : ChatItem
@@ -269,7 +271,7 @@ object HistoryMapper {
                     val name = m.str("name") ?: "tool"
                     val args = m.optJSONObject("args")
                     items += ChatItem.Tool("h-$id", name, m.str("context")?.takeIf { it.isNotBlank() } ?: summarizeArgs(args),
-                        callId = m.str("tool_call_id"))
+                        callId = m.str("tool_call_id"), goals = if (name == Delegate.TOOL) Delegate.goals(args) else emptyList())
                 }
                 "system" -> if (text.isNotBlank()) items += ChatItem.Notice("h-$id", text.trim())
             }
@@ -337,7 +339,8 @@ object LiveReducer {
                     ?: summarizeArgs(p.optJSONObject("args"))
                 val callId = p.str("tool_id")
                 if (callId != null && out.any { it is ChatItem.Tool && it.callId == callId }) return out
-                out += ChatItem.Tool("live-$key", name, label, status = ToolStatus.RUNNING, callId = callId)
+                out += ChatItem.Tool("live-$key", name, label, status = ToolStatus.RUNNING, callId = callId,
+                    goals = if (name == Delegate.TOOL) Delegate.goals(p.optJSONObject("args")) else emptyList())
             }
             "tool.complete" -> {
                 val callId = p.str("tool_id")

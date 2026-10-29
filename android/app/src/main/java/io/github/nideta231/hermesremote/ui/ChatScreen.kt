@@ -1,6 +1,7 @@
 package io.github.nideta231.hermesremote.ui
 
 import io.github.nideta231.hermesremote.data.SubagentTail
+import io.github.nideta231.hermesremote.data.Delegate
 import io.github.nideta231.hermesremote.data.UpdateState
 import androidx.compose.ui.platform.LocalConfiguration
 import android.content.res.Configuration
@@ -196,6 +197,8 @@ class ChatActions(
     val followSubagent: suspend (String, (SubagentTail) -> Unit) -> Unit = { _, _ -> },
     /** Send a running child an instruction (id, text, done: queued or not). */
     val steerSubagent: (String, String, (Boolean) -> Unit) -> Unit = { _, _, _ -> },
+    /** Open a child's own chat (its stored session id). */
+    val openSubagentSession: (String) -> Unit = {},
     /** Kill one background process of the open chat. */
     val stopProcess: (String) -> Unit = {},
 )
@@ -281,7 +284,7 @@ fun ChatScreen(
                 when (body) {
                     0 -> LoadingChat()
                     1 -> EmptyChat(onPick = { actions.draft(it) })
-                    else -> MessageList(state, SubagentActions(actions.stopSubagent, actions.followSubagent, actions.steerSubagent),
+                    else -> MessageList(state, SubagentActions(actions.stopSubagent, actions.followSubagent, actions.steerSubagent, actions.openSubagentSession),
                         actions.stopProcess)
                 }
             }
@@ -521,6 +524,9 @@ private fun MessageList(state: ChatState, subagentActions: SubagentActions, stop
         !(last is ChatItem.Assistant && last.streaming) && !(last is ChatItem.Thinking && last.streaming) &&
         !(last is ChatItem.Tool && last.status == ToolStatus.RUNNING)
 
+    val delegateTools = remember(state.items) { state.items.filterIsInstance<ChatItem.Tool>().filter { it.name == Delegate.TOOL } }
+    val (delegateRows, unclaimed) = remember(delegateTools, state.subagents) { Delegate.merge(delegateTools, state.subagents) }
+
     Box(Modifier.fillMaxSize()) {
         LazyColumn(state = listState, modifier = Modifier.fillMaxSize(),
             contentPadding = PaddingValues(start = 14.dp, end = 14.dp, top = 8.dp, bottom = 16.dp),
@@ -531,7 +537,8 @@ private fun MessageList(state: ChatState, subagentActions: SubagentActions, stop
                         is ChatItem.User -> UserBubble(item)
                         is ChatItem.Assistant -> AssistantBlock(item)
                         is ChatItem.Thinking -> ThinkingBlock(item)
-                        is ChatItem.Tool -> ToolRow(item)
+                        is ChatItem.Tool -> delegateRows[item.key]?.takeIf { it.isNotEmpty() }
+                            ?.let { DelegateCard(it, subagentActions) } ?: ToolRow(item)
                         is ChatItem.Approval -> if (item.decided != null) ApprovalRecord(item)
                         is ChatItem.Clarify -> if (item.answer != null) ClarifyRecord(item)
                         is ChatItem.Secret -> if (item.outcome != null) SecretRecord(item)
@@ -540,9 +547,9 @@ private fun MessageList(state: ChatState, subagentActions: SubagentActions, stop
                     }
                 }
             }
-            if (state.subagents.isNotEmpty()) item(key = "subagents") {
+            if (unclaimed.isNotEmpty()) item(key = "subagents") {
                 Box(Modifier.animateItem(fadeInSpec = null, fadeOutSpec = null).entrance("subagents", seen)) {
-                    SubagentPanel(state.subagents, subagentActions)
+                    SubagentPanel(unclaimed, subagentActions)
                 }
             }
             if (state.processes.isNotEmpty()) item(key = "processes") {
