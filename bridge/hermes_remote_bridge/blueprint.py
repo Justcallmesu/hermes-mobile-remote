@@ -47,6 +47,8 @@ MAX_COMMENT_FILES = 10
 DEFAULT_COLUMNS = (("docs", "Docs", "purple"), ("todo", "Todo", "blue"), ("working", "Working", "orange"), ("done", "Done", "green"))
 NODE_SIZE = {"start": (120, 56), "end": (120, 56), "decision": (150, 90), "feature": (180, 64), "flow": (180, 56), "note": (170, 70)}
 MAX_LOG = 300
+# Length limits; longer text is refused (not cut) so neither side silently loses words.
+MAX_TITLE, MAX_LABEL, MAX_COLUMN = 600, 400, 120
 MAX_TEXT = 20_000
 _PID = re.compile(r"^[A-Za-z0-9_.:-]{1,80}$")
 _DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
@@ -62,6 +64,14 @@ def _id(prefix: str) -> str:
 
 def _text(v, limit: int = 300) -> str:
     return str(v if v is not None else "").strip()[:limit]
+
+
+def _checked(v, limit: int, what: str) -> str:
+    """Like _text, but text over [limit] is an error instead of being cut off."""
+    t = str(v if v is not None else "").strip()
+    if len(t) > limit:
+        raise BlueprintError(f"{what} is {len(t)} characters; the limit is {limit}")
+    return t
 
 
 def new_doc(project_id: str, name: str = "", path: str | None = None) -> dict:
@@ -81,7 +91,7 @@ def new_doc(project_id: str, name: str = "", path: str | None = None) -> dict:
 def _node(f: dict) -> dict:
     kind = str(f.get("kind")) if f.get("kind") in NODE_KINDS else "feature"
     w, h = NODE_SIZE[kind]
-    return {"id": f.get("id") or _id("n"), "kind": kind, "label": _text(f.get("label"), 200),
+    return {"id": f.get("id") or _id("n"), "kind": kind, "label": _checked(f.get("label"), MAX_LABEL, "A node label"),
             "x": float(f.get("x") or 0), "y": float(f.get("y") or 0),
             "w": float(f.get("w") or w), "h": float(f.get("h") or h),
             "color": f.get("color") if f.get("color") in COLORS else "default", "note": _text(f.get("note"), 2000)}
@@ -158,7 +168,7 @@ def _tags(v) -> list[str]:
 
 def _card_fields(doc: dict, card: dict, f: dict) -> None:
     if "title" in f:
-        card["title"] = _text(f["title"], 300) or card.get("title") or "Untitled"
+        card["title"] = _checked(f["title"], MAX_TITLE, "A card title") or card.get("title") or "Untitled"
     if "body" in f:
         card["body"] = str(f["body"] or "")[:MAX_TEXT]
     if "tags" in f:
@@ -310,7 +320,7 @@ def apply_op(doc: dict, op: dict, by: str = "phone") -> str | None:
         n = _node_ref(doc, op.get("id"))
         for k in ("label", "note"):
             if k in op:
-                n[k] = _text(op[k], 200 if k == "label" else 2000)
+                n[k] = _checked(op[k], MAX_LABEL, "A node label") if k == "label" else _text(op[k], 2000)
         for k in ("x", "y", "w", "h"):
             if k in op:
                 n[k] = float(op[k])
@@ -350,7 +360,7 @@ def apply_op(doc: dict, op: dict, by: str = "phone") -> str | None:
         layout(doc)
         return "Tidied the diagram"
     if kind == "column.add":
-        name = _text(op.get("name"), 60)
+        name = _checked(op.get("name"), MAX_COLUMN, "A column name")
         if not name:
             raise BlueprintError("A column needs a name")
         cid = op.get("id") or re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-") or _id("col")
@@ -363,8 +373,8 @@ def apply_op(doc: dict, op: dict, by: str = "phone") -> str | None:
         return f"Added column '{name}'"
     if kind == "column.update":
         c = _column(doc, op.get("id"))
-        if _text(op.get("name"), 60):
-            c["name"] = _text(op["name"], 60)
+        if _checked(op.get("name"), MAX_COLUMN, "A column name"):
+            c["name"] = _checked(op["name"], MAX_COLUMN, "A column name")
         if "color" in op:
             c["color"] = op["color"] if op["color"] in COLORS else "default"
         if "limit" in op:  # WIP cap: a positive number, or 0/null for none

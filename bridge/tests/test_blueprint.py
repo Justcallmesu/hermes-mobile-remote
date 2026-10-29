@@ -166,6 +166,18 @@ def test_comments_and_start_remember_the_hermes_chat(tmp_path):
     assert latest["card"] == cid and latest["text"] == "Stripe?" and latest["by"] == "hermes"
 
 
+def test_long_titles_are_refused_not_cut(tmp_path):
+    s = bp.BlueprintStore(tmp_path)
+    s.create("p1", "Shop")
+    doc, ap = s.apply("p1", [{"op": "card.add", "title": "x" * 600, "column": "Todo"}])
+    assert len(doc["board"]["cards"][0]["title"]) == 600
+    for op in ({"op": "card.add", "title": "x" * 601}, {"op": "card.update", "id": ap[0]["id"], "title": "y" * 601},
+               {"op": "column.add", "name": "c" * 121}, {"op": "node.add", "label": "n" * 401}):
+        with pytest.raises(bp.BlueprintError, match="the limit is"):
+            s.apply("p1", [op])
+    assert s.get("p1")["board"]["cards"][0]["title"] == "x" * 600
+
+
 def test_routes(tmp_path):
     cfg = Config(devices_file=tmp_path / "d.json", audit_log=tmp_path / "a.log", trust_file=tmp_path / "n.json",
                  blueprints_dir=tmp_path / "bp")

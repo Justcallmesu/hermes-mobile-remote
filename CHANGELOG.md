@@ -27,6 +27,9 @@ request number.
 - **New Hermes comments are marked unread**: a card shows "1 new comment" until you open it, the
   blueprint header counts them, the drawer's blueprint button gets its dot, and a notification says
   what Hermes wrote (tap opens the blueprint). Needs the updated bridge.
+- **Longer card titles, never cut off**: titles can be 600 characters (was 300), node labels 400,
+  column names 120. Near the limit a counter shows; over it the field turns red and Save waits until
+  you shorten it, instead of the text being silently cut. Needs the updated bridge.
 
 ## v1.35.0
 

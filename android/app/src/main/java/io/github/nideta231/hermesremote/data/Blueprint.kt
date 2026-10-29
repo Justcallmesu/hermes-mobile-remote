@@ -22,6 +22,13 @@ data class BpColumn(val id: String, val name: String, val color: String = "defau
     fun over(count: Int) = limit != null && count > limit
 }
 
+/** Text limits, the same as the bridge's (it refuses longer text instead of cutting it). */
+object BpLimits {
+    const val TITLE = 600
+    const val LABEL = 400
+    const val COLUMN = 120
+}
+
 /** Board settings, shared with Hermes. [newCards] "top"/"bottom": where new and moved-in cards land. [agingDays] 0 = off. */
 data class BpSettings(val newCards: String = "bottom", val agingDays: Int = 0) {
     companion object {

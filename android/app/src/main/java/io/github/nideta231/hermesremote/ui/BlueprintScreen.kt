@@ -102,6 +102,7 @@ import io.github.nideta231.hermesremote.data.BpCheck
 import io.github.nideta231.hermesremote.data.BpNode
 import io.github.nideta231.hermesremote.data.BpOp
 import io.github.nideta231.hermesremote.data.BpSettings
+import io.github.nideta231.hermesremote.data.BpLimits
 import io.github.nideta231.hermesremote.data.agingAlpha
 import kotlin.math.abs
 import kotlin.math.atan2
@@ -467,7 +468,8 @@ private fun NodeDialog(n: BpNode?, onDismiss: () -> Unit, onSave: (String, Strin
     val dark = isDark()
     AlertDialog(onDismissRequest = onDismiss, title = { Text(if (n == null) "New node" else "Edit node") }, text = {
         Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            OutlinedTextField(label, { label = it }, label = { Text("Label") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+            OutlinedTextField(label, { label = it }, label = { Text("Label") }, singleLine = true, modifier = Modifier.fillMaxWidth(),
+                isError = label.trim().length > BpLimits.LABEL, supportingText = { LimitText(label, BpLimits.LABEL) })
             Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 NodeKinds.forEach { (k, t) -> FilterChip(kind == k, { kind = k }, { Text(t) }, colors = themedChip()) }
             }
@@ -479,7 +481,7 @@ private fun NodeDialog(n: BpNode?, onDismiss: () -> Unit, onSave: (String, Strin
                 }
             }
         }
-    }, confirmButton = { TextButton(onClick = { onSave(label.trim(), kind, note.trim(), color) }) { Text("Save") } },
+    }, confirmButton = { TextButton(onClick = { onSave(label.trim(), kind, note.trim(), color) }, enabled = label.trim().length <= BpLimits.LABEL) { Text("Save") } },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } })
 }
 
@@ -666,13 +668,13 @@ private fun BoardView(bp: Blueprint, actions: BlueprintActions) {
         }
     }
     addingTo?.let { colId ->
-        TextDialog("New card in ${bp.columns.firstOrNull { it.id == colId }?.name}", "", "Title", onDismiss = { addingTo = null }) { t ->
+        TextDialog("New card in ${bp.columns.firstOrNull { it.id == colId }?.name}", "", "Title", onDismiss = { addingTo = null }, maxLength = BpLimits.TITLE) { t ->
             addingTo = null
             if (t.isNotBlank()) actions.apply(arrayOf(BpOp.of("card.add", "column" to colId, "title" to t, "tags" to listOfNotNull(tag?.takeIf { it != WAITING })))) {}
         }
     }
     renaming?.let { colId ->
-        TextDialog("Rename column", bp.columns.firstOrNull { it.id == colId }?.name ?: "", "Name", onDismiss = { renaming = null }) { t ->
+        TextDialog("Rename column", bp.columns.firstOrNull { it.id == colId }?.name ?: "", "Name", onDismiss = { renaming = null }, maxLength = BpLimits.COLUMN) { t ->
             renaming = null; if (t.isNotBlank()) actions.apply(arrayOf(BpOp.of("column.update", "id" to colId, "name" to t))) {}
         }
     }
@@ -684,7 +686,7 @@ private fun BoardView(bp: Blueprint, actions: BlueprintActions) {
             if (n != (col?.limit ?: 0)) actions.apply(arrayOf(BpOp.of("column.update", "id" to colId, "limit" to n))) {}
         }
     }
-    if (newColumn) TextDialog("New column", "", "Name", onDismiss = { newColumn = false }) { t ->
+    if (newColumn) TextDialog("New column", "", "Name", onDismiss = { newColumn = false }, maxLength = BpLimits.COLUMN) { t ->
         newColumn = false; if (t.isNotBlank()) actions.apply(arrayOf(BpOp.of("column.add", "name" to t))) {}
     }
     openCard?.let { id -> bp.cards.firstOrNull { it.id == id }?.let { CardSheet(it, bp, actions, onDismiss = { openCard = null }) } ?: run { openCard = null } }
@@ -790,12 +792,23 @@ private fun BoardCard(card: BpCard, bp: Blueprint, dark: Boolean, ghost: Boolean
 }
 
 @Composable
-private fun TextDialog(title: String, initial: String, hint: String, onDismiss: () -> Unit, onDone: (String) -> Unit) {
+private fun TextDialog(title: String, initial: String, hint: String, onDismiss: () -> Unit, maxLength: Int? = null, onDone: (String) -> Unit) {
     var t by remember { mutableStateOf(initial) }
+    val over = maxLength != null && t.trim().length > maxLength
     AlertDialog(onDismissRequest = onDismiss, title = { Text(title) },
-        text = { OutlinedTextField(t, { t = it }, placeholder = { Text(hint) }, singleLine = true, modifier = Modifier.fillMaxWidth()) },
-        confirmButton = { TextButton(onClick = { onDone(t.trim()) }) { Text("OK") } },
+        text = { OutlinedTextField(t, { t = it }, placeholder = { Text(hint) }, singleLine = maxLength == null, maxLines = 4, modifier = Modifier.fillMaxWidth(),
+            isError = over, supportingText = maxLength?.let { m -> { LimitText(t, m) } }) },
+        confirmButton = { TextButton(onClick = { onDone(t.trim()) }, enabled = !over) { Text("OK") } },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } })
+}
+
+/** "123 / 600", red with "too long" once over: shown under a limited field instead of cutting the text. */
+@Composable
+private fun LimitText(text: String, max: Int) {
+    val n = text.trim().length
+    if (n < max * 0.8) return
+    Text(if (n > max) "$n / $max · too long, shorten it to save" else "$n / $max", style = MaterialTheme.typography.labelSmall,
+        color = if (n > max) Bad else MaterialTheme.colorScheme.onSurfaceVariant)
 }
 
 /** A card in full: title, description, checklist, tags, column, priority, due date, who's on it, linked diagram node. */
@@ -812,7 +825,7 @@ private fun CardSheet(card: BpCard, bp: Blueprint, actions: BlueprintActions, on
     var confirmDelete by remember { mutableStateOf(false) }
     fun upd(vararg kv: Pair<String, Any?>) = actions.apply(arrayOf(BpOp.of("card.update", "id" to card.id, *kv))) {}
     fun saveText() {
-        if (title.isNotBlank() && title != card.title) upd("title" to title.trim())
+        if (title.isNotBlank() && title.trim().length <= BpLimits.TITLE && title != card.title) upd("title" to title.trim())
         if (body != card.body) upd("body" to body)
         val d = due.trim()
         if (d != (card.due ?: "") && (d.isEmpty() || Regex("""\d{4}-\d{2}-\d{2}""").matches(d))) upd("due" to d.ifEmpty { null })
@@ -822,7 +835,8 @@ private fun CardSheet(card: BpCard, bp: Blueprint, actions: BlueprintActions, on
         containerColor = MaterialTheme.colorScheme.surfaceContainer) {
         Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).imePadding().padding(horizontal = 20.dp).padding(bottom = 28.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            OutlinedTextField(title, { title = it }, label = { Text("Title") }, modifier = Modifier.fillMaxWidth(), textStyle = MaterialTheme.typography.titleMedium)
+            OutlinedTextField(title, { title = it }, label = { Text("Title") }, modifier = Modifier.fillMaxWidth(), textStyle = MaterialTheme.typography.titleMedium,
+                isError = title.trim().length > BpLimits.TITLE, supportingText = { LimitText(title, BpLimits.TITLE) })
             SectionLabel("Column")
             Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 bp.columns.forEach { c -> FilterChip(card.column == c.id, { actions.apply(arrayOf(BpOp.of("card.move", "id" to card.id, "column" to c.id))) {} }, { Text(c.name) }, colors = themedChip()) }
