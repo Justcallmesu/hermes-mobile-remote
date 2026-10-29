@@ -25,6 +25,9 @@ data class BridgeAdminState(
     val networks: List<AdminNetwork> = emptyList(),
     val devices: List<AdminDevice> = emptyList(),
     val logs: String? = null,
+    /** Hermes sockets the bridge holds for dropped phones; empty on a bridge without the route. */
+    val parked: List<ParkedSocket> = emptyList(),
+    val parkedSupported: Boolean = false,
     val loading: Boolean = false,
     /** A fix or restart in flight (its name). */
     val busy: String? = null,
@@ -43,6 +46,8 @@ class BridgeAdmin(
     private val describe: (Throwable) -> String,
     private val say: (String) -> Unit,
     private val onBridgeBack: () -> Unit,
+    /** Whether the bridge lists `parked` in `/v1/me`; an old one has no such route. */
+    private val supportsParked: () -> Boolean = { false },
 ) {
     private val _state = MutableStateFlow(BridgeAdminState())
     val state: StateFlow<BridgeAdminState> = _state.asStateFlow()
@@ -63,9 +68,18 @@ class BridgeAdmin(
                 val trust = c.adminTrust()
                 val devs = c.adminDevices()
                 apply(doc); applyTrust(trust); applyDevices(devs)
+                loadParked(c)
                 _state.update { it.copy(loading = false) }
             } catch (t: Throwable) { fail(t) }
         }
+    }
+
+    /** Reload the held list; a failure here only hides the section, it never breaks the page. */
+    private suspend fun loadParked(c: BridgeClient) {
+        val ok = supportsParked()
+        val list = if (!ok) emptyList() else runCatching { ParkedSockets.parse(c.adminParked()) }
+            .onFailure { if (it is CancellationException) throw it }.getOrDefault(emptyList())
+        _state.update { it.copy(parked = list, parkedSupported = ok) }
     }
 
     private fun apply(doc: JSONObject) = _state.update { st ->

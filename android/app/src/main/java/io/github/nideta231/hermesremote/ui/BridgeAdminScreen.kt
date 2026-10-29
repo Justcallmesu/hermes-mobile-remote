@@ -29,6 +29,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import io.github.nideta231.hermesremote.data.BridgeAdminState
+import io.github.nideta231.hermesremote.data.ParkedSockets
 
 class BridgeAdminActions(
     val refresh: () -> Unit,
@@ -60,6 +61,9 @@ private fun checkTitle(id: String) = when (id) {
 fun BridgeAdminScreen(state: BridgeAdminState, actions: BridgeAdminActions, onBack: () -> Unit) {
     LaunchedEffect(Unit) { actions.refresh() }
     var confirmRestart by remember { mutableStateOf(false) }
+    var confirmUpdate by remember { mutableStateOf(false) }
+    // Set when held chats still have work: Restart and Update then ask first.
+    val heldWork = ParkedSockets.confirmText(state.parked, state.parkedSupported)
     var revoke by remember { mutableStateOf<String?>(null) }
     var logs by remember { mutableStateOf(false) }
     PageScaffold("PC bridge", onBack) {
@@ -87,6 +91,15 @@ fun BridgeAdminScreen(state: BridgeAdminState, actions: BridgeAdminActions, onBa
                 }
             }
 
+            if (state.parkedSupported && state.parked.isNotEmpty()) SettingsSection("Held chats",
+                "Chats the PC keeps for a phone that dropped, so their background work isn't lost. They release on their own.") {
+                Panel {
+                    state.parked.forEach { p ->
+                        PanelRow(p.device, "${ParkedSockets.reason(p)} · held ${ParkedSockets.held(p)}", Glyphs.Person)
+                    }
+                }
+            }
+
             SettingsSection("Bridge", "Restart or update the bridge on the PC. Pairings, Hermes and running chats are kept.") {
                 Panel {
                     PanelRow("Restart bridge", if (state.restarting) "Restarting… the connection comes back on its own"
@@ -105,7 +118,7 @@ fun BridgeAdminScreen(state: BridgeAdminState, actions: BridgeAdminActions, onBa
                             else -> s.reason ?: "Checking…"
                         }, Glyphs.Download, onClick = { u.check(true) }) {
                             if (s.updating) TypingDots()
-                            else if (s.available && s.canUpdate) TextButton(onClick = u.start) { Text(if (s.restartNeeded) "Restart" else "Update") }
+                            else if (s.available && s.canUpdate) TextButton(onClick = { if (heldWork != null) confirmUpdate = true else u.start() }) { Text(if (s.restartNeeded) "Restart" else "Update") }
                         }
                     }
                 }
@@ -146,9 +159,13 @@ fun BridgeAdminScreen(state: BridgeAdminState, actions: BridgeAdminActions, onBa
         }
     }
     if (confirmRestart) AlertDialog(onDismissRequest = { confirmRestart = false }, title = { Text("Restart the PC bridge?") },
-        text = { Text("The connection drops for a few seconds and comes back on its own. Hermes and running chats keep going.") },
-        confirmButton = { TextButton(onClick = { confirmRestart = false; actions.restart() }) { Text("Restart") } },
+        text = { Text(heldWork ?: "The connection drops for a few seconds and comes back on its own. Hermes and running chats keep going.") },
+        confirmButton = { TextButton(onClick = { confirmRestart = false; actions.restart() }) { Text(if (heldWork != null) "Restart anyway" else "Restart") } },
         dismissButton = { TextButton(onClick = { confirmRestart = false }) { Text("Cancel") } })
+    if (confirmUpdate && heldWork != null) AlertDialog(onDismissRequest = { confirmUpdate = false }, title = { Text("Update the PC bridge?") },
+        text = { Text(heldWork.replace("Restart anyway?", "Update anyway?").replace("restarting", "updating")) },
+        confirmButton = { TextButton(onClick = { confirmUpdate = false; actions.update?.start?.invoke() }) { Text("Update anyway") } },
+        dismissButton = { TextButton(onClick = { confirmUpdate = false }) { Text("Cancel") } })
     revoke?.let { name ->
         AlertDialog(onDismissRequest = { revoke = null }, title = { Text("Revoke $name?") },
             text = { Text("It can no longer connect to this PC until it is paired again.") },

@@ -37,6 +37,9 @@ request number.
   (default now 600) after the last work ends, or after `park_max_seconds` (default 86400) regardless.
 - **Bridge lists its parked sockets**: `GET /v1/admin/parked` (feature `parked` in `/v1/me`) shows, per
   device, how long a socket has been held, its session count and why (work kinds, or when it releases).
+- **The PC page shows held chats and warns before a restart or update ends them**: a read-only "Held chats"
+  section lists each parked socket (device, how long, why); Restart and Update ask "N chats on the PC are
+  still working; restarting ends them" first. Bridges without the route behave as before.
 
 ## v1.34.0
 

@@ -434,7 +434,8 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
     }
 
     val bridgeAdmin = io.github.nideta231.hermesremote.data.BridgeAdmin(viewModelScope, client = { client },
-        describe = ::describe, say = { _toast.value = it }, onBridgeBack = ::bridgeBack)
+        describe = ::describe, say = { _toast.value = it }, onBridgeBack = ::bridgeBack,
+        supportsParked = { "parked" in _features.value })
 
     /** After a bridge restart: reopen the live socket at once (no backoff wait) and reload everything it serves. */
     private fun bridgeBack() {

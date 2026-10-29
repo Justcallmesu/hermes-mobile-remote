@@ -120,6 +120,7 @@ class BridgeClient(
     suspend fun adminUntrust(id: String) = call("POST", "/v1/admin/untrust", body = JSONObject().put("id", id))
     suspend fun adminDevices() = call("GET", "/v1/admin/devices")
     suspend fun adminRevoke(name: String) = call("POST", "/v1/admin/revoke", body = JSONObject().put("name", name))
+    suspend fun adminParked() = call("GET", "/v1/admin/parked")
     suspend fun adminLogs(lines: Int = 200) = call("GET", "/v1/admin/logs", mapOf("lines" to lines), readTimeoutS = 20)
 
     /** The bridge's release and the newest one (`/v1/bridge/update`). */
