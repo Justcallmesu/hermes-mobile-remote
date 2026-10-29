@@ -26,6 +26,8 @@ object Notifier {
 
     const val WATCH_ID = 1
     const val EXTRA_OPEN_SESSION = "open_session"
+    /** "projectId\tname": open that project's blueprint (a new Hermes comment). */
+    const val EXTRA_OPEN_BLUEPRINT = "open_blueprint"
     /** The Hermes profile that session belongs to (absent: the default profile). */
     const val EXTRA_PROFILE = "open_profile"
 
@@ -81,6 +83,32 @@ object Notifier {
         post(context, CHANNEL_APPROVALS, questionId(requestId),
             "Hermes has a question${title?.takeIf { it.isNotBlank() }?.let { " · $it" }.orEmpty()}",
             (question ?: "Hermes is waiting for your answer.").take(600), sessionId, profile, NotificationCompat.CATEGORY_REMINDER, requestId)
+    }
+
+    /** Hermes commented on a card (a question, a review request or a note). Tapping opens the blueprint. */
+    fun postBlueprintComment(context: Context, projectId: String, projectName: String, m: BpLatestComment) {
+        val nm = NotificationManagerCompat.from(context)
+        if (!nm.areNotificationsEnabled()) return
+        ensureChannels(context)
+        val heading = when (m.kind) {
+            "question" -> "Hermes asks · ${m.title}"
+            "review" -> "Review needed · ${m.title}"
+            else -> "Hermes commented · ${m.title}"
+        }
+        val body = plain(m.text).ifBlank { "Attached a file." }.take(600) + "\n$projectName blueprint"
+        val id = 0x30000 + (projectId.hashCode() and 0xffff)
+        val intent = Intent(context, MainActivity::class.java)
+            .addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+            .putExtra(EXTRA_OPEN_BLUEPRINT, "$projectId\t$projectName")
+        val n = NotificationCompat.Builder(context, if (m.kind == "comment") CHANNEL_RESULTS else CHANNEL_APPROVALS)
+            .setContentTitle(heading).setContentText(body)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(body))
+            .setSmallIcon(R.drawable.ic_stat_hermes)
+            .setCategory(if (m.kind == "comment") NotificationCompat.CATEGORY_MESSAGE else NotificationCompat.CATEGORY_REMINDER)
+            .setAutoCancel(true)
+            .setContentIntent(PendingIntent.getActivity(context, id, intent, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT))
+            .build()
+        runCatching { nm.notify(id, n) }
     }
 
     fun clearQuestion(context: Context, requestId: String) {

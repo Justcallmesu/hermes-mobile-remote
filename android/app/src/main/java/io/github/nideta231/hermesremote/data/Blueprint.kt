@@ -52,6 +52,8 @@ data class BpCard(
     /** Who is actively working on it right now (e.g. "Hermes"), or null. */
     val agent: String? = null,
     val comments: List<BpComment> = emptyList(),
+    /** The Hermes chat last working on or commenting on it (null: unknown, e.g. an older bridge). */
+    val session: String? = null,
 ) {
     val progress get() = checklist.count { it.done } to checklist.size
     val openAsks get() = comments.filter { it.needsYou }
@@ -101,7 +103,7 @@ data class Blueprint(
                         it.optJSONArray("comments").objects().map { m ->
                             BpComment(m.optString("id"), m.optDouble("at", 0.0), m.optString("by"), m.optString("kind", "comment"),
                                 m.optString("text"), m.optBoolean("resolved"), m.optJSONArray("files").strings())
-                        })
+                        }, it.str("session"))
                 },
                 o.optJSONArray("log").objects().map { BpLog(it.optDouble("at", 0.0), it.optString("by"), it.optString("text")) },
                 o.optString("instructions"),
@@ -149,7 +151,7 @@ object BpOp {
 }
 
 data class BlueprintSummary(val projectId: String, val name: String, val cards: Int, val nodes: Int, val control: String,
-                            val needsYou: Int = 0, val working: Int = 0)
+                            val needsYou: Int = 0, val working: Int = 0, val latest: BpLatestComment? = null)
 data class BlueprintTrash(val id: String, val name: String, val removedAt: Double, val cards: Int)
 
 data class BlueprintState(
@@ -173,6 +175,10 @@ class BlueprintRepo(
     private val describe: (Throwable) -> String,
     private val say: (String) -> Unit,
     private val cacheDir: () -> java.io.File = { java.io.File(System.getProperty("java.io.tmpdir") ?: ".") },
+    /** Read state of Hermes' comments (null in tests: nothing is tracked or notified). */
+    val seen: BlueprintSeen? = null,
+    /** Alert about a new Hermes comment: (project id, project name, comment). */
+    private val notify: (String, String, BpLatestComment) -> Unit = { _, _, _ -> },
 ) {
     private val _state = MutableStateFlow(BlueprintState())
     val state: StateFlow<BlueprintState> = _state.asStateFlow()
@@ -191,17 +197,53 @@ class BlueprintRepo(
                     st.copy(have = o.optJSONArray("blueprints").objects().associate { b ->
                         val p = b.optJSONObject("project") ?: JSONObject()
                         p.optString("id") to BlueprintSummary(p.optString("id"), p.optString("name"), b.optInt("cards"), b.optInt("nodes"), b.optString("control"),
-                            b.optInt("needs_you"), b.optInt("working"))
+                            b.optInt("needs_you"), b.optInt("working"), b.optJSONObject("latest_comment")?.let { m ->
+                                BpLatestComment(m.optString("card"), m.optString("title"), m.optDouble("at", 0.0), m.optString("by"),
+                                    m.optString("kind", "comment"), m.optString("text"))
+                            })
                     }, trash = o.optJSONArray("trash").objects().map {
                         BlueprintTrash(it.optString("id"), it.optJSONObject("project")?.optString("name") ?: it.optString("id"), it.optDouble("removed_at", 0.0), it.optInt("cards"))
                     }, unsupported = false)
                 }
+                checkNewComments()
             } catch (t: Throwable) {
                 if (t is CancellationException) throw t
                 if (t is BridgeException && t.httpCode == 404) _state.update { it.copy(unsupported = true) }
             }
         }
     }
+
+    /** Bumped when a card is marked seen, so badges recompose. */
+    private val _seenTick = MutableStateFlow(0)
+    val seenTick: StateFlow<Int> = _seenTick.asStateFlow()
+
+    fun markSeen(projectId: String, card: BpCard) {
+        val s = seen ?: return
+        val before = s.seenAt(projectId, card.id)
+        s.markSeen(projectId, card)
+        if (s.seenAt(projectId, card.id) != before) _seenTick.update { it + 1 }
+    }
+
+    /** Alert once per new Hermes comment, unless that blueprint is open on screen (the board shows it). */
+    private fun checkNewComments() {
+        val s = seen ?: return
+        _state.value.have.values.forEach { b ->
+            val latest = b.latest
+            val notifiedAt = s.notifiedAt(b.projectId)
+            if (notifiedAt == null) { s.setNotified(b.projectId, latest?.at ?: 0.0); return@forEach }  // first look: baseline
+            if (latest != null && shouldNotify(latest, notifiedAt, s.seenAt(b.projectId, latest.card))) {
+                s.setNotified(b.projectId, latest.at)
+                if (_state.value.open?.projectId != b.projectId || poll == null) notify(b.projectId, b.name, latest)
+            }
+        }
+    }
+
+    /** Re-read the list every [periodMs] while the app process lives, so new comments badge and alert. */
+    fun watch(periodMs: Long = 30_000L) {
+        if (watchJob?.isActive == true) return
+        watchJob = scope.launch { while (true) { delay(periodMs); if (client() != null) refreshList() } }
+    }
+    private var watchJob: Job? = null
 
     fun open(projectId: String) {
         stop()

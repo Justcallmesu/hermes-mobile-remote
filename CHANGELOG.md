@@ -21,6 +21,12 @@ request number.
 
 - **GitHub release page: download link first**: each release now starts with a direct link to the APK
   (and its SHA-256); older versions are folded under *Earlier versions* instead of filling the page.
+- **"Tell Hermes I replied" goes back to the same chat**: answering on a card now sends the note to
+  the Hermes chat that was working on it (a steer while it runs, a new turn when idle) instead of
+  starting a new chat. Cards from an older bridge, with no chat recorded, still start a new one.
+- **New Hermes comments are marked unread**: a card shows "1 new comment" until you open it, the
+  blueprint header counts them, the drawer's blueprint button gets its dot, and a notification says
+  what Hermes wrote (tap opens the blueprint). Needs the updated bridge.
 
 ## v1.35.0
 

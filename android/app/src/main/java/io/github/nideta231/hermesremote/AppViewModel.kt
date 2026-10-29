@@ -419,18 +419,43 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
         describe = ::describe, say = { _toast.value = it }, onBridgeBack = ::bridgeBack)
 
     val blueprints = io.github.nideta231.hermesremote.data.BlueprintRepo(viewModelScope, client = { client },
-        describe = ::describe, say = { _toast.value = it }, cacheDir = { app.cacheDir })
+        describe = ::describe, say = { _toast.value = it }, cacheDir = { app.cacheDir },
+        seen = io.github.nideta231.hermesremote.data.BlueprintSeen(app),
+        notify = { pid, name, m -> Notifier.postBlueprintComment(app, pid, name, m) })
 
     /** New chat in [b]'s project with a drafted ask (the user sends it): work from the blueprint, take control, or do one card. */
     fun askHermesBlueprint(b: io.github.nideta231.hermesremote.data.Blueprint, what: String) {
+        // An answer on a card goes back to the chat that asked (steered if it is still running), not a new one.
+        if (what.startsWith("reply:")) {
+            val ref = what.removePrefix("reply:")
+            val card = b.cards.firstOrNull { it.id == ref } ?: b.cards.firstOrNull { it.title == ref }
+            val title = card?.title ?: ref
+            val text = "I answered on the card \"$title\" in the ${b.name} blueprint: read its comments (blueprint md) and carry on."
+            card?.session?.let { sid -> return replyInChat(sid, text) }
+            return askHermesBlueprint(b, "replynew:$title")
+        }
         newChat(); chooseProject(b.projectId)
         val rules = b.instructions.trim().takeIf { it.isNotEmpty() }?.let { "\n\nProject instructions (always follow): $it" }.orEmpty()
         setDraft(when {
             what == "control" -> "Take full control of the ${b.name} blueprint (project-blueprint skill): read it, plan the flow and the board, then work through it and keep it updated. I'll mostly watch and adjust."
             what.startsWith("card:") -> "Read the ${b.name} blueprint (project-blueprint skill), then do the card \"${what.removePrefix("card:")}\": move it to Working, tick its checklist as you go and move it to Done when it's verified."
-            what.startsWith("reply:") -> "Read the ${b.name} blueprint (project-blueprint skill). I answered on the card \"${what.removePrefix("reply:")}\": read its comments and carry on."
+            what.startsWith("replynew:") -> "Read the ${b.name} blueprint (project-blueprint skill). I answered on the card \"${what.removePrefix("replynew:")}\": read its comments and carry on."
             else -> "Read the ${b.name} blueprint (project-blueprint skill) and continue the work: pick the next card, keep the board and diagram updated as you go."
         } + rules)
+    }
+
+    /** Open chat [sid] and send [text] there: a steer while it runs, a new turn when idle; drafted if the chat won't open. */
+    private fun replyInChat(sid: String, text: String) {
+        openSession(sid)
+        viewModelScope.launch {
+            repeat(60) {
+                val c = _chat.value
+                if (c.sessionId != sid) return@launch  // the user went elsewhere
+                if (c.runtimeId != null && !c.loading) return@launch if (c.busy) steer(text) else send(text)
+                delay(250)
+            }
+            if (_chat.value.sessionId == sid) setDraft(text)
+        }
     }
 
     val bridgeAdmin = io.github.nideta231.hermesremote.data.BridgeAdmin(viewModelScope, client = { client },
@@ -797,7 +822,7 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
             _features.value = features
             store.bridgeFeatures = features
             if ("bridge_update" in features) bridgeUpdate.check(false)
-            if ("blueprints" in features) blueprints.refreshList()
+            if ("blueprints" in features) { blueprints.refreshList(); blueprints.watch() }
             if (me.optInt("protocol", 0) < MIN_BRIDGE_PROTOCOL) {
                 _toast.value = "Your PC runs an older bridge. Update it: run install.sh on the PC."
             }

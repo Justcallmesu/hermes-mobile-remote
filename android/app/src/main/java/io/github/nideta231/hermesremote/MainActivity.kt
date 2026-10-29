@@ -119,6 +119,8 @@ class MainActivity : ComponentActivity() {
     private val showChat = mutableStateOf(false)
     /** A page to open, from a home-screen widget tap. */
     private val openPage = mutableStateOf<Page?>(null)
+    /** (project id, name) of a blueprint a notification asked to open. */
+    private val openBlueprint = mutableStateOf<Pair<String, String>?>(null)
 
     private val scanner = registerForActivityResult(ScanContract()) { result ->
         result.contents?.let { pairUri.value = it }
@@ -196,6 +198,10 @@ class MainActivity : ComponentActivity() {
             intent.removeExtra(Notifier.EXTRA_PROFILE)
             vm.openSession(sid, profile)
             showChat.value = true
+        }
+        intent?.getStringExtra(Notifier.EXTRA_OPEN_BLUEPRINT)?.let { v ->
+            intent.removeExtra(Notifier.EXTRA_OPEN_BLUEPRINT)
+            openBlueprint.value = v.substringBefore('\t') to v.substringAfter('\t', "")
         }
         intent?.getStringExtra(io.github.nideta231.hermesremote.data.PcWidgets.EXTRA_PAGE)?.let { name ->
             intent.removeExtra(io.github.nideta231.hermesremote.data.PcWidgets.EXTRA_PAGE)
@@ -323,6 +329,7 @@ class MainActivity : ComponentActivity() {
         val heldUpdate = io.github.nideta231.hermesremote.data.ParkedSockets.confirmText(bridgeAdminState.parked,
             bridgeAdminState.parkedSupported, io.github.nideta231.hermesremote.data.HeldAction.Update)
         val blueprintState by vm.blueprints.state.collectAsState()
+        val seenTick by vm.blueprints.seenTick.collectAsState()
         var blueprintProject by rememberSaveable { mutableStateOf<String?>(null) }
         var blueprintName by rememberSaveable { mutableStateOf("") }
         val features by vm.features.collectAsState()
@@ -351,6 +358,10 @@ class MainActivity : ComponentActivity() {
         BackHandler(enabled = !drawer.isOpen && page != Page.CHAT) { page = if (page == Page.VAULT) Page.SETTINGS else Page.CHAT }
         // Opened from a home-screen widget.
         if (openPage.value != null) { page = openPage.value!!; openPage.value = null; scope.launch { drawer.close() } }
+        openBlueprint.value?.let { (pid, name) ->
+            openBlueprint.value = null
+            blueprintProject = pid; blueprintName = name; page = Page.BLUEPRINT; scope.launch { drawer.close() }
+        }
         val gatewayHost by vm.gatewayHost.collectAsState()
         // A gateway host has no bridge monitor, but Hermes serves its own basic stats.
         val hasMonitor = "monitor" in features || gatewayHost != null
@@ -390,7 +401,8 @@ class MainActivity : ComponentActivity() {
             openNotes = if ("notes" in features) ({ go(Page.NOTES) }) else null,
             openBridge = if ("admin" in features) ({ go(Page.BRIDGE) }) else null,
             blueprints = if ("blueprints" in features) BlueprintDrawerActions(have = blueprintState.have.keys,
-                needsYou = blueprintState.have.values.filter { it.needsYou > 0 }.map { it.projectId }.toSet(), trash = blueprintState.trash,
+                needsYou = blueprintState.have.values.filter { it.needsYou > 0 || vm.blueprints.seen?.projectUnread(it.projectId, it.latest) == true }
+                    .map { it.projectId }.toSet().also { seenTick }, trash = blueprintState.trash,
                 open = { p -> blueprintProject = p.id; blueprintName = p.label; go(Page.BLUEPRINT) },
                 add = { p -> vm.blueprints.create(p.id, p.label, p.path) { blueprintProject = p.id; blueprintName = p.label; go(Page.BLUEPRINT) } },
                 remove = vm.blueprints::trash, restore = vm.blueprints::restore, purge = vm.blueprints::purge) else null,
@@ -462,7 +474,9 @@ class MainActivity : ComponentActivity() {
                             BlueprintScreen(pid, blueprintName, blueprintState, BlueprintActions(open = vm.blueprints::open, close = vm.blueprints::stop,
                                 apply = { ops, done -> vm.blueprints.apply(*ops, onApplied = done) }, trash = vm.blueprints::trash,
                                 askHermes = { b, what -> vm.askHermesBlueprint(b, what); page = Page.CHAT },
-                                fetchFile = vm.blueprints::file, fileInfo = vm.blueprints::fileInfo),
+                                fetchFile = vm.blueprints::file, fileInfo = vm.blueprints::fileInfo,
+                                unread = { c -> seenTick.let { vm.blueprints.seen?.unread(pid, c) ?: 0 } },
+                                markSeen = { c -> vm.blueprints.markSeen(pid, c) }),
                                 onBack = { vm.blueprints.refreshList(); page = Page.CHAT })
                         } ?: run { page = Page.CHAT }
                         Page.BRIDGE -> BridgeAdminScreen(bridgeAdminState, BridgeAdminActions(refresh = vm.bridgeAdmin::refresh,

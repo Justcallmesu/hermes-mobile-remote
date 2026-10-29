@@ -121,6 +121,10 @@ class BlueprintActions(
     /** A file a card comment attaches, downloaded from the PC (open/save). */
     val fetchFile: suspend (String) -> java.io.File = { throw java.io.IOException("Not available") },
     val fileInfo: suspend (String) -> io.github.nideta231.hermesremote.data.FileInfo = { io.github.nideta231.hermesremote.data.FileInfo(io.github.nideta231.hermesremote.data.fileName(it), it) },
+    /** Hermes comments on the card the user has not seen yet. */
+    val unread: (BpCard) -> Int = { 0 },
+    /** The user opened the card: its comments are read. */
+    val markSeen: (BpCard) -> Unit = {},
 )
 
 private fun bpColor(name: String, dark: Boolean): Color = when (name) {
@@ -163,8 +167,9 @@ fun BlueprintScreen(projectId: String, projectName: String, state: BlueprintStat
                 Text(bp?.name ?: projectName, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 val waiting = bp?.needsYou?.size ?: 0
                 val working = bp?.cards?.count { it.agent != null } ?: 0
+                val unreadCards = bp?.cards?.count { actions.unread(it) > 0 } ?: 0
                 Text(listOfNotNull(if (bp?.hermesControl == true) "Blueprint · Hermes in control" else "Blueprint",
-                        working.takeIf { it > 0 }?.let { "$it in progress" }, waiting.takeIf { it > 0 }?.let { "$it waiting for you" }).joinToString(" · "),
+                        working.takeIf { it > 0 }?.let { "$it in progress" }, unreadCards.takeIf { it > 0 }?.let { "$it with new comments" }, waiting.takeIf { it > 0 }?.let { "$it waiting for you" }).joinToString(" · "),
                     style = MaterialTheme.typography.labelSmall, maxLines = 1, overflow = TextOverflow.Ellipsis,
                     color = when { waiting > 0 -> Warn; bp?.hermesControl == true -> Gold; else -> MaterialTheme.colorScheme.onSurfaceVariant })
             }
@@ -608,7 +613,7 @@ private fun BoardView(bp: Blueprint, actions: BlueprintActions) {
                                         onDispose { handle?.release() }
                                     }
                                     DisposableEffect(card.id) { onDispose { cardBounds.remove(card.id) } }
-                                    BoardCard(card, bp, dark, ghost = dragging?.id == card.id,
+                                    BoardCard(card, bp, dark, ghost = dragging?.id == card.id, unread = actions.unread(card),
                                         modifier = Modifier.onGloballyPositioned { cardBounds[card.id] = it.boundsInRoot() }
                                             .pointerInput(card.id) {
                                                 detectDragGesturesAfterLongPress(
@@ -723,7 +728,7 @@ private fun DropSlot(height: androidx.compose.ui.unit.Dp, modifier: Modifier = M
 }
 
 @Composable
-private fun BoardCard(card: BpCard, bp: Blueprint, dark: Boolean, ghost: Boolean, modifier: Modifier, lifted: Boolean = false, onOpen: () -> Unit) {
+private fun BoardCard(card: BpCard, bp: Blueprint, dark: Boolean, ghost: Boolean, modifier: Modifier, lifted: Boolean = false, unread: Int = 0, onOpen: () -> Unit) {
     val tint = bpColor(card.color, dark)
     val asks = card.openAsks
     val working = card.agent != null
@@ -738,7 +743,7 @@ private fun BoardCard(card: BpCard, bp: Blueprint, dark: Boolean, ghost: Boolean
         else -> null
     }
     // Card aging: untouched cards fade (board setting), unless something about them needs attention.
-    val aged = if (lifted || asks.isNotEmpty() || working) 1f
+    val aged = if (lifted || asks.isNotEmpty() || working || unread > 0) 1f
         else agingAlpha(card.updated, System.currentTimeMillis() / 1000.0, bp.settings.agingDays)
     Surface(modifier.fillMaxWidth().graphicsLayer { alpha = aged }.clickable(onClick = onOpen), shape = RoundedCornerShape(12.dp),
         color = if (tint != Color.Unspecified) tint else MaterialTheme.colorScheme.surfaceContainerHighest,
@@ -753,6 +758,13 @@ private fun BoardCard(card: BpCard, bp: Blueprint, dark: Boolean, ghost: Boolean
                 StatusDot(Gold, pulse = true)
                 Spacer(Modifier.width(6.dp))
                 Text("${card.agent} is working on this", style = MaterialTheme.typography.labelSmall, color = Gold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+            if (unread > 0) Row(Modifier.padding(bottom = 6.dp).background(Gold.copy(alpha = 0.18f), RoundedCornerShape(6.dp)).padding(horizontal = 6.dp, vertical = 2.dp),
+                verticalAlignment = Alignment.CenterVertically) {
+                Box(Modifier.size(7.dp).background(Gold, CircleShape))
+                Spacer(Modifier.width(5.dp))
+                Text(if (unread == 1) "1 new comment" else "$unread new comments", style = MaterialTheme.typography.labelSmall,
+                    fontWeight = FontWeight.SemiBold, color = Gold)
             }
             if (card.tags.isNotEmpty() || card.priority != null) Row(Modifier.padding(bottom = 4.dp), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                 card.priority?.let { p ->
@@ -790,6 +802,8 @@ private fun TextDialog(title: String, initial: String, hint: String, onDismiss: 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun CardSheet(card: BpCard, bp: Blueprint, actions: BlueprintActions, onDismiss: () -> Unit) {
+    // Open = read; a comment arriving while it is open is read too.
+    androidx.compose.runtime.LaunchedEffect(card.id, card.comments.size) { actions.markSeen(card) }
     var title by remember(card.id) { mutableStateOf(card.title) }
     var body by remember(card.id) { mutableStateOf(card.body) }
     var newItem by remember { mutableStateOf("") }
@@ -854,7 +868,7 @@ private fun CardSheet(card: BpCard, bp: Blueprint, actions: BlueprintActions, on
                     FilterChip(card.node == n.id, { upd("node" to n.id) }, { Text(n.label.ifBlank { n.kind }) }, colors = themedChip())
                 }
             }
-            CommentsSection(card, bp, actions, onAskHermes = { saveText(); actions.askHermes(bp, "reply:" + card.title); onDismiss() })
+            CommentsSection(card, bp, actions, onAskHermes = { saveText(); actions.askHermes(bp, "reply:" + card.id); onDismiss() })
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                 TextButton(onClick = { saveText(); actions.askHermes(bp, "card:" + card.title); onDismiss() }) {
                     Icon(Glyphs.Spark, null, Modifier.size(16.dp)); Spacer(Modifier.width(6.dp)); Text("Ask Hermes to do this")
