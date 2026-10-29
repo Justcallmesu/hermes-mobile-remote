@@ -1,5 +1,6 @@
 package io.github.nideta231.hermesremote
 
+import io.github.nideta231.hermesremote.data.HeldAction
 import io.github.nideta231.hermesremote.data.ParkedSocket
 import io.github.nideta231.hermesremote.data.ParkedSockets
 import org.json.JSONObject
@@ -21,6 +22,23 @@ class ParkedSocketsTest {
             ParkedSockets.confirmText(listOf(idle, busy), supported = true))
         assertEquals("2 chats on the PC are still working; restarting ends them. Restart anyway?",
             ParkedSockets.confirmText(listOf(busy, busy.copy(device = "x", work = listOf("turn", "loop"))), supported = true))
+    }
+
+    @Test fun updateWording() {
+        val u = HeldAction.Update
+        assertEquals("1 chat on the PC is still working; updating ends it. Update anyway?",
+            ParkedSockets.confirmText(listOf(idle, busy), supported = true, action = u))
+        assertEquals("2 chats on the PC are still working; updating ends them. Update anyway?",
+            ParkedSockets.confirmText(listOf(busy, busy.copy(device = "x")), supported = true, action = u))
+        assertNull(ParkedSockets.confirmText(listOf(idle), supported = true, action = u))
+        assertEquals("1 chat on the PC is still working; restarting ends it. Restart anyway?",
+            ParkedSockets.confirmText(listOf(busy), supported = true, action = HeldAction.Restart))
+    }
+
+    @Test fun sectionVisibility() {
+        assertEquals(false, ParkedSockets.showSection(emptyList(), supported = true))
+        assertEquals(false, ParkedSockets.showSection(listOf(idle), supported = false))
+        assertEquals(true, ParkedSockets.showSection(listOf(idle), supported = true))
     }
 
     @Test fun oldBridgeNoConfirm() {

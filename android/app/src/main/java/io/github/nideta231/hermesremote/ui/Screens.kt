@@ -991,6 +991,10 @@ class BridgeUpdateActions(
     val state: io.github.nideta231.hermesremote.data.BridgeUpdateState,
     val check: (Boolean) -> Unit,
     val start: () -> Unit,
+    /** Set when held chats still have work (`ParkedSockets.confirmText` for an update): the confirm then asks that instead. */
+    val held: String? = null,
+    /** Reloads the held list; the confirm calls it when it opens so the question is current. */
+    val refreshHeld: () -> Unit = {},
 )
 
 /** Settings > Bridge: its release, and Update when a newer one is out. Pairings stay through the restart. */
@@ -1025,12 +1029,13 @@ private fun BridgeUpdatePanel(a: BridgeUpdateActions) {
 /** Shared yes/no for the bridge update (Settings row and the drawer menu). */
 @Composable
 internal fun BridgeUpdateConfirm(a: BridgeUpdateActions, onDismiss: () -> Unit) {
+    LaunchedEffect(Unit) { a.refreshHeld() }
     androidx.compose.material3.AlertDialog(onDismissRequest = onDismiss,
         title = { Text("Update the PC bridge to ${a.state.latest}?") },
-        text = { Text("The PC downloads it and restarts the bridge (about a minute; the connection drops briefly and comes " +
+        text = { Text(a.held ?: ("The PC downloads it and restarts the bridge (about a minute; the connection drops briefly and comes " +
             "back on its own). If the new version doesn't start, the PC rolls back to ${a.state.current ?: "the current one"} " +
-            "and restarts it. Pairings, Hermes and running chats are kept either way.") },
-        confirmButton = { TextButton(onClick = { onDismiss(); a.start() }) { Text("Update") } },
+            "and restarts it. Pairings, Hermes and running chats are kept either way.")) },
+        confirmButton = { TextButton(onClick = { onDismiss(); a.start() }) { Text(if (a.held != null) "Update anyway" else "Update") } },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } })
 }
 

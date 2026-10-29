@@ -29,6 +29,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import io.github.nideta231.hermesremote.data.BridgeAdminState
+import io.github.nideta231.hermesremote.data.HeldAction
 import io.github.nideta231.hermesremote.data.ParkedSockets
 
 class BridgeAdminActions(
@@ -64,6 +65,7 @@ fun BridgeAdminScreen(state: BridgeAdminState, actions: BridgeAdminActions, onBa
     var confirmUpdate by remember { mutableStateOf(false) }
     // Set when held chats still have work: Restart and Update then ask first.
     val heldWork = ParkedSockets.confirmText(state.parked, state.parkedSupported)
+    val heldUpdate = ParkedSockets.confirmText(state.parked, state.parkedSupported, HeldAction.Update)
     var revoke by remember { mutableStateOf<String?>(null) }
     var logs by remember { mutableStateOf(false) }
     PageScaffold("PC bridge", onBack) {
@@ -91,7 +93,7 @@ fun BridgeAdminScreen(state: BridgeAdminState, actions: BridgeAdminActions, onBa
                 }
             }
 
-            if (state.parkedSupported && state.parked.isNotEmpty()) SettingsSection("Held chats",
+            if (ParkedSockets.showSection(state.parked, state.parkedSupported)) SettingsSection("Held chats",
                 "Chats the PC keeps for a phone that dropped, so their background work isn't lost. They release on their own.") {
                 Panel {
                     state.parked.forEach { p ->
@@ -162,8 +164,8 @@ fun BridgeAdminScreen(state: BridgeAdminState, actions: BridgeAdminActions, onBa
         text = { Text(heldWork ?: "The connection drops for a few seconds and comes back on its own. Hermes and running chats keep going.") },
         confirmButton = { TextButton(onClick = { confirmRestart = false; actions.restart() }) { Text(if (heldWork != null) "Restart anyway" else "Restart") } },
         dismissButton = { TextButton(onClick = { confirmRestart = false }) { Text("Cancel") } })
-    if (confirmUpdate && heldWork != null) AlertDialog(onDismissRequest = { confirmUpdate = false }, title = { Text("Update the PC bridge?") },
-        text = { Text(heldWork.replace("Restart anyway?", "Update anyway?").replace("restarting", "updating")) },
+    if (confirmUpdate && heldUpdate != null) AlertDialog(onDismissRequest = { confirmUpdate = false }, title = { Text("Update the PC bridge?") },
+        text = { Text(heldUpdate) },
         confirmButton = { TextButton(onClick = { confirmUpdate = false; actions.update?.start?.invoke() }) { Text("Update anyway") } },
         dismissButton = { TextButton(onClick = { confirmUpdate = false }) { Text("Cancel") } })
     revoke?.let { name ->

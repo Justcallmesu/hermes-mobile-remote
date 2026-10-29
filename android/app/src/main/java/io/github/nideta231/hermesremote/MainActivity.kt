@@ -320,6 +320,8 @@ class MainActivity : ComponentActivity() {
         val bridgeUpdateState by vm.bridgeUpdate.state.collectAsState()
         val notesState by vm.notes.state.collectAsState()
         val bridgeAdminState by vm.bridgeAdmin.state.collectAsState()
+        val heldUpdate = io.github.nideta231.hermesremote.data.ParkedSockets.confirmText(bridgeAdminState.parked,
+            bridgeAdminState.parkedSupported, io.github.nideta231.hermesremote.data.HeldAction.Update)
         val blueprintState by vm.blueprints.state.collectAsState()
         var blueprintProject by rememberSaveable { mutableStateOf<String?>(null) }
         var blueprintName by rememberSaveable { mutableStateOf("") }
@@ -392,7 +394,7 @@ class MainActivity : ComponentActivity() {
                 open = { p -> blueprintProject = p.id; blueprintName = p.label; go(Page.BLUEPRINT) },
                 add = { p -> vm.blueprints.create(p.id, p.label, p.path) { blueprintProject = p.id; blueprintName = p.label; go(Page.BLUEPRINT) } },
                 remove = vm.blueprints::trash, restore = vm.blueprints::restore, purge = vm.blueprints::purge) else null,
-            bridgeUpdate = if ("bridge_update" in features) BridgeUpdateActions(bridgeUpdateState, vm.bridgeUpdate::check, vm.bridgeUpdate::start) else null,
+            bridgeUpdate = if ("bridge_update" in features) BridgeUpdateActions(bridgeUpdateState, vm.bridgeUpdate::check, vm.bridgeUpdate::start, heldUpdate, vm.bridgeAdmin::refresh) else null,
             openPc = if (hasMonitor) ({ go(Page.PC) }) else null,
             openTerminal = if (hasTerminal) ({ go(Page.TERMINAL) }) else null,
             repairPc = vm::startRepair,
@@ -424,7 +426,7 @@ class MainActivity : ComponentActivity() {
             openVault = { page = Page.VAULT },
             repair = vm::startRepair,
             openBridge = if ("admin" in features) ({ page = Page.BRIDGE }) else null,
-            bridgeUpdate = if ("bridge_update" in features) BridgeUpdateActions(bridgeUpdateState, vm.bridgeUpdate::check, vm.bridgeUpdate::start) else null,
+            bridgeUpdate = if ("bridge_update" in features) BridgeUpdateActions(bridgeUpdateState, vm.bridgeUpdate::check, vm.bridgeUpdate::start, heldUpdate, vm.bridgeAdmin::refresh) else null,
         )
         val pcActions = PcActions(watch = { vm.monitor.watch() }, unwatch = vm.monitor::stop, refresh = vm.monitor::refresh,
             setRange = vm.monitor::setRange, setSort = vm.monitor::setSort, setQuery = vm.monitor::setQuery,
@@ -466,7 +468,7 @@ class MainActivity : ComponentActivity() {
                         Page.BRIDGE -> BridgeAdminScreen(bridgeAdminState, BridgeAdminActions(refresh = vm.bridgeAdmin::refresh,
                             fix = vm.bridgeAdmin::fix, restart = vm.bridgeAdmin::restart, trust = vm.bridgeAdmin::trustCurrent,
                             untrust = vm.bridgeAdmin::untrust, revoke = vm.bridgeAdmin::revoke, loadLogs = vm.bridgeAdmin::loadLogs,
-                            update = if ("bridge_update" in features) BridgeUpdateActions(bridgeUpdateState, vm.bridgeUpdate::check, vm.bridgeUpdate::start) else null),
+                            update = if ("bridge_update" in features) BridgeUpdateActions(bridgeUpdateState, vm.bridgeUpdate::check, vm.bridgeUpdate::start, heldUpdate, vm.bridgeAdmin::refresh) else null),
                             onBack = { page = Page.CHAT })
                         Page.NOTES -> NotesScreen(notesState, NotesActions(watch = vm.notes::watch, unwatch = vm.notes::stop,
                             setQuery = vm.notes::setQuery, setLabel = vm.notes::setLabel, setArchived = vm.notes::setArchived,

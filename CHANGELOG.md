@@ -39,7 +39,8 @@ request number.
   device, how long a socket has been held, its session count and why (work kinds, or when it releases).
 - **The PC page shows held chats and warns before a restart or update ends them**: a read-only "Held chats"
   section lists each parked socket (device, how long, why); Restart and Update ask "N chats on the PC are
-  still working; restarting ends them" first. Bridges without the route behave as before.
+  still working; restarting ends them" first (the Settings and drawer update ask too, with "updating").
+  Bridges without the route behave as before.
 
 ## v1.34.0
 
