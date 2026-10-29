@@ -25,6 +25,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.LinkAnnotation
+import androidx.compose.ui.text.TextLinkStyles
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
@@ -216,14 +221,17 @@ internal fun parseCached(text: String): List<MdBlock> =
 @Composable
 fun MarkdownText(text: String, modifier: Modifier = Modifier) {
     val blocks = remember(text) { parseCached(text) }
+    var link by remember { mutableStateOf<String?>(null) }
+    val onLink: (String) -> Unit = { link = it }
+    link?.let { LinkSheet(it) { link = null } }
     SelectionContainer(modifier) {
         Column {
             blocks.forEach { block ->
                 when (block) {
                     is MdBlock.Code -> CodeBlock(block)
-                    is MdBlock.Table -> MarkdownTable(block)
+                    is MdBlock.Table -> MarkdownTable(block, onLink)
                     is MdBlock.Text -> if (block.body.isNotBlank()) {
-                        Text(inline(reflow(block.body)), style = MaterialTheme.typography.bodyMedium.copy(lineHeight = 21.sp))
+                        Text(remember(block.body) { inline(reflow(block.body), onLink) }, style = MaterialTheme.typography.bodyMedium.copy(lineHeight = 21.sp))
                     }
                 }
             }
@@ -262,7 +270,7 @@ internal fun columnWidthDp(cells: List<String>): Int {
 private fun plainLength(cell: String) = cell.replace("**", "").replace("`", "").length
 
 @Composable
-private fun MarkdownTable(table: MdBlock.Table) {
+private fun MarkdownTable(table: MdBlock.Table, onLink: (String) -> Unit) {
     val colors = MaterialTheme.colorScheme
     val widths = remember(table) {
         table.header.indices.map { c -> columnWidthDp(listOf(table.header[c]) + table.rows.map { it[c] }).dp }
@@ -277,17 +285,17 @@ private fun MarkdownTable(table: MdBlock.Table) {
             .horizontalScroll(rememberScrollState()),
     ) {
         Column {
-            TableRow(table.header, table.align, widths, header = true)
+            TableRow(table.header, table.align, widths, header = true, onLink = onLink)
             table.rows.forEachIndexed { r, row ->
                 Box(Modifier.width(widths.fold(0.dp) { a, b -> a + b }).height(1.dp).background(colors.outline))
-                TableRow(row, table.align, widths, header = false, striped = r % 2 == 1)
+                TableRow(row, table.align, widths, header = false, striped = r % 2 == 1, onLink = onLink)
             }
         }
     }
 }
 
 @Composable
-private fun TableRow(cells: List<String>, align: List<CellAlign>, widths: List<androidx.compose.ui.unit.Dp>, header: Boolean, striped: Boolean = false) {
+private fun TableRow(cells: List<String>, align: List<CellAlign>, widths: List<androidx.compose.ui.unit.Dp>, header: Boolean, striped: Boolean = false, onLink: (String) -> Unit = {}) {
     val colors = MaterialTheme.colorScheme
     val bg = when {
         header -> colors.surfaceContainerHighest
@@ -298,7 +306,7 @@ private fun TableRow(cells: List<String>, align: List<CellAlign>, widths: List<a
         cells.forEachIndexed { c, cell ->
             if (c > 0) Box(Modifier.width(1.dp).fillMaxHeight().background(colors.outline))
             Text(
-                inline(cell),
+                inline(cell, onLink),
                 style = MaterialTheme.typography.bodySmall.copy(fontSize = 13.sp, lineHeight = 18.sp),
                 fontWeight = if (header) FontWeight.SemiBold else null,
                 textAlign = when (align.getOrNull(c)) {
@@ -312,18 +320,18 @@ private fun TableRow(cells: List<String>, align: List<CellAlign>, widths: List<a
     }
 }
 
-private val inlineRe = Regex("""\*\*(.+?)\*\*|`([^`]+)`|\[([^\]]+)\]\((?:[^)\s]+)\)|(?<![*\w])\*(?!\s)(.+?)(?<!\s)\*(?![*\w])|(?<![\w/@.])(@[A-Za-z0-9](?:[A-Za-z0-9-]{0,38}))(?![\w-])""")
+private val inlineRe = Regex("""\*\*(.+?)\*\*|`([^`]+)`|\[([^\]]+)\]\(([^)\s]+)\)|(?<![*\w])\*(?!\s)(.+?)(?<!\s)\*(?![*\w])|(?<![\w/@.])(@[A-Za-z0-9](?:[A-Za-z0-9-]{0,38}))(?![\w-])|(https?://[^\s<>()\[\]`*]+[^\s<>()\[\]`*.,;:!?'"])""")
 
 /** A tagged GitHub user (@name): credited contributors stand out in the changelog. */
 private val mentionStyle = SpanStyle(fontWeight = FontWeight.Bold, color = Color(0xFF3DAEE9), background = Color(0x1F3DAEE9))
 
-private fun inline(src: String): AnnotatedString = buildAnnotatedString {
+private fun inline(src: String, onLink: (String) -> Unit = {}): AnnotatedString = buildAnnotatedString {
     src.lines().forEachIndexed { li, raw ->
         if (li > 0) append('\n')
         var line = raw
         val heading = Regex("^#{1,6}\\s+").find(line)
         if (heading != null) {
-            withStyle(SpanStyle(fontWeight = FontWeight.Bold, fontSize = 16.sp)) { appendInline(line.substring(heading.range.last + 1)) }
+            withStyle(SpanStyle(fontWeight = FontWeight.Bold, fontSize = 16.sp)) { appendInline(line.substring(heading.range.last + 1), onLink) }
             return@forEachIndexed
         }
         if (Regex("^\\s{0,3}([-*_])\\s*(\\1\\s*){2,}$").matches(line)) {
@@ -332,30 +340,76 @@ private fun inline(src: String): AnnotatedString = buildAnnotatedString {
         }
         Regex("^\\s*>\\s?").find(line)?.let { m ->
             withStyle(SpanStyle(color = Color(0x80808080))) { append("▎ ") }
-            withStyle(SpanStyle(fontStyle = FontStyle.Italic)) { appendInline(line.substring(m.range.last + 1)) }
+            withStyle(SpanStyle(fontStyle = FontStyle.Italic)) { appendInline(line.substring(m.range.last + 1), onLink) }
             return@forEachIndexed
         }
         Regex("^(\\s*)[-*+]\\s+").find(line)?.let { m ->
             append(m.groupValues[1] + "•  ")
             line = line.substring(m.range.last + 1)
         }
-        appendInline(line)
+        appendInline(line, onLink)
     }
 }
 
-private fun AnnotatedString.Builder.appendInline(s: String) {
+private val linkStyle = TextLinkStyles(SpanStyle(color = Color(0xFF3DAEE9), textDecoration = TextDecoration.Underline))
+private val mentionLinkStyle = TextLinkStyles(mentionStyle)
+
+/** A tappable span: the tap asks [onLink] what to do with [url] (open or copy). */
+private fun AnnotatedString.Builder.link(url: String, text: String, styles: TextLinkStyles, onLink: (String) -> Unit) {
+    withLink(LinkAnnotation.Clickable(url, styles) { onLink(url) }) { append(text) }
+}
+
+private fun AnnotatedString.Builder.appendInline(s: String, onLink: (String) -> Unit = {}) {
     var i = 0
     for (m in inlineRe.findAll(s)) {
         append(s.substring(i, m.range.first))
         when {
-            m.groups[1] != null -> withStyle(SpanStyle(fontWeight = FontWeight.Bold)) { appendInline(m.groupValues[1]) }
-            m.groups[5] != null -> withStyle(mentionStyle) { append(m.groupValues[5]) }
+            m.groups[1] != null -> withStyle(SpanStyle(fontWeight = FontWeight.Bold)) { appendInline(m.groupValues[1], onLink) }
+            m.groups[6] != null -> link(githubProfile(m.groupValues[6]), m.groupValues[6], mentionLinkStyle, onLink)
+            m.groups[7] != null -> link(m.groupValues[7], m.groupValues[7], linkStyle, onLink)
             m.groups[2] != null -> withStyle(SpanStyle(fontFamily = FontFamily.Monospace, background = Color(0x33808080), fontSize = 13.sp)) { append(m.groupValues[2]) }
-            m.groups[3] != null -> withStyle(SpanStyle(textDecoration = TextDecoration.Underline)) { append(m.groupValues[3]) }
-            m.groups[4] != null -> withStyle(SpanStyle(fontStyle = FontStyle.Italic)) { append(m.groupValues[4]) }
+            m.groups[3] != null -> {
+                val target = m.groupValues[4]
+                if (target.startsWith("http://") || target.startsWith("https://")) link(target, m.groupValues[3], linkStyle, onLink)
+                else withStyle(SpanStyle(textDecoration = TextDecoration.Underline)) { append(m.groupValues[3]) }
+            }
+            m.groups[5] != null -> withStyle(SpanStyle(fontStyle = FontStyle.Italic)) { append(m.groupValues[5]) }
             else -> append(m.value)
         }
         i = m.range.last + 1
     }
     append(s.substring(i))
+}
+
+/** "@LastNyx" -> its GitHub profile. */
+internal fun githubProfile(mention: String) = "https://github.com/" + mention.removePrefix("@")
+
+/** Plain text with its links and @mentions tappable (user bubbles, which are not markdown). */
+fun linkified(text: String, onLink: (String) -> Unit): AnnotatedString = buildAnnotatedString {
+    var i = 0
+    for (m in plainLinkRe.findAll(text)) {
+        append(text.substring(i, m.range.first))
+        if (m.value.startsWith("@")) link(githubProfile(m.value), m.value, mentionLinkStyle, onLink)
+        else link(m.value, m.value, linkStyle, onLink)
+        i = m.range.last + 1
+    }
+    append(text.substring(i))
+}
+
+private val plainLinkRe = Regex("""https?://[^\s<>()\[\]`]+[^\s<>()\[\]`.,;:!?'"]|(?<![\w/@.])@[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})(?![\w-])""")
+
+/** What a tapped link offers: open it in the browser, or copy it. */
+@Composable
+fun LinkSheet(url: String, onDismiss: () -> Unit) {
+    val uri = androidx.compose.ui.platform.LocalUriHandler.current
+    val clipboard = androidx.compose.ui.platform.LocalClipboardManager.current
+    androidx.compose.material3.AlertDialog(onDismissRequest = onDismiss,
+        title = { Text(if (url.startsWith("https://github.com/") && url.count { it == '/' } == 3) "@" + url.substringAfterLast('/') else "Link") },
+        text = { Text(url, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) },
+        confirmButton = {
+            androidx.compose.material3.TextButton(onClick = { runCatching { uri.openUri(url) }; onDismiss() }) { Text("Open") }
+        },
+        dismissButton = {
+            androidx.compose.material3.TextButton(onClick = { clipboard.setText(AnnotatedString(url)); onDismiss() }) { Text("Copy") }
+        })
 }

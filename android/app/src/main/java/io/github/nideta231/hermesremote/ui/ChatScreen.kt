@@ -617,6 +617,8 @@ private fun UserBubble(item: ChatItem.User) {
     val haptics = LocalHapticFeedback.current
     var menu by remember { mutableStateOf(false) }
     var editing by remember { mutableStateOf(false) }
+    var link by remember { mutableStateOf<String?>(null) }
+    link?.let { LinkSheet(it) { link = null } }
     // With file cards drawn, the "📎 name" lines that stand for them would say it twice.
     val shownText = remember(item.text, item.files) {
         if (item.files.isEmpty()) item.text
@@ -639,7 +641,7 @@ private fun UserBubble(item: ChatItem.User) {
         Surface(color = Gold.copy(alpha = alpha), shape = RoundedCornerShape(20.dp, 20.dp, 6.dp, 20.dp),
             modifier = Modifier.widthIn(max = 560.dp).padding(start = 40.dp).clip(RoundedCornerShape(20.dp, 20.dp, 6.dp, 20.dp))
                 .combinedClickable(onClick = {}, onLongClick = { haptics.performHapticFeedback(HapticFeedbackType.LongPress); menu = true })) {
-            Text(remember(shownText) { clipForDisplay(shownText) }, modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+            Text(remember(shownText) { linkified(clipForDisplay(shownText)) { link = it } }, modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
                 style = MaterialTheme.typography.bodyMedium.copy(lineHeight = 21.sp),
                 color = if (item.pending) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurface)
         }
