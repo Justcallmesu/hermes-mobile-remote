@@ -37,6 +37,7 @@ from .backend import SESSION_HEADER, Backend, BackendLocator, BackendUnavailable
 from .config import Config
 from .devices import Device, DeviceStore
 from . import local_secret
+from . import selfupdate
 from .local_api import devices_doc, pairing_payload, pairing_uri, qr_png, trust_doc
 from .network import TrustStore, current_network, network_info, serving_lan_ips
 from .chat_files import referenced_file
@@ -449,8 +450,33 @@ def create_app(cfg: Config, *, locator: BackendLocator | None = None, tailnet: T
                                               ("claude_usage", monitor is not None and cfg.claude_usage),
                                               ("terminal", cfg.terminal),
                                               ("speedtest", monitor is not None),
-                                              ("folders", True)) if on],
+                                              ("folders", True),
+                                              ("bridge_update", cfg.self_update)) if on],
                 "bridge_version": __version__, "protocol": PROTOCOL}
+
+    update_check = selfupdate.CachedCheck()
+
+    @app.get("/v1/bridge/update")
+    async def bridge_update_check(refresh: bool = False, _: Device = Depends(device_auth)):
+        """This bridge's release, the newest one, and the last update's outcome."""
+        if not cfg.self_update:
+            raise ApiError(404, "update_off", "Bridge updates from the phone are off (self_update = false)")
+        return await asyncio.to_thread(update_check.get, refresh)
+
+    @app.post("/v1/bridge/update")
+    async def bridge_update_start(device: Device = Depends(device_auth)):
+        """Start the update outside the bridge; it restarts the bridge when done (pairings are kept)."""
+        if not cfg.self_update:
+            raise ApiError(404, "update_off", "Bridge updates from the phone are off (self_update = false)")
+        info = await asyncio.to_thread(update_check.get, True)
+        if not info["available"]:
+            raise ApiError(409, "up_to_date", "Already up to date")
+        try:
+            await asyncio.to_thread(selfupdate.launch)
+        except RuntimeError as exc:
+            raise ApiError(409, "update_refused", str(exc))
+        audit_event({"event": "bridge_update", "device": device.id, "to": info["latest"]})
+        return {"started": True, "to": info["latest"]}
 
     @app.get("/v1/status")
     async def status(_: Device = Depends(device_auth)):

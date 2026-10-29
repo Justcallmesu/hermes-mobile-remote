@@ -77,6 +77,8 @@ class Config:
     # Seconds the bridge keeps Hermes' socket open after the phone's drops, so a quick return
     # re-attaches to the same session (Hermes reaps a detached one after 20 s). 0 turns it off.
     park_seconds: float = 300
+    # Let a paired phone update a source-installed bridge (git checkout) to the newest release.
+    self_update: bool = True
 
     @classmethod
     def load(cls, path: Path | None = None) -> "Config":

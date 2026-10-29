@@ -492,6 +492,35 @@ def cmd_metrics(cfg: Config, args: argparse.Namespace) -> None:
     print(summarize(data))
 
 
+def cmd_update(cfg: Config, args: argparse.Namespace) -> None:
+    """Check for a newer release and update to it. Pairings and settings are kept."""
+    from . import selfupdate
+
+    if getattr(args, "apply", False):
+        sys.exit(selfupdate.run_apply())
+    info = selfupdate.check()
+    if getattr(args, "json", False):
+        print(json.dumps(info, indent=2))
+        return
+    print(f"Installed: {info['current'] or 'unknown'}{' (' + info['commit'] + ')' if info.get('commit') else ''}")
+    print(f"Newest:    {info['latest'] or 'unknown'}")
+    if info["reason"]:
+        sys.exit(info["reason"])
+    if not info["available"]:
+        print("Already up to date.")
+        return
+    if getattr(args, "check", False):
+        print("An update is available: run `hermes-remote-bridge update`.")
+        return
+    if not getattr(args, "yes", False) and sys.stdin.isatty():
+        if input(f"Update to {info['latest']} and restart the bridge? [Y/n] ").strip().lower() not in ("", "y", "yes"):
+            return
+    selfupdate.launch()
+    print(f"Updating in the background; log: {selfupdate.log_file()}")
+    print("The bridge restarts at the end. Paired phones keep their pairing and reconnect on their own;")
+    print("Hermes and its chats keep running.")
+
+
 def cmd_firewall(cfg: Config, args: argparse.Namespace) -> None:
     from . import firewall
     port = args.port or cfg.port
@@ -571,6 +600,11 @@ def main(argv: list[str] | None = None) -> None:
     t.add_argument("--json", action="store_true", help="Machine-readable output, with --list")
     doc = sub.add_parser("doctor", help="Check why the phone can't connect")
     doc.add_argument("--json", action="store_true", help="Machine-readable checks (for the tray app)")
+    u = sub.add_parser("update", help="Update the bridge to the newest release (keeps pairings)")
+    u.add_argument("--check", action="store_true", help="Only say whether an update is available")
+    u.add_argument("--yes", action="store_true", help="Don't ask for confirmation")
+    u.add_argument("--json", action="store_true", help="Machine-readable check result")
+    u.add_argument("--apply", action="store_true", help=argparse.SUPPRESS)
     m = sub.add_parser("metrics", help="Show what the running bridge has done since it started")
     m.add_argument("--json", action="store_true", help="Every metric as JSON")
     f = sub.add_parser("firewall", help="Allow the bridge port from the local network (asks first)")
@@ -587,7 +621,7 @@ def main(argv: list[str] | None = None) -> None:
     cfg = Config.load(args.config)
     handler = {"serve": cmd_serve, "pair": cmd_pair, "revoke": cmd_revoke, "devices": cmd_devices,
                "trust": cmd_trust, "doctor": cmd_doctor, "firewall": cmd_firewall,
-               "supervise": cmd_supervise, "metrics": cmd_metrics}[args.command]
+               "supervise": cmd_supervise, "metrics": cmd_metrics, "update": cmd_update}[args.command]
     try:
         handler(cfg, args)
     except ValueError as exc:
