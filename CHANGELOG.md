@@ -29,6 +29,8 @@ request number.
   open while a turn, subagent, /loop, /heartbeat or background process is running, so a
   `terminal(background=true, notify=true)` watcher is no longer killed. It is released `park_seconds`
   (default now 600) after the last work ends, or after `park_max_seconds` (default 86400) regardless.
+- **Bridge lists its parked sockets**: `GET /v1/admin/parked` (feature `parked` in `/v1/me`) shows, per
+  device, how long a socket has been held, its session count and why (work kinds, or when it releases).
 
 ## v1.34.0
 

@@ -458,7 +458,8 @@ def create_app(cfg: Config, *, locator: BackendLocator | None = None, tailnet: T
                                               ("bridge_update", cfg.self_update),
                                               ("notes", cfg.notes),
                                               ("blueprints", cfg.blueprints),
-                                              ("admin", cfg.remote_admin)) if on],
+                                              ("admin", cfg.remote_admin),
+                                              ("parked", cfg.remote_admin)) if on],
                 "bridge_version": __version__, "protocol": PROTOCOL}
 
     note_store = notes_mod.NoteStore(cfg.notes_dir)
@@ -793,6 +794,11 @@ def create_app(cfg: Config, *, locator: BackendLocator | None = None, tailnet: T
         else:
             raise ApiError(404, "no_such_fix", f"Unknown fix: {fix}")
         return await _doctor_doc()
+
+    @app.get("/v1/admin/parked")
+    async def admin_parked(_: Device = Depends(device_auth)):
+        _admin_on()
+        return {"parked": parked.snapshot()}
 
     @app.post("/v1/admin/restart")
     async def admin_restart(device: Device = Depends(device_auth)):

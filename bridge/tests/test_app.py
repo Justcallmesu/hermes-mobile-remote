@@ -855,6 +855,52 @@ def test_a_failed_probe_counts_as_work(tmp_path, workable_hermes, monkeypatch, m
         assert '"ws_park_expired"' not in _log(cfg)
 
 
+def test_parked_route_lists_a_held_socket_with_its_reason(tmp_path, workable_hermes):
+    port, state, closed, _ = workable_hermes
+    app, token, clock, cfg = _work_app(tmp_path, port)
+    state["process"] = True
+    with client(app, PHONE) as c:
+        assert c.get("/v1/admin/parked", headers=auth(token)).json() == {"parked": []}
+        _attach_and_drop(c, token)
+        _wait(lambda: '"ws_park"' in _log(cfg), "ws_park")
+        _wait(lambda: c.get("/v1/admin/parked", headers=auth(token)).json()["parked"] and clock.t >= 60, "a probe")
+        [row] = c.get("/v1/admin/parked", headers=auth(token)).json()["parked"]
+        assert row["device"] == "phone" and row["sessions"] == 1 and row["held_seconds"] >= 60
+        assert row["work"] == ["process"] and row["releases_in"] is None
+
+
+def test_parked_route_says_when_an_idle_socket_releases(tmp_path, parkable_hermes):
+    port, conns, closed = parkable_hermes
+    app, tokens, expire, cfg = _park_app(tmp_path, port, park_seconds=300)
+    with client(app, PHONE) as c:
+        _connect_and_drop(c, tokens["phone"])
+        _wait(lambda: '"ws_park"' in _log(cfg), "ws_park")
+        [row] = c.get("/v1/admin/parked", headers=auth(tokens["phone"])).json()["parked"]
+        assert row["work"] == [] and row["releases_in"] == 300 and row["held_seconds"] == 0
+        expire.set()
+
+
+def test_parked_route_needs_a_device_token_and_carries_no_session_content(tmp_path, workable_hermes):
+    port, state, closed, _ = workable_hermes
+    app, token, clock, cfg = _work_app(tmp_path, port)
+    state["process"] = True
+    with client(app, PHONE) as c:
+        _attach_and_drop(c, token)
+        _wait(lambda: '"ws_park"' in _log(cfg), "ws_park")
+        assert c.get("/v1/admin/parked").status_code == 401
+        assert c.get("/v1/admin/parked", headers=auth("hrb_wrong")).status_code == 401
+        body = c.get("/v1/admin/parked", headers=auth(token)).json()
+        assert set(body["parked"][0]) == {"device", "held_seconds", "sessions", "work", "releases_in"}
+        assert "s1" not in json.dumps(body)
+
+
+def test_me_lists_the_parked_feature(tmp_path, workable_hermes):
+    port, *_ = workable_hermes
+    app, token, _, _ = _work_app(tmp_path, port)
+    with client(app, PHONE) as c:
+        assert "parked" in c.get("/v1/me", headers=auth(token)).json()["features"]
+
+
 def test_phone_can_read_loop_state_but_not_call_outside_the_list():
     ok = json.dumps({"jsonrpc": "2.0", "id": 1, "method": "session.control.read", "params": {"session_id": "a"}})
     assert check_frame(ok, 1000) == (ok, None)

@@ -358,6 +358,15 @@ cgroup into a scope of its own, restart the bridge. Pairings, TLS keys and netwo
 directory and are not touched, so phones reconnect with the same pairing. The feature is listed as
 `bridge_update` in `/v1/me`; `self_update = false` turns it off. CLI: `hermes-remote-bridge update`.
 
+## Parked sockets: `GET /v1/admin/parked`
+
+Device token; off with `remote_admin = false` (404). Lists the Hermes sockets the bridge holds open for
+phones that dropped: `{parked: [{device, held_seconds, sessions, work[], releases_in}]}`. `sessions` is how
+many chats are attached (never their ids or content). `work` is the kind seen on the last 30 s check:
+`turn`, `process`, `subagent`, `loop`, `heartbeat` or `unknown` (a probe failed); empty when idle, and then
+`releases_in` is the seconds left before release (null while there is work). Restarting or updating the
+bridge closes these sockets, so a running background process dies. Listed as `parked` in `/v1/me`.
+
 ## Local control API (desktop app)
 
 The desktop app manages the bridge through these routes. They are not for the phone and are never in the relay's allowlist.

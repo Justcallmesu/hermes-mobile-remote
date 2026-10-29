@@ -158,6 +158,9 @@ class _Parked:
         self.tasks: list[asyncio.Task] = []
         self.pending: dict[str, asyncio.Future] = {}
         self.seq = 0
+        self.elapsed = 0.0  # seconds held, as the watch loop counts them
+        self.idle = 0.0
+        self.work: list[str] = []  # work kinds seen on the last probe
 
 
 def _is_probe_frame(text: str) -> dict | None:
@@ -202,16 +205,18 @@ class ParkedUpstreams:
         entry = _Parked(upstream, ready, set(sessions))
 
         async def watch() -> None:
-            elapsed = idle = 0.0  # time is what the sleeps add up to, so a fake sleep is a fake clock
+            # time is what the sleeps add up to, so a fake sleep is a fake clock
             while True:
-                step = min(PROBE_INTERVAL, max(self.park_seconds - idle, 0.0), self.park_max_seconds - elapsed)
+                step = min(PROBE_INTERVAL, max(self.park_seconds - entry.idle, 0.0),
+                           self.park_max_seconds - entry.elapsed)
                 await self._sleep(step)
-                elapsed += step
-                if elapsed >= self.park_max_seconds:
+                entry.elapsed += step
+                if entry.elapsed >= self.park_max_seconds:
                     self._audit({"event": "ws_park_cap", "device": device})
                     break
-                idle = 0.0 if await self._has_work(entry) else idle + step
-                if idle >= self.park_seconds:
+                entry.work = await self._work_kinds(entry)
+                entry.idle = 0.0 if entry.work else entry.idle + step
+                if entry.idle >= self.park_seconds:
                     self._audit({"event": "ws_park_expired", "device": device})
                     break
             self._discard(device)
@@ -241,28 +246,36 @@ class ParkedUpstreams:
             raise RuntimeError(f"{method} refused")
         return frame.get("result") or {}
 
-    async def _has_work(self, entry: _Parked) -> bool:
-        """Whether any attached session has work. A failed or refused probe counts as work."""
+    async def _work_kinds(self, entry: _Parked) -> list[str]:
+        """The kinds of work attached sessions have (the first kind found). A failed or refused probe is `unknown`."""
         if not entry.sessions:
-            return False
+            return []
         try:
             listing = await self._ask(entry, "session.active_list", {})
             if any(row.get("id") in entry.sessions and row.get("status") != "idle"
                    for row in listing.get("sessions") or []):
-                return True
+                return ["turn"]
             for sid in list(entry.sessions):
                 params = {"session_id": sid}
                 if any(p.get("status") == "running"
                        for p in (await self._ask(entry, "process.list", params)).get("processes") or []):
-                    return True
+                    return ["process"]
                 if (await self._ask(entry, "subagent.list", params)).get("subagents"):
-                    return True
+                    return ["subagent"]
                 control = (await self._ask(entry, "session.control.read", params)).get("control") or {}
-                if any((control.get(k) or {}).get("status") == "active" for k in ("loop", "heartbeat")):
-                    return True
+                for kind in ("loop", "heartbeat"):
+                    if (control.get(kind) or {}).get("status") == "active":
+                        return [kind]
         except Exception:  # noqa: BLE001 - never destructive: when unsure, keep the socket
-            return True
-        return False
+            return ["unknown"]
+        return []
+
+    def snapshot(self) -> list[dict]:
+        """Read-only: who is held, for how long, and why. Never any session content."""
+        return [{"device": device, "held_seconds": round(e.elapsed), "sessions": len(e.sessions),
+                 "work": list(e.work),
+                 "releases_in": None if e.work else max(round(self.park_seconds - e.idle), 0)}
+                for device, e in self._parked.items()]
 
     def claim(self, device: str) -> tuple[Any, str, set] | None:
         entry = self._parked.pop(device, None)
