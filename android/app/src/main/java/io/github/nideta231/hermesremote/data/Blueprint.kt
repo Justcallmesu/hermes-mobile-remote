@@ -17,7 +17,30 @@ data class BpNode(val id: String, val kind: String, val label: String, val x: Fl
 
 data class BpEdge(val id: String, val from: String, val to: String, val label: String = "")
 
-data class BpColumn(val id: String, val name: String, val color: String = "default")
+/** [limit]: the column's WIP cap (null = none); the header turns red when it holds more. */
+data class BpColumn(val id: String, val name: String, val color: String = "default", val limit: Int? = null) {
+    fun over(count: Int) = limit != null && count > limit
+}
+
+/** Board settings, shared with Hermes. [newCards] "top"/"bottom": where new and moved-in cards land. [agingDays] 0 = off. */
+data class BpSettings(val newCards: String = "bottom", val agingDays: Int = 0) {
+    companion object {
+        val NEW_CARDS = listOf("bottom", "top")
+        val AGING_DAYS = listOf(0, 3, 7, 14, 30)
+    }
+}
+
+/** How faded a card untouched since [updatedSec] looks: 1 = fresh, down to 0.45 at 4x [agingDays]. */
+fun agingAlpha(updatedSec: Double, nowSec: Double, agingDays: Int): Float {
+    if (agingDays <= 0 || updatedSec <= 0.0) return 1f
+    val days = (nowSec - updatedSec) / 86_400.0
+    return when {
+        days < agingDays -> 1f
+        days < agingDays * 2 -> 0.8f
+        days < agingDays * 4 -> 0.62f
+        else -> 0.45f
+    }
+}
 
 data class BpCheck(val text: String, val done: Boolean)
 
@@ -47,6 +70,7 @@ data class Blueprint(
     val nodes: List<BpNode>, val edges: List<BpEdge>, val columns: List<BpColumn>, val cards: List<BpCard>, val log: List<BpLog>,
     /** The user's standing rules for any agent on this project (sent with every ask). */
     val instructions: String = "",
+    val settings: BpSettings = BpSettings(),
 ) {
     val needsYou get() = cards.filter { it.openAsks.isNotEmpty() }
     val hermesControl get() = control == "hermes"
@@ -66,7 +90,9 @@ data class Blueprint(
                         f(it, "w").takeIf { w -> w > 0 } ?: 180f, f(it, "h").takeIf { h -> h > 0 } ?: 64f, it.optString("color", "default"), it.optString("note"))
                 },
                 d.optJSONArray("edges").objects().map { BpEdge(it.optString("id"), it.optString("from"), it.optString("to"), it.optString("label")) },
-                b.optJSONArray("columns").objects().map { BpColumn(it.optString("id"), it.optString("name"), it.optString("color", "default")) },
+                b.optJSONArray("columns").objects().map {
+                    BpColumn(it.optString("id"), it.optString("name"), it.optString("color", "default"), it.optInt("limit", 0).takeIf { n -> n > 0 })
+                },
                 b.optJSONArray("cards").objects().map {
                     BpCard(it.optString("id"), it.optString("column"), it.optString("title"), it.optString("body"),
                         it.optJSONArray("tags").strings(), it.optJSONArray("checklist").objects().map { c -> BpCheck(c.optString("text"), c.optBoolean("done")) },
@@ -79,6 +105,10 @@ data class Blueprint(
                 },
                 o.optJSONArray("log").objects().map { BpLog(it.optDouble("at", 0.0), it.optString("by"), it.optString("text")) },
                 o.optString("instructions"),
+                (o.optJSONObject("settings") ?: JSONObject()).let { st ->
+                    BpSettings(st.optString("new_cards").takeIf { it in BpSettings.NEW_CARDS } ?: "bottom",
+                        st.optInt("aging_days", 0).takeIf { it in BpSettings.AGING_DAYS } ?: 0)
+                },
             )
         }
     }

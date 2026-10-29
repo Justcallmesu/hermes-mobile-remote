@@ -43,3 +43,28 @@ class BlueprintTest {
         assertTrue(BpOp.of("card.update", "id" to "c1", "due" to null).isNull("due"))
     }
 }
+
+class BlueprintSettingsTest {
+    @Test fun parsesSettingsAndColumnLimits() {
+        val bp = io.github.nideta231.hermesremote.data.Blueprint.parse(org.json.JSONObject("""
+            {"project":{"id":"p"},"version":3,"settings":{"new_cards":"top","aging_days":7},
+             "diagram":{"nodes":[],"edges":[]},
+             "board":{"columns":[{"id":"w","name":"Working","limit":2},{"id":"d","name":"Done"}],"cards":[]},"log":[]}"""))
+        org.junit.Assert.assertEquals(io.github.nideta231.hermesremote.data.BpSettings("top", 7), bp.settings)
+        org.junit.Assert.assertEquals(2, bp.columns[0].limit)
+        org.junit.Assert.assertTrue(bp.columns[0].over(3) && !bp.columns[0].over(2))
+        org.junit.Assert.assertEquals(null, bp.columns[1].limit)
+        val old = io.github.nideta231.hermesremote.data.Blueprint.parse(org.json.JSONObject("""{"project":{"id":"p"},"settings":{"new_cards":"sideways","aging_days":5}}"""))
+        org.junit.Assert.assertEquals(io.github.nideta231.hermesremote.data.BpSettings(), old.settings)
+    }
+
+    @Test fun agingFadesInSteps() {
+        val day = 86_400.0
+        val now = 100 * day
+        org.junit.Assert.assertEquals(1f, io.github.nideta231.hermesremote.data.agingAlpha(now - 30 * day, now, 0), 0f)
+        org.junit.Assert.assertEquals(1f, io.github.nideta231.hermesremote.data.agingAlpha(now - 6 * day, now, 7), 0f)
+        org.junit.Assert.assertEquals(0.8f, io.github.nideta231.hermesremote.data.agingAlpha(now - 8 * day, now, 7), 0f)
+        org.junit.Assert.assertEquals(0.62f, io.github.nideta231.hermesremote.data.agingAlpha(now - 20 * day, now, 7), 0f)
+        org.junit.Assert.assertEquals(0.45f, io.github.nideta231.hermesremote.data.agingAlpha(now - 40 * day, now, 7), 0f)
+    }
+}

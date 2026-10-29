@@ -27,20 +27,27 @@ request number.
   stats...*, which shows the full summary. **@Justcallmesu** (#21)
 - **Background work sits in a fixed strip above the composer**: running processes, subagents no delegate
   card shows, and an active /loop or /heartbeat collapse to one line ("2 running · 1 subagent · loop");
-  tap to open the Stop and steer actions. It hides when nothing runs or a question is open.
+  tap to open the Stop and steer actions. It hides when nothing runs or a question is open. **@LastNyx** (#22)
 - **A bridge installed by the desktop app can update itself from the phone (Linux)**: it checks the newest
   `vX.Y.Z` tag on GitHub, swaps in that release's `bridge/` keeping the old copy as `bridge.old`, and
-  restores it, re-syncs and restarts it if any step fails after the swap. `self_update = false` still turns it off.
+  restores it, re-syncs and restarts it if any step fails after the swap. `self_update = false` still turns it off. **@LastNyx** (#22)
 - **Bridge keeps a parked socket while its chats have work**: a dropped phone's Hermes socket now stays
   open while a turn, subagent, /loop, /heartbeat or background process is running, so a
   `terminal(background=true, notify=true)` watcher is no longer killed. It is released `park_seconds`
-  (default now 600) after the last work ends, or after `park_max_seconds` (default 86400) regardless.
+  (default now 600) after the last work ends, or after `park_max_seconds` (default 86400) regardless. **@LastNyx** (#22)
 - **Bridge lists its parked sockets**: `GET /v1/admin/parked` (feature `parked` in `/v1/me`) shows, per
-  device, how long a socket has been held, its session count and why (work kinds, or when it releases).
+  device, how long a socket has been held, its session count and why (work kinds, or when it releases). **@LastNyx** (#22)
 - **The PC page shows held chats and warns before a restart or update ends them**: a read-only "Held chats"
   section lists each parked socket (device, how long, why); Restart and Update ask "N chats on the PC are
   still working; restarting ends them" first (the Settings and drawer update ask too, with "updating").
-  Bridges without the route behave as before.
+  Bridges without the route behave as before. **@LastNyx** (#22)
+- **Board drag scrolls and shows where the card lands**: hold a dragged card near the top or bottom of
+  a column and the column scrolls (faster near the edge); near the left or right edge the board scrolls
+  sideways. A gold slot opens where the card will drop, also with a tag filter on.
+- **Board settings** (blueprint menu > Board settings): new cards *On top* or *At the bottom*, and
+  *Card aging*, which fades cards nobody touched for 3, 7, 14 or 30 days (cards waiting for you or being
+  worked on never fade). Each column can have a **card limit** (column menu > Card limit); its count
+  shows `3/2` in red when over. Hermes sees the settings and limits too. Needs the updated bridge.
 
 ## v1.34.0
 

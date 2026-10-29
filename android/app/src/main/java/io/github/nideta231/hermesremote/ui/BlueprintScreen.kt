@@ -74,6 +74,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.drawscope.Stroke
@@ -100,6 +101,8 @@ import io.github.nideta231.hermesremote.data.BpCard
 import io.github.nideta231.hermesremote.data.BpCheck
 import io.github.nideta231.hermesremote.data.BpNode
 import io.github.nideta231.hermesremote.data.BpOp
+import io.github.nideta231.hermesremote.data.BpSettings
+import io.github.nideta231.hermesremote.data.agingAlpha
 import kotlin.math.abs
 import kotlin.math.atan2
 import kotlin.math.cos
@@ -151,6 +154,7 @@ fun BlueprintScreen(projectId: String, projectName: String, state: BlueprintStat
     var confirmTrash by remember { mutableStateOf(false) }
     /** The instructions dialog: (open, then hand control to Hermes on save). */
     var instructions by remember { mutableStateOf(false to false) }
+    var boardSettings by remember { mutableStateOf(false) }
     val bp = state.open?.takeIf { it.projectId == projectId }
     Column(Modifier.fillMaxSize()) {
         Row(Modifier.fillMaxWidth().statusBarsPadding().padding(horizontal = 4.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -175,6 +179,8 @@ fun BlueprintScreen(projectId: String, projectName: String, state: BlueprintStat
                     }, leadingIcon = { Icon(Glyphs.Agent, null, Modifier.size(18.dp)) })
                     DropdownMenuItem({ Text(if (bp.instructions.isBlank()) "Agent instructions" else "Agent instructions (set)") }, { menu = false; instructions = true to false },
                         leadingIcon = { Icon(Glyphs.Edit, null, Modifier.size(18.dp)) })
+                    DropdownMenuItem({ Text("Board settings") }, { menu = false; boardSettings = true },
+                        leadingIcon = { Icon(Glyphs.Settings, null, Modifier.size(18.dp)) })
                     DropdownMenuItem({ Text("Tidy diagram") }, { menu = false; actions.apply(arrayOf(BpOp.of("diagram.layout"))) {} }, leadingIcon = { Icon(Glyphs.Graph, null, Modifier.size(18.dp)) })
                     DropdownMenuItem({ Text("Remove blueprint", color = Bad) }, { menu = false; confirmTrash = true }, leadingIcon = { Icon(Glyphs.Trash, null, Modifier.size(18.dp), tint = Bad) })
                 }
@@ -205,6 +211,10 @@ fun BlueprintScreen(projectId: String, projectName: String, state: BlueprintStat
             if (ops.isNotEmpty()) actions.apply(ops.toTypedArray()) {}
             if (hand) actions.askHermes(bp.copy(instructions = text), "control")
         }
+    }
+    if (boardSettings && bp != null) BoardSettingsDialog(bp.settings, onDismiss = { boardSettings = false }) { st ->
+        boardSettings = false
+        if (st != bp.settings) actions.apply(arrayOf(BpOp.of("settings.set", "new_cards" to st.newCards, "aging_days" to st.agingDays))) {}
     }
     if (confirmTrash) AlertDialog(onDismissRequest = { confirmTrash = false }, title = { Text("Remove this blueprint?") },
         text = { Text("It goes to the trash (drawer > project long-press > Blueprint trash) and can be restored.") },
@@ -481,6 +491,7 @@ private fun BoardView(bp: Blueprint, actions: BlueprintActions) {
     var addingTo by remember { mutableStateOf<String?>(null) }
     var columnMenu by remember { mutableStateOf<String?>(null) }
     var renaming by remember { mutableStateOf<String?>(null) }
+    var limiting by remember { mutableStateOf<String?>(null) }
     var newColumn by remember { mutableStateOf(false) }
     // Drag state: the card, the finger in root coordinates, and every column's bounds to drop into.
     var dragging by remember { mutableStateOf<BpCard?>(null) }
@@ -556,11 +567,15 @@ private fun BoardView(bp: Blueprint, actions: BlueprintActions) {
                                 if (tint != Color.Unspecified) Box(Modifier.size(10.dp).background(tint, CircleShape))
                                 Spacer(Modifier.width(8.dp))
                                 Text(col.name, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f), maxLines = 1)
-                                Text("${cards.size}", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                val total = bp.cardsIn(col.id).size
+                                Text(if (col.limit != null) "${cards.size}/${col.limit}" else "${cards.size}", style = MaterialTheme.typography.labelSmall,
+                                    color = if (col.over(total)) Bad else MaterialTheme.colorScheme.onSurfaceVariant,
+                                    fontWeight = if (col.over(total)) FontWeight.Bold else null)
                                 Box {
                                     IconButton(onClick = { columnMenu = col.id }, Modifier.size(36.dp)) { Icon(Glyphs.More, "Column menu", Modifier.size(18.dp)) }
                                     DropdownMenu(columnMenu == col.id, { columnMenu = null }) {
                                         DropdownMenuItem({ Text("Rename") }, { columnMenu = null; renaming = col.id })
+                                        DropdownMenuItem({ Text(if (col.limit != null) "Card limit (${col.limit})" else "Card limit") }, { columnMenu = null; limiting = col.id })
                                         val i = bp.columns.indexOf(col)
                                         if (i > 0) DropdownMenuItem({ Text("Move left") }, { columnMenu = null; actions.apply(arrayOf(BpOp.of("column.move", "id" to col.id, "index" to i - 1))) {} })
                                         if (i < bp.columns.size - 1) DropdownMenuItem({ Text("Move right") }, { columnMenu = null; actions.apply(arrayOf(BpOp.of("column.move", "id" to col.id, "index" to i + 1))) {} })
@@ -656,10 +671,47 @@ private fun BoardView(bp: Blueprint, actions: BlueprintActions) {
             renaming = null; if (t.isNotBlank()) actions.apply(arrayOf(BpOp.of("column.update", "id" to colId, "name" to t))) {}
         }
     }
+    limiting?.let { colId ->
+        val col = bp.columns.firstOrNull { it.id == colId }
+        TextDialog("Card limit for ${col?.name}", col?.limit?.toString() ?: "", "Max cards, empty = no limit", onDismiss = { limiting = null }) { t ->
+            limiting = null
+            val n = t.toIntOrNull()?.coerceIn(0, 999) ?: 0
+            if (n != (col?.limit ?: 0)) actions.apply(arrayOf(BpOp.of("column.update", "id" to colId, "limit" to n))) {}
+        }
+    }
     if (newColumn) TextDialog("New column", "", "Name", onDismiss = { newColumn = false }) { t ->
         newColumn = false; if (t.isNotBlank()) actions.apply(arrayOf(BpOp.of("column.add", "name" to t))) {}
     }
     openCard?.let { id -> bp.cards.firstOrNull { it.id == id }?.let { CardSheet(it, bp, actions, onDismiss = { openCard = null }) } ?: run { openCard = null } }
+}
+
+/** Board settings shared with Hermes: where new cards land and card aging. Column limits live in each column's menu. */
+@Composable
+private fun BoardSettingsDialog(initial: BpSettings, onDismiss: () -> Unit, onSave: (BpSettings) -> Unit) {
+    var st by remember { mutableStateOf(initial) }
+    AlertDialog(onDismissRequest = onDismiss, title = { Text("Board settings") }, text = {
+        Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Text("New cards", style = MaterialTheme.typography.labelLarge)
+            Text("Where a new card, or one moved into another column, lands. Dragging still drops it where you let go.",
+                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                listOf("top" to "On top", "bottom" to "At the bottom").forEach { (v, label) ->
+                    FilterChip(st.newCards == v, { st = st.copy(newCards = v) }, { Text(label) }, colors = themedChip())
+                }
+            }
+            Text("Card aging", style = MaterialTheme.typography.labelLarge)
+            Text("Fade cards nobody has touched for a while, so stale work stands out. Cards waiting for you or being worked on never fade.",
+                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                BpSettings.AGING_DAYS.forEach { d ->
+                    FilterChip(st.agingDays == d, { st = st.copy(agingDays = d) }, { Text(if (d == 0) "Off" else "$d days") }, colors = themedChip())
+                }
+            }
+            Text("Card limit per column: column menu > Card limit. The count turns red when a column holds more.",
+                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+    }, confirmButton = { TextButton(onClick = { onSave(st) }) { Text("Save") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } })
 }
 
 /** Where a dragged card will land: an empty card-sized slot with a gold outline. */
@@ -685,7 +737,10 @@ private fun BoardCard(card: BpCard, bp: Blueprint, dark: Boolean, ghost: Boolean
         working -> BorderStroke(1.5.dp, Gold.copy(alpha = 0.4f + glow * 0.6f))
         else -> null
     }
-    Surface(modifier.fillMaxWidth().clickable(onClick = onOpen), shape = RoundedCornerShape(12.dp),
+    // Card aging: untouched cards fade (board setting), unless something about them needs attention.
+    val aged = if (lifted || asks.isNotEmpty() || working) 1f
+        else agingAlpha(card.updated, System.currentTimeMillis() / 1000.0, bp.settings.agingDays)
+    Surface(modifier.fillMaxWidth().graphicsLayer { alpha = aged }.clickable(onClick = onOpen), shape = RoundedCornerShape(12.dp),
         color = if (tint != Color.Unspecified) tint else MaterialTheme.colorScheme.surfaceContainerHighest,
         shadowElevation = if (lifted) 10.dp else 0.dp, border = border) {
         Column(Modifier.padding(10.dp).then(if (ghost) Modifier.background(Color.Transparent) else Modifier)) {
