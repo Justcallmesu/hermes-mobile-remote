@@ -419,16 +419,18 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
         describe = ::describe, say = { _toast.value = it }, onBridgeBack = ::bridgeBack)
 
     val blueprints = io.github.nideta231.hermesremote.data.BlueprintRepo(viewModelScope, client = { client },
-        describe = ::describe, say = { _toast.value = it })
+        describe = ::describe, say = { _toast.value = it }, cacheDir = { app.cacheDir })
 
     /** New chat in [b]'s project with a drafted ask (the user sends it): work from the blueprint, take control, or do one card. */
     fun askHermesBlueprint(b: io.github.nideta231.hermesremote.data.Blueprint, what: String) {
         newChat(); chooseProject(b.projectId)
+        val rules = b.instructions.trim().takeIf { it.isNotEmpty() }?.let { "\n\nProject instructions (always follow): $it" }.orEmpty()
         setDraft(when {
             what == "control" -> "Take full control of the ${b.name} blueprint (project-blueprint skill): read it, plan the flow and the board, then work through it and keep it updated. I'll mostly watch and adjust."
             what.startsWith("card:") -> "Read the ${b.name} blueprint (project-blueprint skill), then do the card \"${what.removePrefix("card:")}\": move it to Working, tick its checklist as you go and move it to Done when it's verified."
+            what.startsWith("reply:") -> "Read the ${b.name} blueprint (project-blueprint skill). I answered on the card \"${what.removePrefix("reply:")}\": read its comments and carry on."
             else -> "Read the ${b.name} blueprint (project-blueprint skill) and continue the work: pick the next card, keep the board and diagram updated as you go."
-        })
+        } + rules)
     }
 
     val bridgeAdmin = io.github.nideta231.hermesremote.data.BridgeAdmin(viewModelScope, client = { client },

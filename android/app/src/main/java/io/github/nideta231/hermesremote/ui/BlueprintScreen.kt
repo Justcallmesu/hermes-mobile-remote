@@ -100,6 +100,7 @@ import kotlin.math.atan2
 import kotlin.math.cos
 import kotlin.math.roundToInt
 import kotlin.math.sin
+import androidx.compose.animation.core.animateFloat
 import org.json.JSONObject
 
 class BlueprintActions(
@@ -109,6 +110,9 @@ class BlueprintActions(
     val trash: (String) -> Unit,
     /** Start a chat in this project asking Hermes to work from the blueprint (draft only). */
     val askHermes: (Blueprint, String) -> Unit,
+    /** A file a card comment attaches, downloaded from the PC (open/save). */
+    val fetchFile: suspend (String) -> java.io.File = { throw java.io.IOException("Not available") },
+    val fileInfo: suspend (String) -> io.github.nideta231.hermesremote.data.FileInfo = { io.github.nideta231.hermesremote.data.FileInfo(io.github.nideta231.hermesremote.data.fileName(it), it) },
 )
 
 private fun bpColor(name: String, dark: Boolean): Color = when (name) {
@@ -140,14 +144,20 @@ fun BlueprintScreen(projectId: String, projectName: String, state: BlueprintStat
     var tab by rememberSaveable { mutableStateOf(1) }
     var menu by remember { mutableStateOf(false) }
     var confirmTrash by remember { mutableStateOf(false) }
+    /** The instructions dialog: (open, then hand control to Hermes on save). */
+    var instructions by remember { mutableStateOf(false to false) }
     val bp = state.open?.takeIf { it.projectId == projectId }
     Column(Modifier.fillMaxSize()) {
         Row(Modifier.fillMaxWidth().statusBarsPadding().padding(horizontal = 4.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
             IconButton(onClick = onBack) { Icon(Glyphs.Back, "Back") }
             Column(Modifier.weight(1f)) {
                 Text(bp?.name ?: projectName, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Text(if (bp?.hermesControl == true) "Blueprint · Hermes in control" else "Blueprint", style = MaterialTheme.typography.labelSmall,
-                    color = if (bp?.hermesControl == true) Gold else MaterialTheme.colorScheme.onSurfaceVariant)
+                val waiting = bp?.needsYou?.size ?: 0
+                val working = bp?.cards?.count { it.agent != null } ?: 0
+                Text(listOfNotNull(if (bp?.hermesControl == true) "Blueprint · Hermes in control" else "Blueprint",
+                        working.takeIf { it > 0 }?.let { "$it in progress" }, waiting.takeIf { it > 0 }?.let { "$it waiting for you" }).joinToString(" · "),
+                    style = MaterialTheme.typography.labelSmall, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                    color = when { waiting > 0 -> Warn; bp?.hermesControl == true -> Gold; else -> MaterialTheme.colorScheme.onSurfaceVariant })
             }
             if (bp != null) Box {
                 IconButton(onClick = { menu = true }) { Icon(Glyphs.More, "More") }
@@ -155,9 +165,11 @@ fun BlueprintScreen(projectId: String, projectName: String, state: BlueprintStat
                     DropdownMenuItem({ Text("Ask Hermes to work on this") }, { menu = false; actions.askHermes(bp, "work") }, leadingIcon = { Icon(Glyphs.Spark, null, Modifier.size(18.dp)) })
                     DropdownMenuItem({ Text(if (bp.hermesControl) "Take back control" else "Let Hermes take control") }, {
                         menu = false
-                        actions.apply(arrayOf(BpOp.of("control.set", "mode" to if (bp.hermesControl) "shared" else "hermes"))) {}
-                        if (!bp.hermesControl) actions.askHermes(bp, "control")
+                        if (bp.hermesControl) actions.apply(arrayOf(BpOp.of("control.set", "mode" to "shared"))) {}
+                        else instructions = true to true
                     }, leadingIcon = { Icon(Glyphs.Agent, null, Modifier.size(18.dp)) })
+                    DropdownMenuItem({ Text(if (bp.instructions.isBlank()) "Agent instructions" else "Agent instructions (set)") }, { menu = false; instructions = true to false },
+                        leadingIcon = { Icon(Glyphs.Edit, null, Modifier.size(18.dp)) })
                     DropdownMenuItem({ Text("Tidy diagram") }, { menu = false; actions.apply(arrayOf(BpOp.of("diagram.layout"))) {} }, leadingIcon = { Icon(Glyphs.Graph, null, Modifier.size(18.dp)) })
                     DropdownMenuItem({ Text("Remove blueprint", color = Bad) }, { menu = false; confirmTrash = true }, leadingIcon = { Icon(Glyphs.Trash, null, Modifier.size(18.dp), tint = Bad) })
                 }
@@ -167,6 +179,7 @@ fun BlueprintScreen(projectId: String, projectName: String, state: BlueprintStat
             listOf("Diagram", "Board", "Activity").forEachIndexed { i, t -> Tab(tab == i, { tab = i }, text = { Text(t) }) }
         }
         Box(Modifier.weight(1f).fillMaxWidth()) {
+            androidx.compose.runtime.CompositionLocalProvider(LocalFileFetcher provides actions.fetchFile, LocalFileInfo provides actions.fileInfo) {
             when {
                 bp == null && state.error != null -> Text(state.error, color = Bad, modifier = Modifier.padding(24.dp))
                 bp == null -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { TypingDots(Gold) }
@@ -174,6 +187,18 @@ fun BlueprintScreen(projectId: String, projectName: String, state: BlueprintStat
                 tab == 1 -> BoardView(bp, actions)
                 else -> ActivityView(bp)
             }
+            }
+        }
+        if (instructions.first && bp != null) InstructionsDialog(bp.instructions, handOver = instructions.second,
+            onDismiss = { instructions = false to false }) { text ->
+            val hand = instructions.second
+            instructions = false to false
+            val ops = buildList {
+                if (text != bp.instructions) add(BpOp.of("instructions.set", "text" to text))
+                if (hand) add(BpOp.of("control.set", "mode" to "hermes"))
+            }
+            if (ops.isNotEmpty()) actions.apply(ops.toTypedArray()) {}
+            if (hand) actions.askHermes(bp.copy(instructions = text), "control")
         }
     }
     if (confirmTrash) AlertDialog(onDismissRequest = { confirmTrash = false }, title = { Text("Remove this blueprint?") },
@@ -461,15 +486,16 @@ private fun BoardView(bp: Blueprint, actions: BlueprintActions) {
     val scroll = rememberScrollState()
 
     Column(Modifier.fillMaxSize()) {
-        if (bp.tags.isNotEmpty()) Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 12.dp, vertical = 4.dp),
+        if (bp.tags.isNotEmpty() || bp.needsYou.isNotEmpty()) Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 12.dp, vertical = 4.dp),
             horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             FilterChip(tag == null, { tag = null }, { Text("All") }, colors = themedChip())
+            if (bp.needsYou.isNotEmpty()) FilterChip(tag == WAITING, { tag = if (tag == WAITING) null else WAITING }, { Text("Waiting for you ${bp.needsYou.size}", color = Warn) }, colors = themedChip())
             bp.tags.forEach { t -> FilterChip(tag == t, { tag = if (tag == t) null else t }, { Text("#$t") }, colors = themedChip()) }
         }
         Box(Modifier.weight(1f).fillMaxWidth()) {
             Row(Modifier.fillMaxSize().horizontalScroll(scroll).padding(horizontal = 8.dp, vertical = 6.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 bp.columns.forEach { col ->
-                    val cards = bp.cardsIn(col.id).filter { tag == null || tag in it.tags }
+                    val cards = bp.cardsIn(col.id).filter { tag == null || (if (tag == WAITING) it.openAsks.isNotEmpty() else tag in it.tags) }
                     val target = dragging != null && colBounds[col.id]?.contains(finger) == true
                     val tint = bpColor(col.color, dark)
                     Surface(Modifier.width(280.dp).fillMaxHeight().onGloballyPositioned { colBounds[col.id] = it.boundsInRoot() },
@@ -555,7 +581,7 @@ private fun BoardView(bp: Blueprint, actions: BlueprintActions) {
     addingTo?.let { colId ->
         TextDialog("New card in ${bp.columns.firstOrNull { it.id == colId }?.name}", "", "Title", onDismiss = { addingTo = null }) { t ->
             addingTo = null
-            if (t.isNotBlank()) actions.apply(arrayOf(BpOp.of("card.add", "column" to colId, "title" to t, "tags" to listOfNotNull(tag)))) {}
+            if (t.isNotBlank()) actions.apply(arrayOf(BpOp.of("card.add", "column" to colId, "title" to t, "tags" to listOfNotNull(tag?.takeIf { it != WAITING })))) {}
         }
     }
     renaming?.let { colId ->
@@ -572,11 +598,32 @@ private fun BoardView(bp: Blueprint, actions: BlueprintActions) {
 @Composable
 private fun BoardCard(card: BpCard, bp: Blueprint, dark: Boolean, ghost: Boolean, modifier: Modifier, lifted: Boolean = false, onOpen: () -> Unit) {
     val tint = bpColor(card.color, dark)
+    val asks = card.openAsks
+    val working = card.agent != null
+    // Waiting for the user beats "in progress": a pulsing amber border; an agent at work gets a gold one.
+    val pulse = androidx.compose.animation.core.rememberInfiniteTransition(label = "card")
+    val glow by pulse.animateFloat(0.35f, 1f, androidx.compose.animation.core.infiniteRepeatable(
+        androidx.compose.animation.core.tween(1100), androidx.compose.animation.core.RepeatMode.Reverse), label = "glow")
+    val border = when {
+        lifted -> BorderStroke(2.dp, Gold)
+        asks.isNotEmpty() -> BorderStroke(2.dp, Warn.copy(alpha = glow))
+        working -> BorderStroke(1.5.dp, Gold.copy(alpha = 0.4f + glow * 0.6f))
+        else -> null
+    }
     Surface(modifier.fillMaxWidth().clickable(onClick = onOpen), shape = RoundedCornerShape(12.dp),
         color = if (tint != Color.Unspecified) tint else MaterialTheme.colorScheme.surfaceContainerHighest,
-        shadowElevation = if (lifted) 10.dp else 0.dp, border = if (lifted) BorderStroke(2.dp, Gold) else null) {
+        shadowElevation = if (lifted) 10.dp else 0.dp, border = border) {
         Column(Modifier.padding(10.dp).then(if (ghost) Modifier.background(Color.Transparent) else Modifier)) {
             val alpha = if (ghost) 0.35f else 1f
+            if (asks.isNotEmpty()) Row(Modifier.padding(bottom = 6.dp).background(Warn.copy(alpha = 0.18f), RoundedCornerShape(6.dp)).padding(horizontal = 6.dp, vertical = 2.dp),
+                verticalAlignment = Alignment.CenterVertically) {
+                Text(if (asks.any { it.kind == "review" }) "Review needed" else "Question for you", style = MaterialTheme.typography.labelSmall,
+                    fontWeight = FontWeight.SemiBold, color = Warn)
+            } else if (working) Row(Modifier.padding(bottom = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+                StatusDot(Gold, pulse = true)
+                Spacer(Modifier.width(6.dp))
+                Text("${card.agent} is working on this", style = MaterialTheme.typography.labelSmall, color = Gold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
             if (card.tags.isNotEmpty() || card.priority != null) Row(Modifier.padding(bottom = 4.dp), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                 card.priority?.let { p ->
                     val c = when (p) { "high" -> Bad; "medium" -> Warn; else -> Ok }
@@ -591,6 +638,7 @@ private fun BoardCard(card: BpCard, bp: Blueprint, dark: Boolean, ghost: Boolean
                 if (total > 0) add("☑ $done/$total")
                 card.due?.let { add("⏰ $it") }
                 card.assignee?.let { add(if (it == "hermes") "✦ Hermes" else "● Me") }
+                if (card.comments.isNotEmpty()) add("💬 ${card.comments.size}")
                 card.node?.let { id -> bp.nodes.firstOrNull { it.id == id }?.let { add("◇ ${it.label}") } }
             }
             if (meta.isNotEmpty()) Text(meta.joinToString("   "), style = MaterialTheme.typography.labelSmall, maxLines = 1, overflow = TextOverflow.Ellipsis,
@@ -676,6 +724,7 @@ private fun CardSheet(card: BpCard, bp: Blueprint, actions: BlueprintActions, on
                     FilterChip(card.node == n.id, { upd("node" to n.id) }, { Text(n.label.ifBlank { n.kind }) }, colors = themedChip())
                 }
             }
+            CommentsSection(card, bp, actions, onAskHermes = { saveText(); actions.askHermes(bp, "reply:" + card.title); onDismiss() })
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                 TextButton(onClick = { saveText(); actions.askHermes(bp, "card:" + card.title); onDismiss() }) {
                     Icon(Glyphs.Spark, null, Modifier.size(16.dp)); Spacer(Modifier.width(6.dp)); Text("Ask Hermes to do this")
@@ -687,6 +736,81 @@ private fun CardSheet(card: BpCard, bp: Blueprint, actions: BlueprintActions, on
     if (confirmDelete) AlertDialog(onDismissRequest = { confirmDelete = false }, title = { Text("Delete this card?") },
         confirmButton = { TextButton(onClick = { confirmDelete = false; actions.apply(arrayOf(BpOp.of("card.remove", "id" to card.id))) {}; onDismiss() }) { Text("Delete", color = Bad) } },
         dismissButton = { TextButton(onClick = { confirmDelete = false }) { Text("Cancel") } })
+}
+
+/** Marks the "Waiting for you" board filter (not a real tag). */
+private const val WAITING = "\u0000waiting"
+
+/**
+ * A card's comments, oldest first. Questions and review requests (from Hermes or anyone) stay
+ * highlighted until resolved; answering one resolves it. Files attached on the PC open or save here.
+ */
+@Composable
+private fun CommentsSection(card: BpCard, bp: Blueprint, actions: BlueprintActions, onAskHermes: () -> Unit) {
+    var draft by remember(card.id) { mutableStateOf("") }
+    val fmt = remember { java.text.DateFormat.getDateTimeInstance(java.text.DateFormat.SHORT, java.text.DateFormat.SHORT) }
+    val asks = card.openAsks
+    SectionLabel("Comments" + if (card.comments.isNotEmpty()) "  ${card.comments.size}" else "")
+    card.comments.forEach { m ->
+        val open = m.needsYou
+        Surface(shape = RoundedCornerShape(12.dp), modifier = Modifier.fillMaxWidth(),
+            color = if (open) Warn.copy(alpha = 0.14f) else MaterialTheme.colorScheme.surfaceContainerHigh,
+            border = if (open) BorderStroke(1.dp, Warn) else null) {
+            Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    val who = when (m.by) { "hermes" -> "Hermes"; "phone" -> "You"; else -> m.by.replaceFirstChar { it.uppercase() } }
+                    Text(who, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.SemiBold,
+                        color = if (m.by == "hermes") Gold else MaterialTheme.colorScheme.onSurface)
+                    if (m.kind != "comment") {
+                        Spacer(Modifier.width(6.dp))
+                        Text(when { m.resolved -> "resolved"; m.kind == "review" -> "needs review"; else -> "asks you" },
+                            style = MaterialTheme.typography.labelSmall, color = if (open) Warn else Ok)
+                    }
+                    Spacer(Modifier.weight(1f))
+                    Text(fmt.format(java.util.Date((m.at * 1000).toLong())), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                if (m.text.isNotBlank()) Text(m.text, style = MaterialTheme.typography.bodyMedium)
+                if (m.files.isNotEmpty()) FileCards(m.files, Modifier.padding(top = 2.dp))
+                if (m.kind != "comment") Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    TextButton(onClick = { actions.apply(arrayOf(BpOp.of("comment.resolve", "id" to card.id, "comment_id" to m.id, "resolved" to !m.resolved))) {} }) {
+                        Text(if (m.resolved) "Reopen" else if (m.kind == "review") "Mark reviewed" else "Mark answered")
+                    }
+                }
+            }
+        }
+    }
+    OutlinedTextField(draft, { draft = it }, placeholder = { Text(if (asks.isNotEmpty()) "Answer Hermes…" else "Add a comment") },
+        minLines = 1, maxLines = 6, modifier = Modifier.fillMaxWidth(),
+        trailingIcon = { if (draft.isNotBlank()) TextButton(onClick = {
+            actions.apply(arrayOf(BpOp.of("card.comment", "id" to card.id, "text" to draft.trim(), "resolves" to asks.isNotEmpty()))) {}
+            draft = ""
+        }) { Text(if (asks.isNotEmpty()) "Answer" else "Send") } })
+    if (card.comments.any { it.by == "phone" } && card.comments.lastOrNull()?.by == "phone")
+        TextButton(onClick = onAskHermes) {
+            Icon(Glyphs.Spark, null, Modifier.size(16.dp)); Spacer(Modifier.width(6.dp)); Text("Tell Hermes I replied")
+        }
+}
+
+/** Standing rules for any agent on this project; sent with every ask and shown first in Hermes' view of the blueprint. */
+@Composable
+private fun InstructionsDialog(initial: String, handOver: Boolean, onDismiss: () -> Unit, onSave: (String) -> Unit) {
+    var text by remember { mutableStateOf(initial) }
+    AlertDialog(onDismissRequest = onDismiss, title = { Text(if (handOver) "Hand control to Hermes" else "Agent instructions") }, text = {
+        Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("Rules for this project, followed every time Hermes works on it. Saved with the blueprint.",
+                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            OutlinedTextField(text, { text = it }, minLines = 5, modifier = Modifier.fillMaxWidth(),
+                placeholder = { Text("e.g. Never deploy to LIVE unless I ask. Read the docs folder first. Report on Telegram when a card is done.") })
+            Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                listOf("Never touch LIVE unless I ask.", "Read the project docs first.", "Do every Todo card, then report on Telegram.",
+                    "Ask on the card before anything risky.").forEach { s ->
+                    FilterChip(s in text, { text = if (s in text) text.replace(s, "").replace(Regex("\n{2,}"), "\n").trim() else (text.trim() + "\n" + s).trim() },
+                        { Text(s) }, colors = themedChip())
+                }
+            }
+        }
+    }, confirmButton = { TextButton(onClick = { onSave(text.trim()) }) { Text(if (handOver) "Save and hand over" else "Save") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } })
 }
 
 // ================================================================ Activity

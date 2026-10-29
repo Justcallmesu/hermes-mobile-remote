@@ -156,6 +156,8 @@ private fun DrawerMoreMenu(actions: SessionActions) {
 
 class BlueprintDrawerActions(
     val have: Set<String>,
+    /** Projects whose board has a question or review waiting for the user. */
+    val needsYou: Set<String> = emptySet(),
     val trash: List<io.github.nideta231.hermesremote.data.BlueprintTrash>,
     val open: (ProjectRef) -> Unit,
     val add: (ProjectRef) -> Unit,
@@ -381,6 +383,7 @@ fun SessionsPane(
                                 val ref = state.projects.firstOrNull { it.id == pid }
                                 if (view.grouping == SessionGrouping.PROJECT && group.key.startsWith("p-") && pid in bpa.have && ref != null) ({ bpa.open(ref) }) else null
                             },
+                            blueprintAlert = actions.blueprints?.needsYou?.contains(group.key.removePrefix("p-")) == true,
                             onLongClick = if (group.key == PINNED_KEY) null else ({
                                 haptics.performHapticFeedback(HapticFeedbackType.LongPress); movingGroup = group.key
                             })) {
@@ -686,7 +689,7 @@ private fun ShowMoreRow(remaining: Int, step: Int, canShowLess: Boolean, modifie
 private fun GroupHeader(label: String, count: Int, collapsed: Boolean, modifier: Modifier,
                         project: Boolean = false, live: Int = 0, onLongClick: (() -> Unit)? = null,
                         /** The project's blueprint: a small button on the header (null = none). */
-                        onBlueprint: (() -> Unit)? = null, onToggle: () -> Unit) {
+                        onBlueprint: (() -> Unit)? = null, blueprintAlert: Boolean = false, onToggle: () -> Unit) {
     val angle by animateFloatAsState(if (collapsed) -90f else 0f, label = "chevron")
     if (project) {
         Row(modifier.fillMaxWidth().padding(top = 10.dp, bottom = 2.dp).clip(RoundedCornerShape(12.dp))
@@ -705,7 +708,8 @@ private fun GroupHeader(label: String, count: Int, collapsed: Boolean, modifier:
             Spacer(Modifier.weight(1f))
             if (onBlueprint != null) {
                 Box(Modifier.size(30.dp).clip(RoundedCornerShape(8.dp)).clickable(onClick = onBlueprint), contentAlignment = Alignment.Center) {
-                    Icon(Glyphs.Blueprint, "Blueprint of $label", tint = Gold, modifier = Modifier.size(17.dp))
+                    Icon(Glyphs.Blueprint, if (blueprintAlert) "Blueprint of $label, waiting for you" else "Blueprint of $label", tint = Gold, modifier = Modifier.size(17.dp))
+                    if (blueprintAlert) Box(Modifier.align(Alignment.TopEnd).padding(3.dp).size(8.dp).background(Warn, CircleShape))
                 }
                 Spacer(Modifier.width(4.dp))
             }

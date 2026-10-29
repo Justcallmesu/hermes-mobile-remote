@@ -212,10 +212,10 @@ private val LocalEditMessage = staticCompositionLocalOf<((ChatItem.User, String)
 private val LocalImageLoader = staticCompositionLocalOf<suspend (String) -> ByteArray?> { { null } }
 
 /** Downloads a chat file from the PC; provided once by [ChatScreen] so every bubble can show file cards. */
-private val LocalFileFetcher = staticCompositionLocalOf<suspend (String) -> java.io.File> { { throw java.io.IOException("Not available") } }
+internal val LocalFileFetcher = staticCompositionLocalOf<suspend (String) -> java.io.File> { { throw java.io.IOException("Not available") } }
 
 /** Looks up a chat file's info; provided once by [ChatScreen]. */
-private val LocalFileInfo = staticCompositionLocalOf<suspend (String) -> io.github.nideta231.hermesremote.data.FileInfo> {
+internal val LocalFileInfo = staticCompositionLocalOf<suspend (String) -> io.github.nideta231.hermesremote.data.FileInfo> {
     { io.github.nideta231.hermesremote.data.FileInfo(fileName(it), it) }
 }
 
@@ -1509,7 +1509,7 @@ private fun savePicture(context: android.content.Context, name: String, bytes: B
 
 /** Files of one message, one card each: tap opens it in a phone app, the arrow saves it to Downloads. */
 @Composable
-private fun FileCards(paths: List<String>, modifier: Modifier = Modifier, alignEnd: Boolean = false) {
+internal fun FileCards(paths: List<String>, modifier: Modifier = Modifier, alignEnd: Boolean = false) {
     if (io.github.nideta231.hermesremote.data.HostFeature.CHAT_FILE_DOWNLOAD in LocalHiddenFeatures.current) return
     Column(modifier, verticalArrangement = Arrangement.spacedBy(6.dp), horizontalAlignment = if (alignEnd) Alignment.End else Alignment.Start) {
         paths.forEach { FileCard(it) }

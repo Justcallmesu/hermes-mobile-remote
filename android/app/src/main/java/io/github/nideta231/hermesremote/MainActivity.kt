@@ -387,7 +387,8 @@ class MainActivity : ComponentActivity() {
             openGraph = { go(Page.GRAPH) },
             openNotes = if ("notes" in features) ({ go(Page.NOTES) }) else null,
             openBridge = if ("admin" in features) ({ go(Page.BRIDGE) }) else null,
-            blueprints = if ("blueprints" in features) BlueprintDrawerActions(have = blueprintState.have.keys, trash = blueprintState.trash,
+            blueprints = if ("blueprints" in features) BlueprintDrawerActions(have = blueprintState.have.keys,
+                needsYou = blueprintState.have.values.filter { it.needsYou > 0 }.map { it.projectId }.toSet(), trash = blueprintState.trash,
                 open = { p -> blueprintProject = p.id; blueprintName = p.label; go(Page.BLUEPRINT) },
                 add = { p -> vm.blueprints.create(p.id, p.label, p.path) { blueprintProject = p.id; blueprintName = p.label; go(Page.BLUEPRINT) } },
                 remove = vm.blueprints::trash, restore = vm.blueprints::restore, purge = vm.blueprints::purge) else null,
@@ -458,7 +459,8 @@ class MainActivity : ComponentActivity() {
                         Page.BLUEPRINT -> blueprintProject?.let { pid ->
                             BlueprintScreen(pid, blueprintName, blueprintState, BlueprintActions(open = vm.blueprints::open, close = vm.blueprints::stop,
                                 apply = { ops, done -> vm.blueprints.apply(*ops, onApplied = done) }, trash = vm.blueprints::trash,
-                                askHermes = { b, what -> vm.askHermesBlueprint(b, what); page = Page.CHAT }),
+                                askHermes = { b, what -> vm.askHermesBlueprint(b, what); page = Page.CHAT },
+                                fetchFile = vm.blueprints::file, fileInfo = vm.blueprints::fileInfo),
                                 onBack = { vm.blueprints.refreshList(); page = Page.CHAT })
                         } ?: run { page = Page.CHAT }
                         Page.BRIDGE -> BridgeAdminScreen(bridgeAdminState, BridgeAdminActions(refresh = vm.bridgeAdmin::refresh,

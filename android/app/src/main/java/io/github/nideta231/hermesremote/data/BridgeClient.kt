@@ -100,6 +100,10 @@ class BridgeClient(
     suspend fun blueprint(projectId: String, since: Int = 0) = call("GET", "/v1/blueprints/${enc(projectId)}", mapOf("since" to since.takeIf { it > 0 }))
     suspend fun createBlueprint(projectId: String, body: JSONObject) = call("POST", "/v1/blueprints/${enc(projectId)}", body = body)
     suspend fun blueprintOps(projectId: String, ops: org.json.JSONArray) = call("POST", "/v1/blueprints/${enc(projectId)}/ops", body = JSONObject().put("ops", ops))
+    suspend fun blueprintFileInfo(projectId: String, path: String) = call("GET", "/v1/blueprints/${enc(projectId)}/file/info", mapOf("path" to path))
+
+    /** A file a blueprint card comment attaches, streamed into [dest]. */
+    suspend fun blueprintFile(projectId: String, path: String, dest: java.io.File) = runInterruptible(Dispatchers.IO) { download(url("/v1/blueprints/${enc(projectId)}/file", mapOf("path" to path)), dest) }
     suspend fun trashBlueprint(projectId: String) = call("DELETE", "/v1/blueprints/${enc(projectId)}")
     suspend fun restoreBlueprint(trashId: String) = call("POST", "/v1/blueprints-trash/${enc(trashId)}/restore")
     suspend fun purgeBlueprint(trashId: String) = call("DELETE", "/v1/blueprints-trash/${enc(trashId)}")
@@ -137,8 +141,11 @@ class BridgeClient(
      * streamed into [dest]. Bridges before 1.16 answer 404.
      */
     suspend fun chatFile(sessionId: String, path: String, profile: String?, dest: java.io.File) = runInterruptible(Dispatchers.IO) {
-        val req = Request.Builder().url(url("/v1/sessions/${URLEncoder.encode(sessionId, "UTF-8")}/file",
-            mapOf("path" to path, "profile" to profile))).build()
+        download(url("/v1/sessions/${URLEncoder.encode(sessionId, "UTF-8")}/file", mapOf("path" to path, "profile" to profile)), dest)
+    }
+
+    private fun download(u: String, dest: java.io.File) {
+        val req = Request.Builder().url(u).build()
         http.newBuilder().readTimeout(120, TimeUnit.SECONDS).build().newCall(req).execute().use { resp ->
             if (!resp.isSuccessful) throw parseError(resp, resp.body?.string().orEmpty())
             val body = resp.body ?: throw IOException("Empty answer")

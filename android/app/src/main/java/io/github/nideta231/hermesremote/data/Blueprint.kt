@@ -26,8 +26,18 @@ data class BpCard(
     val checklist: List<BpCheck> = emptyList(), val priority: String? = null, val due: String? = null,
     val assignee: String? = null, val node: String? = null, val color: String = "default", val order: Double = 0.0,
     val updated: Double = 0.0,
+    /** Who is actively working on it right now (e.g. "Hermes"), or null. */
+    val agent: String? = null,
+    val comments: List<BpComment> = emptyList(),
 ) {
     val progress get() = checklist.count { it.done } to checklist.size
+    val openAsks get() = comments.filter { it.needsYou }
+}
+
+/** A note on a card. `question`/`review` wait for the user until resolved (the card is highlighted). */
+data class BpComment(val id: String, val at: Double, val by: String, val kind: String, val text: String,
+                     val resolved: Boolean = false, val files: List<String> = emptyList()) {
+    val needsYou get() = (kind == "question" || kind == "review") && !resolved
 }
 
 data class BpLog(val at: Double, val by: String, val text: String)
@@ -35,7 +45,10 @@ data class BpLog(val at: Double, val by: String, val text: String)
 data class Blueprint(
     val projectId: String, val name: String, val path: String?, val version: Int, val control: String,
     val nodes: List<BpNode>, val edges: List<BpEdge>, val columns: List<BpColumn>, val cards: List<BpCard>, val log: List<BpLog>,
+    /** The user's standing rules for any agent on this project (sent with every ask). */
+    val instructions: String = "",
 ) {
+    val needsYou get() = cards.filter { it.openAsks.isNotEmpty() }
     val hermesControl get() = control == "hermes"
     fun cardsIn(column: String) = cards.filter { it.column == column }.sortedBy { it.order }
     val tags get() = cards.flatMap { it.tags }.distinct().sorted()
@@ -58,9 +71,14 @@ data class Blueprint(
                     BpCard(it.optString("id"), it.optString("column"), it.optString("title"), it.optString("body"),
                         it.optJSONArray("tags").strings(), it.optJSONArray("checklist").objects().map { c -> BpCheck(c.optString("text"), c.optBoolean("done")) },
                         it.str("priority"), it.str("due"), it.str("assignee"), it.str("node"), it.optString("color", "default"),
-                        it.optDouble("order", 0.0), it.optDouble("updated", 0.0))
+                        it.optDouble("order", 0.0), it.optDouble("updated", 0.0), it.str("agent"),
+                        it.optJSONArray("comments").objects().map { m ->
+                            BpComment(m.optString("id"), m.optDouble("at", 0.0), m.optString("by"), m.optString("kind", "comment"),
+                                m.optString("text"), m.optBoolean("resolved"), m.optJSONArray("files").strings())
+                        })
                 },
                 o.optJSONArray("log").objects().map { BpLog(it.optDouble("at", 0.0), it.optString("by"), it.optString("text")) },
+                o.optString("instructions"),
             )
         }
     }
@@ -100,7 +118,8 @@ object BpOp {
     }
 }
 
-data class BlueprintSummary(val projectId: String, val name: String, val cards: Int, val nodes: Int, val control: String)
+data class BlueprintSummary(val projectId: String, val name: String, val cards: Int, val nodes: Int, val control: String,
+                            val needsYou: Int = 0, val working: Int = 0)
 data class BlueprintTrash(val id: String, val name: String, val removedAt: Double, val cards: Int)
 
 data class BlueprintState(
@@ -123,6 +142,7 @@ class BlueprintRepo(
     private val client: () -> BridgeClient?,
     private val describe: (Throwable) -> String,
     private val say: (String) -> Unit,
+    private val cacheDir: () -> java.io.File = { java.io.File(System.getProperty("java.io.tmpdir") ?: ".") },
 ) {
     private val _state = MutableStateFlow(BlueprintState())
     val state: StateFlow<BlueprintState> = _state.asStateFlow()
@@ -140,7 +160,8 @@ class BlueprintRepo(
                 _state.update { st ->
                     st.copy(have = o.optJSONArray("blueprints").objects().associate { b ->
                         val p = b.optJSONObject("project") ?: JSONObject()
-                        p.optString("id") to BlueprintSummary(p.optString("id"), p.optString("name"), b.optInt("cards"), b.optInt("nodes"), b.optString("control"))
+                        p.optString("id") to BlueprintSummary(p.optString("id"), p.optString("name"), b.optInt("cards"), b.optInt("nodes"), b.optString("control"),
+                            b.optInt("needs_you"), b.optInt("working"))
                     }, trash = o.optJSONArray("trash").objects().map {
                         BlueprintTrash(it.optString("id"), it.optJSONObject("project")?.optString("name") ?: it.optString("id"), it.optDouble("removed_at", 0.0), it.optInt("cards"))
                     }, unsupported = false)
@@ -229,6 +250,22 @@ class BlueprintRepo(
             } finally { inFlight = (inFlight - 1).coerceAtLeast(0) }
             if (failed) load(bp.projectId)  // put back what the bridge really has
         }
+    }
+
+    /** A file a card comment attaches, downloaded into the app's cache (reused when already there). */
+    suspend fun file(path: String): java.io.File {
+        val c = client() ?: throw java.io.IOException("Not connected to the PC")
+        val pid = _state.value.open?.projectId ?: throw java.io.IOException("No blueprint open")
+        val name = fileName(path).replace(Regex("[\\\\/:*?\"<>|\\u0000-\\u001f]"), "_").ifBlank { "file" }
+        val f = java.io.File(cacheDir(), "chat-files/bp-${(pid + path).hashCode().toUInt()}/$name")
+        if (!f.isFile) c.blueprintFile(pid, path, f)
+        return f
+    }
+
+    suspend fun fileInfo(path: String): FileInfo {
+        val c = client() ?: throw java.io.IOException("Not connected to the PC")
+        val pid = _state.value.open?.projectId ?: throw java.io.IOException("No blueprint open")
+        return parseFileInfo(c.blueprintFileInfo(pid, path), path)
     }
 
     companion object { const val POLL_MS = 3_000L }

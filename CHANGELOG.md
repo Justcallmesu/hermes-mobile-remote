@@ -23,6 +23,18 @@ request number.
   shows the name, the full path on the PC (tap to copy), the size, the type and when it was last
   changed, without downloading it. Pictures still being sent show their size on the phone.
   Needs the updated bridge for size, type and date; older bridges show the name and path.
+- **Blueprint: who is working on what**: a card an agent is on shows "Hermes is working on this"
+  with a glowing border; the header counts cards in progress. The badge clears when the card is done.
+- **Blueprint: comments**: every card has a comment thread for you and Hermes. When Hermes asks a
+  question or wants a review, the card gets an amber "Question for you" / "Review needed" mark, the
+  board has a *Waiting for you* filter and the project's blueprint button in the drawer gets a dot.
+  Answer in the thread (that resolves it), or *Mark answered*. Hermes can attach result files to a
+  comment; open or save them from the card, with the *i* button for size and path.
+- **Blueprint: agent instructions**: standing rules per project (for example "never touch LIVE
+  unless I ask", "do every Todo card and report on Telegram"). Set them from the blueprint menu;
+  *Let Hermes take control* asks for them first. Hermes reads them before every task on that project
+  and they are added to every ask you start from the blueprint.
+  Needs the updated bridge.
 
 ## v1.33.0
 
