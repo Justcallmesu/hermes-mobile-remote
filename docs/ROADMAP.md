@@ -32,6 +32,9 @@ Roughly, in the order the pieces landed:
   systemd service. On Linux, `install.sh` adds it to the app menu and starts it at login.
 - Bridge metrics: a Prometheus endpoint (`GET /metrics`, token required) and
   `hermes-remote-bridge metrics` for request counts, Hermes latency and approval wait time.
+- An end-to-end test in CI: the app's real socket and reducer code against the real bridge and the
+  demo backend (`demo/e2e.sh`, job `e2e-demo`). `LiveBridgeTest` still covers a real Hermes on a
+  maintainer machine.
 
 ## Next
 
@@ -41,10 +44,6 @@ Tailscale and report back, because CI has neither. The checklist of what is unpr
 
 **macOS.** The seam exists (`host/macos.py`); the local-network path, a launchd agent and an
 installer are missing. Loopback and Tailscale would already work. Needs a Mac to develop on.
-
-**A real end-to-end test in CI.** The live test exists (`android/.../LiveBridgeTest.kt`) but
-needs a real Hermes, so it only runs on a maintainer machine. Wiring it to a CI job with the demo
-backend would let a change to the event contract be verified automatically.
 
 **Approve from the lock screen.** The approval notification opens the app today; answering from
 the notification itself would save a step.

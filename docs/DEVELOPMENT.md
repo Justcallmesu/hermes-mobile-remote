@@ -61,6 +61,23 @@ without API keys or model calls. See [../demo/README.md](../demo/README.md).
 ./demo/run-demo.sh --pair
 ```
 
+## End-to-end test against the demo backend
+
+`demo/e2e.sh` starts the demo backend and the real bridge on loopback (in a fresh temporary
+directory, ports 18765/18766), pairs a throwaway device, runs `DemoBridgeTest` and stops
+everything. No Hermes and no model calls, so CI runs it on every push (job `e2e-demo`). It checks
+the event contract the app depends on: streamed deltas, tool events, an approval asked over the
+socket and answered by id (approved and denied), the stored transcript, the session list, pins and
+the model catalog. A test that is skipped counts as a failure.
+
+```bash
+(cd bridge && uv sync)                         # once
+JAVA_HOME=~/Android/jdk-17 ./demo/e2e.sh       # --keep leaves the stack running
+```
+
+When you change what Hermes sends or how the app reads it, update `demo/mock_hermes.py` to match
+real Hermes first, then this test.
+
 ## Live end-to-end tests
 
 These need a real Hermes and spend a few model calls. Pair a throwaway device first and revoke it
