@@ -17,6 +17,7 @@ import logging
 import os
 import re
 import secrets
+import shutil
 import subprocess
 import time
 from dataclasses import dataclass
@@ -99,6 +100,33 @@ def _pid_alive_windows(pid: int) -> bool:
         return code.value == still_active
     finally:
         kernel32.CloseHandle(handle)
+
+
+def own_scope_argv(argv: list[str]) -> list[str] | None:
+    """Wrap ``hermes serve`` so it runs in its own systemd scope, outside the bridge's cgroup.
+
+    Under systemd, stopping or restarting the bridge service kills every process in its cgroup,
+    new session or not, so a Hermes the bridge started (and every chat it is running) died with
+    each bridge restart. The bridge is only a tunnel: Hermes must outlive it. ``systemd-run
+    --scope`` execs the command itself (same pid, same environment) in a transient scope unit.
+    None when not running under systemd (plain shell, Windows, no systemd-run).
+    """
+    if os.name == "nt" or not os.environ.get("INVOCATION_ID") or not shutil.which("systemd-run"):
+        return None
+    unit = f"hermes-remote-serve-{secrets.token_hex(4)}"
+    return ["systemd-run", "--user", "--scope", "--quiet", "--collect", f"--unit={unit}",
+            "--description=Hermes backend started by Hermes Remote", *argv]
+
+
+async def _exited_within(proc: subprocess.Popen, seconds: float) -> bool:
+    """True when [proc] ended with a non-zero code within [seconds] (systemd-run refused)."""
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline:
+        code = proc.poll()
+        if code is not None:
+            return code != 0
+        await asyncio.sleep(0.05)
+    return False
 
 
 class BackendLocator:
@@ -189,9 +217,15 @@ class BackendLocator:
             kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW  # type: ignore[attr-defined]
         else:
             kwargs["start_new_session"] = True  # outlives a bridge restart; Hermes' idle exit reaps it
+        cwd = str(self.hermes_root if self.hermes_root.is_dir() else self.hermes_home)
+        scoped = own_scope_argv(argv)
         try:
-            proc = subprocess.Popen(
-                argv, cwd=str(self.hermes_root if self.hermes_root.is_dir() else self.hermes_home), env=env, stdin=subprocess.DEVNULL, stdout=out, stderr=out, **kwargs)
+            proc = subprocess.Popen(scoped or argv, cwd=cwd, env=env, stdin=subprocess.DEVNULL, stdout=out, stderr=out, **kwargs)
+            if scoped and await _exited_within(proc, 1.0):
+                # No user systemd to talk to: run it as a plain child (a bridge restart then ends it).
+                log.warning("systemd-run --scope failed (code %s); starting hermes serve in the bridge's cgroup",
+                            proc.returncode)
+                proc = subprocess.Popen(argv, cwd=cwd, env=env, stdin=subprocess.DEVNULL, stdout=out, stderr=out, **kwargs)
         finally:
             out.close()
         log.info("started hermes serve (pid %d)", proc.pid)
