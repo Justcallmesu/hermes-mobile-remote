@@ -319,8 +319,7 @@ def _render_unit() -> None:
     template = BRIDGE_DIR / "systemd" / UNIT
     if not unit.exists() or unit.is_symlink() or not template.exists():
         return
-    venv = BRIDGE_DIR / ".venv"
-    text = template.read_text().replace("@BIN@", str(venv / "bin/hermes-remote-bridge")).replace("@REPO@", str(REPO))
+    text = template.read_text().replace("@BIN@", str(BRIDGE_DIR / ".venv/bin/hermes-remote-bridge")).replace("@REPO@", str(REPO))
     if unit.read_text() != text:
         unit.write_text(text)
         _systemctl("daemon-reload")
@@ -382,16 +381,6 @@ def _ensure_running(log) -> None:
         _systemctl("start", UNIT)
 
 
-def _run(argv: list[str], **kw) -> subprocess.CompletedProcess:
-    return subprocess.run(argv, **kw)
-
-
-def _sync_app(uv: str) -> subprocess.CompletedProcess:
-    """Install the bridge copy's locked dependencies into the app's existing venv."""
-    return _run([uv, "sync", "--frozen", "--no-dev"], cwd=BRIDGE_DIR, capture_output=True, text=True, timeout=600,
-                stdin=subprocess.DEVNULL, env={**os.environ, "UV_PROJECT_ENVIRONMENT": str(REPO / "venv")})
-
-
 def _swap_back(backup: Path) -> None:
     shutil.rmtree(BRIDGE_DIR, ignore_errors=True)
     backup.rename(BRIDGE_DIR)
@@ -424,31 +413,33 @@ def _apply_archive(log) -> str:
         _write_status(state="running", step="checkout", to=target)
         shutil.rmtree(backup, ignore_errors=True)
         BRIDGE_DIR.rename(backup)
-        new.rename(BRIDGE_DIR)
-        log("Installing dependencies (uv sync)…")
-        _write_status(state="running", step="sync", to=target)
-        s = _sync_app(uv)
-        if s.returncode != 0:
+        try:
+            new.rename(BRIDGE_DIR)
+            log("Installing dependencies (uv sync)…")
+            _write_status(state="running", step="sync", to=target)
+            s = _sync(uv, "--frozen", env={"UV_PROJECT_ENVIRONMENT": str(REPO / "venv")})
+            if s.returncode != 0:
+                raise RuntimeError(f"uv sync failed: {s.stderr.strip()[-300:]}")
+            _render_unit()
+            install_skills(log)
+            moved = keep_hermes_alive()
+            log("Restarting the bridge…")
+            _write_status(state="running", step="restart", to=target)
+            _systemctl("reset-failed", UNIT)
+            _systemctl("restart", UNIT)
+            _write_status(state="running", step="verify", to=target)
+            if not bridge_healthy():
+                raise RuntimeError(f"{target} did not start")
+        except Exception as exc:
+            log("Rolling back to the previous version…")
             _swap_back(backup)
-            _sync_app(uv)
-            raise RuntimeError(f"uv sync failed, rolled back: {s.stderr.strip()[-300:]}")
-        _render_unit()
-        install_skills(log)
-        moved = keep_hermes_alive()
-        log("Restarting the bridge…")
-        _write_status(state="running", step="restart", to=target)
-        _systemctl("reset-failed", UNIT)
-        _systemctl("restart", UNIT)
-        _write_status(state="running", step="verify", to=target)
-        if not bridge_healthy():
-            _swap_back(backup)
-            _sync_app(uv)
+            _sync(uv, "--frozen", env={"UV_PROJECT_ENVIRONMENT": str(REPO / "venv")})
             _render_unit()
             keep_hermes_alive()
             _systemctl("reset-failed", UNIT)
             _systemctl("restart", UNIT)
             ok = bridge_healthy()
-            raise RuntimeError(f"{target} did not start; rolled back to {old_tag}" + ("" if ok else " (check `journalctl --user -u hermes-remote-bridge`)"))
+            raise RuntimeError(f"{exc}; rolled back to {old_tag}" + ("" if ok else " (check `journalctl --user -u hermes-remote-bridge`)")) from exc
         _version_file().write_text(target + "\n")
         _write_status(state="done", to=target, moved=moved)
         log(f"Updated to {target}. Paired devices are unchanged; phones reconnect on their own.")
@@ -457,16 +448,20 @@ def _apply_archive(log) -> str:
         _ensure_running(log)
 
 
-def _sync(uv: str) -> subprocess.CompletedProcess:
-    return subprocess.run([uv, "sync", "--quiet", "--no-dev", "--inexact"], cwd=BRIDGE_DIR, capture_output=True, text=True,
-                          timeout=600, stdin=subprocess.DEVNULL)
+_GIT_SYNC = ("--quiet", "--inexact")
+
+
+def _sync(uv: str, *flags: str, env: dict | None = None) -> subprocess.CompletedProcess:
+    """`uv sync` in the bridge directory; [flags] and [env] differ per kind of install."""
+    return subprocess.run([uv, "sync", "--no-dev", *flags], cwd=BRIDGE_DIR, capture_output=True, text=True, timeout=600,
+                          stdin=subprocess.DEVNULL, env={**os.environ, **env} if env else None)
 
 
 def _rollback(old: str, uv: str | None, log) -> None:
     log("Rolling back to the previous version…")
     _git("reset", "--keep", old)
     if uv:
-        _sync(uv)
+        _sync(uv, *_GIT_SYNC)
     _render_unit()
 
 
@@ -529,7 +524,7 @@ def apply(remote: str = "origin", log=print) -> str:
             raise RuntimeError(f"Could not move to {target}: {step.stderr.strip() or step.stdout.strip()}")
         log("Installing dependencies (uv sync)…")
         _write_status(state="running", step="sync", to=target)
-        s = _sync(uv)
+        s = _sync(uv, *_GIT_SYNC)
         if s.returncode != 0:
             _rollback(old, uv, log)
             raise RuntimeError(f"uv sync failed, rolled back: {s.stderr.strip()[-300:]}")

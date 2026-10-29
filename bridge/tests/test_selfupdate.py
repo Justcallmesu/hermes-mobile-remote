@@ -106,7 +106,7 @@ def _stub_apply(monkeypatch, archive, sync_rc=(0,), healthy=(True, True)):
     monkeypatch.setattr(selfupdate, "_api_tags", lambda: ["v1.1.0", "v1.2.0"])
     monkeypatch.setattr(selfupdate, "_fetch_archive", lambda tag: archive)
     monkeypatch.setattr(selfupdate, "_uv", lambda: "/uv")
-    monkeypatch.setattr(selfupdate, "_run", lambda argv, **kw: syncs.append((argv, kw, (selfupdate.BRIDGE_DIR / "new.txt").exists()))
+    monkeypatch.setattr(selfupdate.subprocess, "run", lambda argv, **kw: syncs.append((argv, kw, (selfupdate.BRIDGE_DIR / "new.txt").exists()))
                         or subprocess.CompletedProcess(argv, sync_rcs.pop(0) if sync_rcs else 0, "", "boom"))
     for name in ("_render_unit", "install_skills"):
         monkeypatch.setattr(selfupdate, name, lambda *a, **k: None)
@@ -151,6 +151,35 @@ def test_app_install_failure_restores_old_dir_and_resyncs(app_install, monkeypat
     bridge = app_install / "bridge"
     assert (bridge / "old.txt").exists() and not (bridge / "new.txt").exists()
     assert len(syncs) == 2 and not syncs[1][2]
+    assert selfupdate._installed_tag() is None
+
+
+def test_app_install_error_after_the_swap_restores_old_dir_and_resyncs(app_install, monkeypatch):
+    syncs = _stub_apply(monkeypatch, _archive(app_install, GOOD))
+
+    def boom(log=print):
+        raise OSError("skills broke")
+    monkeypatch.setattr(selfupdate, "install_skills", boom)
+    with pytest.raises(RuntimeError, match="skills broke"):
+        selfupdate.apply(log=lambda m: None)
+    bridge = app_install / "bridge"
+    assert (bridge / "old.txt").exists() and not (bridge / "new.txt").exists()
+    assert len(syncs) == 2 and not syncs[1][2]
+    assert selfupdate._installed_tag() is None
+
+
+def test_app_install_failed_second_rename_leaves_old_dir_in_place(app_install, monkeypatch):
+    syncs = _stub_apply(monkeypatch, _archive(app_install, GOOD))
+    real = selfupdate.Path.rename
+
+    def rename(self, target):
+        if self.name == "bridge.new":
+            raise OSError("rename failed")
+        return real(self, target)
+    monkeypatch.setattr(selfupdate.Path, "rename", rename)
+    with pytest.raises(RuntimeError, match="rename failed"):
+        selfupdate.apply(log=lambda m: None)
+    assert (app_install / "bridge" / "old.txt").exists() and not (app_install / "bridge" / "new.txt").exists()
     assert selfupdate._installed_tag() is None
 
 
