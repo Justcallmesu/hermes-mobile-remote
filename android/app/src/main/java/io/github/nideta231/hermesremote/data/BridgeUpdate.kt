@@ -52,6 +52,8 @@ class BridgeUpdater(
     private val client: () -> BridgeClient?,
     private val describe: (Throwable) -> String,
     private val say: (String) -> Unit,
+    /** The bridge is back (updated or rolled back): reconnect the live socket now and reload what it serves. */
+    private val onBridgeBack: () -> Unit = {},
 ) {
     private val _state = MutableStateFlow(BridgeUpdateState())
     val state: StateFlow<BridgeUpdateState> = _state.asStateFlow()
@@ -88,18 +90,30 @@ class BridgeUpdater(
             say("Updating the bridge. It restarts in a minute; your pairing stays.")
             poll?.cancel()
             poll = scope.launch {
-                repeat(60) {
-                    delay(5_000)
-                    val now = runCatching { BridgeUpdateState.parse((client() ?: return@repeat).bridgeUpdateCheck(true)) }.getOrNull()
-                        ?: return@repeat  // the bridge is restarting
-                    if (!now.updating && (now.current != from || now.failed)) {
+                var sawDown = false
+                // Up to ~6 minutes: fetch + uv sync + restart + health check, with a rollback on failure.
+                repeat(90) {
+                    delay(4_000)
+                    val c2 = client() ?: return@repeat
+                    val now = try { BridgeUpdateState.parse(c2.bridgeUpdateCheck(true)) }
+                        catch (t: Throwable) { if (t is CancellationException) throw t; sawDown = true; null }
+                        ?: return@repeat  // restarting: keep asking, the bridge comes back on its own
+                    if (sawDown) onBridgeBack()  // the restart dropped the socket: bring it straight back
+                    sawDown = false
+                    if (!now.updating) {
                         _state.value = now
-                        say(if (now.failed) now.message ?: "Bridge update failed" else "Bridge updated to ${now.current}")
+                        onBridgeBack()
+                        say(when {
+                            now.failed -> now.message ?: "Bridge update failed; the bridge kept running."
+                            now.current != from -> "Bridge updated to ${now.current}"
+                            else -> "Bridge is running ${now.current ?: ""}".trim()
+                        })
                         return@launch
                     }
                     _state.update { now.copy(updating = true) }
                 }
-                _state.update { it.copy(updating = false) }
+                _state.update { it.copy(updating = false, message = "No answer from the update; the bridge may still be finishing.") }
+                onBridgeBack()
             }
         }
     }

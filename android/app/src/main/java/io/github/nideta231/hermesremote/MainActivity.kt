@@ -377,6 +377,7 @@ class MainActivity : ComponentActivity() {
             openVault = { go(Page.VAULT) },
             openGraph = { go(Page.GRAPH) },
             openNotes = if ("notes" in features) ({ go(Page.NOTES) }) else null,
+            bridgeUpdate = if ("bridge_update" in features) BridgeUpdateActions(bridgeUpdateState, vm.bridgeUpdate::check, vm.bridgeUpdate::start) else null,
             openPc = if (hasMonitor) ({ go(Page.PC) }) else null,
             openTerminal = if (hasTerminal) ({ go(Page.TERMINAL) }) else null,
             repairPc = vm::startRepair,

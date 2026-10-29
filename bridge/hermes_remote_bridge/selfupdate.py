@@ -110,14 +110,23 @@ def log_file() -> Path:
 
 def read_status() -> dict | None:
     try:
-        return json.loads(status_file().read_text())
+        st = json.loads(status_file().read_text())
     except (OSError, ValueError):
         return None
+    # The update unit died without writing an outcome (killed, PC rebooted): don't spin forever.
+    if st.get("state") == "running" and time.time() - st.get("at", 0) > 20:
+        unit = st.get("unit")
+        gone = unit and subprocess.run(["systemctl", "--user", "is-active", "--quiet", unit], capture_output=True,
+                                       timeout=10).returncode != 0
+        if gone or time.time() - st.get("at", 0) > 900:
+            st = {**st, "state": "failed", "error": "The update stopped before finishing; the bridge kept running."}
+    return st
 
 
 def _write_status(**fields) -> None:
     status_file().parent.mkdir(parents=True, exist_ok=True)
-    status_file().write_text(json.dumps({**fields, "at": time.time()}))
+    unit = os.environ.get("HERMES_REMOTE_UPDATE_UNIT") or fields.pop("unit", None)
+    status_file().write_text(json.dumps({**fields, **({"unit": unit} if unit else {}), "at": time.time()}))
 
 
 # ------------------------------------------------------------------ launch
@@ -133,8 +142,10 @@ def launch_argv(python: str = sys.executable) -> list[str]:
     """The transient unit that runs [apply]: its own cgroup, so the bridge restart can't end it."""
     path = os.pathsep.join(dict.fromkeys([str(Path.home() / ".local/bin"), str(Path.home() / ".cargo/bin"),
                                           *os.environ.get("PATH", "/usr/bin:/bin").split(os.pathsep)]))
-    return ["systemd-run", "--user", "--quiet", "--collect", f"--unit=hermes-remote-update-{secrets.token_hex(3)}",
+    unit = f"hermes-remote-update-{secrets.token_hex(3)}"
+    return ["systemd-run", "--user", "--quiet", "--collect", f"--unit={unit}",
             "--description=Hermes Remote bridge update", f"--working-directory={REPO}", "-E", f"PATH={path}",
+            "-E", f"HERMES_REMOTE_UPDATE_UNIT={unit}.service",
             python, "-m", "hermes_remote_bridge.cli", "update", "--apply"]
 
 
@@ -145,8 +156,10 @@ def launch() -> None:
     st = read_status()
     if st and st.get("state") == "running" and time.time() - st.get("at", 0) < 600:
         raise RuntimeError("An update is already running.")
-    _write_status(state="running", step="starting")
-    r = subprocess.run(launch_argv(), capture_output=True, text=True, timeout=20, stdin=subprocess.DEVNULL)
+    argv = launch_argv()
+    unit = next(a.split("=", 1)[1] for a in argv if a.startswith("--unit=")) + ".service"
+    _write_status(state="running", step="starting", unit=unit)
+    r = subprocess.run(argv, capture_output=True, text=True, timeout=20, stdin=subprocess.DEVNULL)
     if r.returncode != 0:
         _write_status(state="failed", error=(r.stderr or "systemd-run failed").strip()[-300:])
         raise RuntimeError((r.stderr or "systemd-run failed").strip())
@@ -205,50 +218,132 @@ def _render_unit() -> None:
         _systemctl("daemon-reload")
 
 
+def _restarts() -> int:
+    try:
+        return int(_systemctl("show", "-p", "NRestarts", "--value", UNIT).stdout.strip() or 0)
+    except ValueError:
+        return 0
+
+
+def _health_url() -> str | None:
+    """The bridge's loopback /healthz, when it listens on loopback (the default)."""
+    try:
+        from .config import Config
+        cfg = Config.load()
+    except Exception:  # noqa: BLE001 - a broken config is exactly what the health check must catch
+        return None
+    host = next((h for h in cfg.listen if h in ("127.0.0.1", "::1", "localhost")), None)
+    if not host:
+        return None
+    return f"http://{'[::1]' if host == '::1' else host}:{cfg.port}/healthz"
+
+
+def bridge_healthy(timeout: float = 45.0, settle: float = 6.0) -> bool:
+    """True once the restarted bridge answers /healthz (or, without loopback, stays up without
+    restarting for [settle] s). A bridge that crash-loops on the new code is unhealthy."""
+    import urllib.request
+
+    url = _health_url()
+    start_restarts = _restarts()
+    deadline = time.monotonic() + timeout
+    up_since = None
+    while time.monotonic() < deadline:
+        active = _systemctl("is-active", "--quiet", UNIT).returncode == 0
+        if active and url:
+            try:
+                with urllib.request.urlopen(url, timeout=3) as r:
+                    if r.status == 200 and _restarts() == start_restarts:
+                        return True
+            except OSError:
+                pass
+        elif active:
+            up_since = up_since or time.monotonic()
+            if time.monotonic() - up_since >= settle and _restarts() == start_restarts:
+                return True
+        else:
+            up_since = None
+        time.sleep(1.5)
+    return False
+
+
+def _ensure_running(log) -> None:
+    """Whatever happened, leave the bridge running: phones can only reconnect to a running bridge."""
+    if _systemctl("is-active", "--quiet", UNIT).returncode != 0:
+        log("The bridge was not running; starting it.")
+        _systemctl("reset-failed", UNIT)
+        _systemctl("start", UNIT)
+
+
+def _sync(uv: str) -> subprocess.CompletedProcess:
+    return subprocess.run([uv, "sync", "--quiet", "--no-dev", "--inexact"], cwd=BRIDGE_DIR, capture_output=True, text=True,
+                          timeout=600, stdin=subprocess.DEVNULL)
+
+
+def _rollback(old: str, uv: str | None, log) -> None:
+    log("Rolling back to the previous version…")
+    _git("reset", "--keep", old)
+    if uv:
+        _sync(uv)
+    _render_unit()
+
+
 def apply(remote: str = "origin", log=print) -> str:
-    """Fetch, move to the newest release, sync the venv, restart the bridge. Returns the new tag."""
+    """Fetch, move to the newest release, sync the venv, restart the bridge and check it answers.
+
+    Every path ends with a running bridge: a failure before the restart changes nothing (or is
+    rolled back), and a new version that doesn't come up healthy is rolled back and restarted.
+    """
     reason = why_not(remote)
     if reason:
         raise RuntimeError(reason)
     old = _git("rev-parse", "HEAD").stdout.strip()
-    log(f"Fetching {remote}…")
-    _write_status(state="running", step="fetching")
-    f = _git("fetch", "--tags", "--force", remote, timeout=180)
-    if f.returncode != 0:
-        raise RuntimeError(f"git fetch failed: {f.stderr.strip()}")
-    tags = _git("tag", "--list", "v*.*.*").stdout.split()
-    target = latest_tag(tags)
-    if not target:
-        raise RuntimeError("No release tags found.")
-    branch = _git("rev-parse", "--abbrev-ref", "HEAD").stdout.strip()
-    log(f"Moving to {target}…")
-    _write_status(state="running", step="checkout", to=target)
-    step = _git("checkout", "--quiet", target) if branch == "HEAD" else _git("merge", "--ff-only", "--quiet", target)
-    if step.returncode != 0:
-        raise RuntimeError(f"Could not move to {target}: {step.stderr.strip() or step.stdout.strip()}")
+    old_tag = _git("describe", "--tags", "--abbrev=0", "--match", "v*.*.*").stdout.strip() or old[:7]
     uv = _uv()
-    if not uv:
-        _git("reset", "--keep", old)
-        raise RuntimeError("uv not found; nothing changed.")
-    log("Installing dependencies (uv sync)…")
-    _write_status(state="running", step="sync", to=target)
-    s = subprocess.run([uv, "sync", "--quiet", "--no-dev", "--inexact"], cwd=BRIDGE_DIR, capture_output=True, text=True,
-                       timeout=600, stdin=subprocess.DEVNULL)
-    if s.returncode != 0:
-        _git("reset", "--keep", old)
-        subprocess.run([uv, "sync", "--quiet", "--no-dev", "--inexact"], cwd=BRIDGE_DIR, capture_output=True, timeout=600)
-        raise RuntimeError(f"uv sync failed, rolled back: {s.stderr.strip()[-300:]}")
-    _render_unit()
-    moved = keep_hermes_alive()
-    if moved:
-        log(f"Kept {moved} Hermes process(es) running outside the bridge.")
-    if _systemctl("is-active", "--quiet", UNIT).returncode == 0:
+    try:
+        log(f"Fetching {remote}…")
+        _write_status(state="running", step="fetching")
+        f = _git("fetch", "--tags", "--force", remote, timeout=180)
+        if f.returncode != 0:
+            raise RuntimeError(f"git fetch failed: {f.stderr.strip()}")
+        target = latest_tag(_git("tag", "--list", "v*.*.*").stdout.split())
+        if not target:
+            raise RuntimeError("No release tags found.")
+        if not uv:
+            raise RuntimeError("uv not found; nothing changed.")
+        branch = _git("rev-parse", "--abbrev-ref", "HEAD").stdout.strip()
+        log(f"Moving to {target}…")
+        _write_status(state="running", step="checkout", to=target)
+        step = _git("checkout", "--quiet", target) if branch == "HEAD" else _git("merge", "--ff-only", "--quiet", target)
+        if step.returncode != 0:
+            raise RuntimeError(f"Could not move to {target}: {step.stderr.strip() or step.stdout.strip()}")
+        log("Installing dependencies (uv sync)…")
+        _write_status(state="running", step="sync", to=target)
+        s = _sync(uv)
+        if s.returncode != 0:
+            _rollback(old, uv, log)
+            raise RuntimeError(f"uv sync failed, rolled back: {s.stderr.strip()[-300:]}")
+        _render_unit()
+        moved = keep_hermes_alive()
+        if moved:
+            log(f"Kept {moved} Hermes process(es) running outside the bridge.")
         log("Restarting the bridge…")
         _write_status(state="running", step="restart", to=target)
+        _systemctl("reset-failed", UNIT)
         _systemctl("restart", UNIT)
-    _write_status(state="done", to=target, moved=moved)
-    log(f"Updated to {target}. Paired devices are unchanged; phones reconnect on their own.")
-    return target
+        log("Checking the new bridge answers…")
+        _write_status(state="running", step="verify", to=target)
+        if not bridge_healthy():
+            _rollback(old, uv, log)
+            keep_hermes_alive()
+            _systemctl("reset-failed", UNIT)
+            _systemctl("restart", UNIT)
+            ok = bridge_healthy()
+            raise RuntimeError(f"{target} did not start; rolled back to {old_tag}" + ("" if ok else " (check `journalctl --user -u hermes-remote-bridge`)"))
+        _write_status(state="done", to=target, moved=moved)
+        log(f"Updated to {target}. Paired devices are unchanged; phones reconnect on their own.")
+        return target
+    finally:
+        _ensure_running(log)
 
 
 def run_apply() -> int:

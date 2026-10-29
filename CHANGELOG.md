@@ -17,6 +17,18 @@ request number.
   subagents (#12), share to Hermes (#15), message search (#16), subagent output and steer (#17)
   and bridge metrics (#18).
 
+## v1.31.0
+
+- Update the PC bridge from the drawer: when a newer bridge is out, the three-dot menu gets a dot and
+  *Update PC bridge to vX.Y.Z* (Settings > Hermes on your PC has the same button). The app checks on
+  every connect.
+- The connection comes back in every case. The PC now checks the new bridge answers after the
+  restart; if it doesn't start, it rolls back to the previous version and restarts that. If the
+  bridge was stopped, it is started again; an update that dies halfway is reported as failed instead
+  of spinning. On the phone, the live connection reconnects the moment the bridge is back (no
+  waiting on retry timers) and the chat list, settings and scheduled jobs reload. Needs the updated
+  bridge (this update itself can be installed from the phone).
+
 ## v1.30.0
 
 - Notes, like Google Keep, for braindumps and planning (drawer > three-dot menu > Notes). A grid of

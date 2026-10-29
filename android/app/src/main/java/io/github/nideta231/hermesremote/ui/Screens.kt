@@ -128,12 +128,23 @@ import java.util.Date
 @Composable
 private fun DrawerMoreMenu(actions: SessionActions) {
     var open by remember { mutableStateOf(false) }
+    var confirm by remember { mutableStateOf(false) }
+    val upd = actions.bridgeUpdate
+    val offer = upd != null && upd.state.available && upd.state.canUpdate && !upd.state.updating
+    if (confirm && upd != null) BridgeUpdateConfirm(upd, onDismiss = { confirm = false })
     Box {
-        IconButton(modifier = Modifier.size(40.dp), onClick = { open = true }) { Icon(Glyphs.More, "More", modifier = Modifier.size(20.dp)) }
+        IconButton(modifier = Modifier.size(40.dp), onClick = { open = true }) {
+            Box {
+                Icon(Glyphs.More, "More", modifier = Modifier.size(20.dp))
+                if (offer) Box(Modifier.align(Alignment.TopEnd).size(7.dp).background(Gold, CircleShape))
+            }
+        }
         androidx.compose.material3.DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
             @Composable fun item(label: String, icon: androidx.compose.ui.graphics.vector.ImageVector, onClick: () -> Unit) =
                 androidx.compose.material3.DropdownMenuItem(text = { Text(label) },
                     leadingIcon = { Icon(icon, null, Modifier.size(18.dp)) }, onClick = { open = false; onClick() })
+            if (offer) item("Update PC bridge to ${upd!!.state.latest}", Glyphs.Download) { confirm = true }
+            if (upd != null && upd.state.updating) item(upd.state.message ?: "Updating PC bridge…", Glyphs.Refresh) {}
             actions.openNotes?.let { item("Notes", Glyphs.Doc, it) }
             actions.openPc?.let { item("PC monitor", Glyphs.Chip, it) }
             actions.openTerminal?.let { item("Terminal", Glyphs.Terminal, it) }
@@ -165,6 +176,8 @@ class SessionActions(
     val openGraph: () -> Unit = {},
     /** Keep-style notes Hermes can read and edit; null when the bridge has none. */
     val openNotes: (() -> Unit)? = null,
+    /** The PC bridge's self-update, offered in the menu when a newer release is out. */
+    val bridgeUpdate: BridgeUpdateActions? = null,
     /** The PC page (stats, processes, Claude usage) and the terminal; null hides the button
      *  (the bridge doesn't serve it). */
     val openPc: (() -> Unit)? = null,
@@ -922,12 +935,19 @@ private fun BridgeUpdatePanel(a: BridgeUpdateActions) {
             }
         }
     }
-    if (confirm) androidx.compose.material3.AlertDialog(onDismissRequest = { confirm = false },
-        title = { Text("Update the bridge to ${s.latest}?") },
-        text = { Text("The PC downloads it and restarts the bridge, which takes about a minute. Paired phones keep " +
-            "their pairing and reconnect on their own; Hermes and running chats keep going.") },
-        confirmButton = { TextButton(onClick = { confirm = false; a.start() }) { Text("Update") } },
-        dismissButton = { TextButton(onClick = { confirm = false }) { Text("Cancel") } })
+    if (confirm) BridgeUpdateConfirm(a, onDismiss = { confirm = false })
+}
+
+/** Shared yes/no for the bridge update (Settings row and the drawer menu). */
+@Composable
+internal fun BridgeUpdateConfirm(a: BridgeUpdateActions, onDismiss: () -> Unit) {
+    androidx.compose.material3.AlertDialog(onDismissRequest = onDismiss,
+        title = { Text("Update the PC bridge to ${a.state.latest}?") },
+        text = { Text("The PC downloads it and restarts the bridge (about a minute; the connection drops briefly and comes " +
+            "back on its own). If the new version doesn't start, the PC rolls back to ${a.state.current ?: "the current one"} " +
+            "and restarts it. Pairings, Hermes and running chats are kept either way.") },
+        confirmButton = { TextButton(onClick = { onDismiss(); a.start() }) { Text("Update") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } })
 }
 
 class SettingsActions(

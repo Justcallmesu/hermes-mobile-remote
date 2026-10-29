@@ -414,7 +414,19 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
     val notes = io.github.nideta231.hermesremote.data.NotesRepo(viewModelScope, client = { client },
         describe = ::describe, say = { _toast.value = it })
     val bridgeUpdate = io.github.nideta231.hermesremote.data.BridgeUpdater(viewModelScope, client = { client },
-        describe = ::describe, say = { _toast.value = it })
+        describe = ::describe, say = { _toast.value = it }, onBridgeBack = ::bridgeBack)
+
+    /** After a bridge restart: reopen the live socket at once (no backoff wait) and reload everything it serves. */
+    private fun bridgeBack() {
+        val g = gateway
+        if (g == null || client == null) return
+        g.nudge()  // reconnects now if the restart dropped it; an open (new) socket is left alone
+        discoverEndpoints()
+        refreshProfiles()
+        refreshSessions()
+        settings.refresh()
+        cron.refresh()
+    }
     val settings = SystemSettings(viewModelScope, client = { client }, source = { source }, target = ::target,
         describe = ::describe, say = { _toast.value = it },
         onDefaultModel = { option -> _models.update { cat -> cat?.copy(options = cat.options.map { o ->
@@ -763,6 +775,7 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
             val features = me.optJSONArray("features").strings().toSet()
             _features.value = features
             store.bridgeFeatures = features
+            if ("bridge_update" in features) bridgeUpdate.check(false)
             if (me.optInt("protocol", 0) < MIN_BRIDGE_PROTOCOL) {
                 _toast.value = "Your PC runs an older bridge. Update it: run install.sh on the PC."
             }
