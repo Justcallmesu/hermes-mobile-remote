@@ -577,6 +577,8 @@ def cmd_update(cfg: Config, args: argparse.Namespace) -> None:
 
     if getattr(args, "apply", False):
         sys.exit(selfupdate.run_apply())
+    if getattr(args, "restart", False):
+        sys.exit(selfupdate.run_restart())
     info = selfupdate.check()
     if getattr(args, "json", False):
         print(json.dumps(info, indent=2))
@@ -701,6 +703,7 @@ def main(argv: list[str] | None = None) -> None:
     u.add_argument("--yes", action="store_true", help="Don't ask for confirmation")
     u.add_argument("--json", action="store_true", help="Machine-readable check result")
     u.add_argument("--apply", action="store_true", help=argparse.SUPPRESS)
+    u.add_argument("--restart", action="store_true", help=argparse.SUPPRESS)
     m = sub.add_parser("metrics", help="Show what the running bridge has done since it started")
     m.add_argument("--json", action="store_true", help="Every metric as JSON")
     f = sub.add_parser("firewall", help="Allow the bridge port from the local network (asks first)")

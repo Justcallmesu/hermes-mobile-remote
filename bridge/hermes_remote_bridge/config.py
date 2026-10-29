@@ -81,6 +81,8 @@ class Config:
     self_update: bool = True
     # Personal notes (the app's Notes page; Hermes reads and edits the same Markdown files).
     notes: bool = True
+    # PC bridge admin from a paired phone: doctor with fixes, restart, networks, devices, logs.
+    remote_admin: bool = True
     notes_dir: Path = CONFIG_DIR / "notes"
 
     @classmethod

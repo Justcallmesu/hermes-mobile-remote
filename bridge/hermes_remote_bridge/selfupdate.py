@@ -162,7 +162,7 @@ def _uv() -> str | None:
     return None
 
 
-def launch_argv(python: str = sys.executable) -> list[str]:
+def launch_argv(python: str = sys.executable, action: str = "--apply") -> list[str]:
     """The transient unit that runs [apply]: its own cgroup, so the bridge restart can't end it."""
     path = os.pathsep.join(dict.fromkeys([str(Path.home() / ".local/bin"), str(Path.home() / ".cargo/bin"),
                                           *os.environ.get("PATH", "/usr/bin:/bin").split(os.pathsep)]))
@@ -170,7 +170,7 @@ def launch_argv(python: str = sys.executable) -> list[str]:
     return ["systemd-run", "--user", "--quiet", "--collect", f"--unit={unit}",
             "--description=Hermes Remote bridge update", f"--working-directory={REPO}", "-E", f"PATH={path}",
             "-E", f"HERMES_REMOTE_UPDATE_UNIT={unit}.service",
-            python, "-m", "hermes_remote_bridge.cli", "update", "--apply"]
+            python, "-m", "hermes_remote_bridge.cli", "update", action]
 
 
 def launch() -> None:
@@ -391,6 +391,54 @@ def apply(remote: str = "origin", log=print) -> str:
         return target
     finally:
         _ensure_running(log)
+
+
+def restart(log=print) -> None:
+    """Restart the bridge, health-checked; the bridge is left running whatever happens."""
+    try:
+        moved = keep_hermes_alive()
+        if moved:
+            log(f"Kept {moved} Hermes process(es) running outside the bridge.")
+        _write_status(state="running", step="restart", to=RUNNING_TAG or _head()[1])
+        _systemctl("reset-failed", UNIT)
+        _systemctl("restart", UNIT)
+        _write_status(state="running", step="verify")
+        if not bridge_healthy():
+            raise RuntimeError("The bridge did not answer after the restart (check `journalctl --user -u hermes-remote-bridge`)")
+        _write_status(state="done", to=_head()[1], moved=moved, restarted=True)
+        log("Bridge restarted.")
+    finally:
+        _ensure_running(log)
+
+
+def launch_restart() -> None:
+    """Restart from inside the bridge: run it as its own unit, or the restart would kill it halfway."""
+    if os.name == "nt" or not shutil.which("systemd-run"):
+        raise RuntimeError("Restarting from the phone needs systemd on the PC.")
+    st = read_status()
+    if st and st.get("state") == "running" and time.time() - st.get("at", 0) < 120:
+        raise RuntimeError("An update or restart is already running.")
+    argv = launch_argv(action="--restart")
+    unit = next(a.split("=", 1)[1] for a in argv if a.startswith("--unit=")) + ".service"
+    _write_status(state="running", step="starting", unit=unit)
+    r = subprocess.run(argv, capture_output=True, text=True, timeout=20, stdin=subprocess.DEVNULL)
+    if r.returncode != 0:
+        _write_status(state="failed", error=(r.stderr or "systemd-run failed").strip()[-300:])
+        raise RuntimeError((r.stderr or "systemd-run failed").strip())
+
+
+def run_restart() -> int:
+    log_file().parent.mkdir(parents=True, exist_ok=True)
+    with open(log_file(), "a") as fh:
+        def log(msg: str) -> None:
+            fh.write(time.strftime("%Y-%m-%d %H:%M:%S ") + msg + "\n"); fh.flush()
+        try:
+            restart(log=log)
+            return 0
+        except Exception as exc:  # noqa: BLE001
+            log(f"Restart failed: {exc}")
+            _write_status(state="failed", error=str(exc)[:500])
+            return 1
 
 
 def run_apply() -> int:

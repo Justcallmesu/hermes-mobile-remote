@@ -453,7 +453,8 @@ def create_app(cfg: Config, *, locator: BackendLocator | None = None, tailnet: T
                                               ("speedtest", monitor is not None),
                                               ("folders", True),
                                               ("bridge_update", cfg.self_update),
-                                              ("notes", cfg.notes)) if on],
+                                              ("notes", cfg.notes),
+                                              ("admin", cfg.remote_admin)) if on],
                 "bridge_version": __version__, "protocol": PROTOCOL}
 
     note_store = notes_mod.NoteStore(cfg.notes_dir)
@@ -624,6 +625,130 @@ def create_app(cfg: Config, *, locator: BackendLocator | None = None, tailnet: T
         from . import doctor
 
         return {"checks": await asyncio.to_thread(doctor.collect, cfg)}
+
+    # ------------------------------------------------------------ PC bridge admin (from the phone)
+    # What the desktop app and the CLI do, for a paired device: health checks with one-tap fixes,
+    # restart, trusted networks, paired devices, the log. Nothing here can pair a new device or
+    # widen access beyond trusting the network the PC is on now.
+
+    def _admin_on() -> None:
+        if not cfg.remote_admin:
+            raise ApiError(404, "admin_off", "PC bridge admin from the phone is off (remote_admin = false)")
+
+    async def _doctor_doc() -> dict:
+        from . import doctor
+
+        checks = await asyncio.to_thread(doctor.collect, cfg)
+        net = await asyncio.to_thread(current_network)
+        fixes = {"network": "trust" if (cfg.lan and net is not None and net.id not in trust.list()) else None,
+                 "service": "restart", "hermes": "start_hermes" if cfg.start_hermes else None}
+        return {"checks": [{**c, "fix": fixes.get(c["id"]) if c["level"] != "ok" else None} for c in checks],
+                "version": __version__, "running": selfupdate.RUNNING_TAG, "checked_at": time.time()}
+
+    @app.get("/v1/admin/doctor")
+    async def admin_doctor(_: Device = Depends(device_auth)):
+        _admin_on()
+        return await _doctor_doc()
+
+    @app.post("/v1/admin/fix/{fix}")
+    async def admin_fix(fix: str, device: Device = Depends(device_auth)):
+        _admin_on()
+        audit_event({"event": "admin_fix", "device": device.id, "fix": fix})
+        if fix == "trust":
+            net = await asyncio.to_thread(current_network)
+            if net is None:
+                raise ApiError(409, "no_network", "Not on a private network (or the router has not been seen yet)")
+            trust.trust(net)
+        elif fix == "start_hermes":
+            try:
+                await locator.get(start=True)
+            except Exception as exc:  # noqa: BLE001
+                raise ApiError(502, "hermes_start_failed", str(exc))
+        elif fix == "restart":
+            try:
+                await asyncio.to_thread(selfupdate.launch_restart)
+            except RuntimeError as exc:
+                raise ApiError(409, "restart_refused", str(exc))
+            return {"restarting": True}
+        else:
+            raise ApiError(404, "no_such_fix", f"Unknown fix: {fix}")
+        return await _doctor_doc()
+
+    @app.post("/v1/admin/restart")
+    async def admin_restart(device: Device = Depends(device_auth)):
+        _admin_on()
+        audit_event({"event": "admin_restart", "device": device.id})
+        try:
+            await asyncio.to_thread(selfupdate.launch_restart)
+        except RuntimeError as exc:
+            raise ApiError(409, "restart_refused", str(exc))
+        return {"restarting": True}
+
+    @app.get("/v1/admin/trust")
+    async def admin_trust(_: Device = Depends(device_auth)):
+        _admin_on()
+        return trust_doc(trust, await asyncio.to_thread(current_network))
+
+    @app.post("/v1/admin/trust")
+    async def admin_trust_now(device: Device = Depends(device_auth)):
+        _admin_on()
+        net = await asyncio.to_thread(current_network)
+        if net is None:
+            raise ApiError(409, "no_network", "Not on a private network (or the router has not been seen yet)")
+        trust.trust(net)
+        audit_event({"event": "admin_trust", "device": device.id, "network": net.name})
+        return trust_doc(trust, net)
+
+    @app.post("/v1/admin/untrust")
+    async def admin_untrust(body: LocalNetworkId, device: Device = Depends(device_auth)):
+        _admin_on()
+        removed = trust.untrust(body.id)
+        audit_event({"event": "admin_untrust", "device": device.id})
+        return {**trust_doc(trust, await asyncio.to_thread(current_network)), "removed": removed}
+
+    @app.get("/v1/admin/devices")
+    async def admin_devices(device: Device = Depends(device_auth)):
+        _admin_on()
+        doc = await asyncio.to_thread(devices_doc, devices)
+        for d in doc["devices"]:
+            d["this"] = d["id"] == device.id
+        return doc
+
+    @app.post("/v1/admin/revoke")
+    async def admin_revoke(body: LocalName, device: Device = Depends(device_auth)):
+        _admin_on()
+        target = next((d for d in devices.list() if d.name == body.name or d.id == body.name), None)
+        if target is not None and target.id == device.id:
+            raise ApiError(409, "revoke_self", "Use Forget this PC to unpair this phone")
+        try:
+            gone = await asyncio.to_thread(devices.revoke, body.name)
+        except ValueError as exc:
+            raise ApiError(404, "no_such_device", str(exc))
+        audit_event({"event": "admin_revoke", "device": device.id, "revoked": gone.id})
+        return {"revoked": {"id": gone.id, "name": gone.name}}
+
+    @app.get("/v1/admin/logs")
+    async def admin_logs(lines: int = 200, _: Device = Depends(device_auth)):
+        _admin_on()
+        n = max(20, min(lines, 1000))
+
+        def read() -> str:
+            import subprocess as sp
+            try:
+                r = sp.run(["journalctl", "--user", "-u", "hermes-remote-bridge", "-n", str(n), "--no-pager", "-o", "short-iso"],
+                           capture_output=True, text=True, timeout=10)
+                if r.returncode == 0 and r.stdout.strip():
+                    return r.stdout
+            except (OSError, sp.SubprocessError):
+                pass
+            from .config import STATE_DIR
+            for f in (STATE_DIR / "bridge.log", selfupdate.log_file()):
+                try:
+                    return "\n".join(Path(f).read_text(errors="replace").splitlines()[-n:])
+                except OSError:
+                    continue
+            return ""
+        return {"text": await asyncio.to_thread(read)}
 
     # ------------------------------------------------------------ Hermes profiles
     # One `hermes serve` serves every profile. A REST call names the one it means with
