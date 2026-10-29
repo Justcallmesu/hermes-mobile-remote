@@ -148,7 +148,7 @@ def test_comment_files_are_the_only_files_served(tmp_path):
                  blueprints_dir=tmp_path / "bp")
     proj = tmp_path / "shop"
     proj.mkdir()
-    (proj / "result.csv").write_text("a,b\n1,2\n")
+    (proj / "result.csv").write_bytes(b"a,b\n1,2\n")
     (proj / "secret.env").write_text("no")
     store = DeviceStore(cfg.devices_file)
     _, token = store.pair("phone")
