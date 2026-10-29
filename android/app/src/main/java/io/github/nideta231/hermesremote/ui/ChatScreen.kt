@@ -82,7 +82,9 @@ import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import io.github.nideta231.hermesremote.data.LiveLink
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -267,6 +269,7 @@ fun ChatScreen(
     val approval = LiveReducer.openApproval(state.items)
     val clarify = LiveReducer.openClarify(state.items)
     val secret = LiveReducer.openSecret(state.items)
+    val subagentActions = SubagentActions(actions.stopSubagent, actions.followSubagent, actions.steerSubagent, actions.openSubagentSession)
 
     CompositionLocalProvider(LocalImageLoader provides actions.loadImage, LocalFileFetcher provides actions.fetchFile,
         LocalFileInfo provides actions.fileInfo,
@@ -292,10 +295,17 @@ fun ChatScreen(
                 when (body) {
                     0 -> LoadingChat()
                     1 -> EmptyChat(onPick = { actions.draft(it) })
-                    else -> MessageList(state, SubagentActions(actions.stopSubagent, actions.followSubagent, actions.steerSubagent, actions.openSubagentSession),
-                        actions.stopProcess)
+                    else -> MessageList(state, subagentActions)
                 }
             }
+        }
+        // Background work stays pinned above the composer while the chat scrolls.
+        val work by LiveLink.backgroundWork.collectAsState()
+        val strip = backgroundStrip(state, loop = work.contains("${state.runtimeId}:loop"), heartbeat = work.contains("${state.runtimeId}:heartbeat"))
+        AnimatedVisibility(strip != null,
+            enter = slideInVertically(spring(dampingRatio = 0.8f, stiffness = Spring.StiffnessMediumLow)) { it } + fadeIn(),
+            exit = slideOutVertically(tween(180)) { it } + fadeOut(tween(180))) {
+            strip?.let { BackgroundStripBar(it, subagentActions, actions.stopProcess) }
         }
         // Questions slide up from the composer, like a sheet the agent raised.
         AnimatedVisibility(approval != null,
@@ -509,7 +519,7 @@ private fun EmptyChat(onPick: (String) -> Unit) {
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun MessageList(state: ChatState, subagentActions: SubagentActions, stopProcess: (String) -> Unit) {
+private fun MessageList(state: ChatState, subagentActions: SubagentActions) {
     val listState = rememberLazyListState()
     val scope = rememberCoroutineScope()
     var follow by remember { mutableStateOf(true) }
@@ -533,7 +543,7 @@ private fun MessageList(state: ChatState, subagentActions: SubagentActions, stop
         !(last is ChatItem.Tool && last.status == ToolStatus.RUNNING)
 
     val delegateTools = remember(state.items) { state.items.filterIsInstance<ChatItem.Tool>().filter { it.name == Delegate.TOOL } }
-    val (delegateRows, unclaimed) = remember(delegateTools, state.subagents) { Delegate.merge(delegateTools, state.subagents) }
+    val (delegateRows, _) = remember(delegateTools, state.subagents) { Delegate.merge(delegateTools, state.subagents) }
 
     Box(Modifier.fillMaxSize()) {
         LazyColumn(state = listState, modifier = Modifier.fillMaxSize(),
@@ -553,16 +563,6 @@ private fun MessageList(state: ChatState, subagentActions: SubagentActions, stop
                         is ChatItem.Notice -> NoticeLine(item)
                         is ChatItem.CommandOutput -> CommandOutputCard(item)
                     }
-                }
-            }
-            if (unclaimed.isNotEmpty()) item(key = "subagents") {
-                Box(Modifier.animateItem(fadeInSpec = null, fadeOutSpec = null).entrance("subagents", seen)) {
-                    SubagentPanel(unclaimed, subagentActions)
-                }
-            }
-            if (state.processes.isNotEmpty()) item(key = "processes") {
-                Box(Modifier.animateItem(fadeInSpec = null, fadeOutSpec = null).entrance("processes", seen)) {
-                    ProcessPanel(state.processes, stopProcess)
                 }
             }
             if (thinking) item(key = "typing") {

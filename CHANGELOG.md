@@ -25,6 +25,9 @@ request number.
   (1.26+) with the phone's own token, so nothing to set up. **@Justcallmesu** (#21)
 - Linux tray: an *Activity* line (devices connected, turns, approvals waiting) and *Bridge
   stats...*, which shows the full summary. **@Justcallmesu** (#21)
+- **Background work sits in a fixed strip above the composer**: running processes, subagents no delegate
+  card shows, and an active /loop or /heartbeat collapse to one line ("2 running · 1 subagent · loop");
+  tap to open the Stop and steer actions. It hides when nothing runs or a question is open.
 - **A bridge installed by the desktop app can update itself from the phone (Linux)**: it checks the newest
   `vX.Y.Z` tag on GitHub, swaps in that release's `bridge/` keeping the old copy as `bridge.old`, and
   restores it if the sync or the health check fails. `self_update = false` still turns it off.
