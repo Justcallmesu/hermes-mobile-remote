@@ -480,7 +480,8 @@ class BlueprintStore:
 
     def _write(self, path: Path, doc: dict) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
-        os.chmod(self.root, 0o700)
+        if os.name != "nt":
+            os.chmod(self.root, 0o700)
         fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=".tmp-", suffix=".json")
         with os.fdopen(fd, "w", encoding="utf-8") as f:
             json.dump(doc, f, ensure_ascii=False, indent=1)
@@ -488,15 +489,32 @@ class BlueprintStore:
 
     @contextlib.contextmanager
     def _lock(self):
-        import fcntl
-
+        """One writer at a time across processes (the bridge and Hermes' CLI)."""
         self.root.mkdir(parents=True, exist_ok=True)
-        with open(self.root / ".lock", "w") as fh:
-            fcntl.flock(fh, fcntl.LOCK_EX)
-            try:
-                yield
-            finally:
-                fcntl.flock(fh, fcntl.LOCK_UN)
+        with open(self.root / ".lock", "a+") as fh:
+            if os.name == "nt":
+                import msvcrt
+
+                fh.seek(0)
+                while True:
+                    try:
+                        msvcrt.locking(fh.fileno(), msvcrt.LK_LOCK, 1)
+                        break
+                    except OSError:  # LK_LOCK gives up after ~10 s; keep waiting
+                        time.sleep(0.05)
+                try:
+                    yield
+                finally:
+                    fh.seek(0)
+                    msvcrt.locking(fh.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                import fcntl
+
+                fcntl.flock(fh, fcntl.LOCK_EX)
+                try:
+                    yield
+                finally:
+                    fcntl.flock(fh, fcntl.LOCK_UN)
 
     def exists(self, project_id: str) -> bool:
         try:
