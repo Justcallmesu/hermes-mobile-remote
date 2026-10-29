@@ -96,6 +96,13 @@ class BridgeClient(
 
     suspend fun notes(query: String = "", archived: Boolean = false, label: String? = null) =
         call("GET", "/v1/notes", mapOf("q" to query.ifBlank { null }, "archived" to archived, "label" to label))
+    suspend fun blueprints() = call("GET", "/v1/blueprints")
+    suspend fun blueprint(projectId: String, since: Int = 0) = call("GET", "/v1/blueprints/${enc(projectId)}", mapOf("since" to since.takeIf { it > 0 }))
+    suspend fun createBlueprint(projectId: String, body: JSONObject) = call("POST", "/v1/blueprints/${enc(projectId)}", body = body)
+    suspend fun blueprintOps(projectId: String, ops: org.json.JSONArray) = call("POST", "/v1/blueprints/${enc(projectId)}/ops", body = JSONObject().put("ops", ops))
+    suspend fun trashBlueprint(projectId: String) = call("DELETE", "/v1/blueprints/${enc(projectId)}")
+    suspend fun restoreBlueprint(trashId: String) = call("POST", "/v1/blueprints-trash/${enc(trashId)}/restore")
+    suspend fun purgeBlueprint(trashId: String) = call("DELETE", "/v1/blueprints-trash/${enc(trashId)}")
     suspend fun createNote(body: JSONObject) = call("POST", "/v1/notes", body = body)
     suspend fun updateNote(id: String, body: JSONObject) = call("PATCH", "/v1/notes/${enc(id)}", body = body)
     suspend fun deleteNote(id: String) = call("DELETE", "/v1/notes/${enc(id)}")

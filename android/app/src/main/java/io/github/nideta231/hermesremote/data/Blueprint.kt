@@ -1,0 +1,235 @@
+package io.github.nideta231.hermesremote.data
+
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.launch
+import org.json.JSONArray
+import org.json.JSONObject
+
+data class BpNode(val id: String, val kind: String, val label: String, val x: Float, val y: Float, val w: Float, val h: Float,
+                  val color: String = "default", val note: String = "")
+
+data class BpEdge(val id: String, val from: String, val to: String, val label: String = "")
+
+data class BpColumn(val id: String, val name: String, val color: String = "default")
+
+data class BpCheck(val text: String, val done: Boolean)
+
+data class BpCard(
+    val id: String, val column: String, val title: String, val body: String = "", val tags: List<String> = emptyList(),
+    val checklist: List<BpCheck> = emptyList(), val priority: String? = null, val due: String? = null,
+    val assignee: String? = null, val node: String? = null, val color: String = "default", val order: Double = 0.0,
+    val updated: Double = 0.0,
+) {
+    val progress get() = checklist.count { it.done } to checklist.size
+}
+
+data class BpLog(val at: Double, val by: String, val text: String)
+
+data class Blueprint(
+    val projectId: String, val name: String, val path: String?, val version: Int, val control: String,
+    val nodes: List<BpNode>, val edges: List<BpEdge>, val columns: List<BpColumn>, val cards: List<BpCard>, val log: List<BpLog>,
+) {
+    val hermesControl get() = control == "hermes"
+    fun cardsIn(column: String) = cards.filter { it.column == column }.sortedBy { it.order }
+    val tags get() = cards.flatMap { it.tags }.distinct().sorted()
+
+    companion object {
+        fun parse(o: JSONObject): Blueprint {
+            val p = o.optJSONObject("project") ?: JSONObject()
+            val d = o.optJSONObject("diagram") ?: JSONObject()
+            val b = o.optJSONObject("board") ?: JSONObject()
+            fun f(j: JSONObject, k: String) = j.optDouble(k, 0.0).toFloat()
+            return Blueprint(
+                p.optString("id"), p.optString("name"), p.str("path"), o.optInt("version"), o.optString("control", "shared"),
+                d.optJSONArray("nodes").objects().map {
+                    BpNode(it.optString("id"), it.optString("kind", "feature"), it.optString("label"), f(it, "x"), f(it, "y"),
+                        f(it, "w").takeIf { w -> w > 0 } ?: 180f, f(it, "h").takeIf { h -> h > 0 } ?: 64f, it.optString("color", "default"), it.optString("note"))
+                },
+                d.optJSONArray("edges").objects().map { BpEdge(it.optString("id"), it.optString("from"), it.optString("to"), it.optString("label")) },
+                b.optJSONArray("columns").objects().map { BpColumn(it.optString("id"), it.optString("name"), it.optString("color", "default")) },
+                b.optJSONArray("cards").objects().map {
+                    BpCard(it.optString("id"), it.optString("column"), it.optString("title"), it.optString("body"),
+                        it.optJSONArray("tags").strings(), it.optJSONArray("checklist").objects().map { c -> BpCheck(c.optString("text"), c.optBoolean("done")) },
+                        it.str("priority"), it.str("due"), it.str("assignee"), it.str("node"), it.optString("color", "default"),
+                        it.optDouble("order", 0.0), it.optDouble("updated", 0.0))
+                },
+                o.optJSONArray("log").objects().map { BpLog(it.optDouble("at", 0.0), it.optString("by"), it.optString("text")) },
+            )
+        }
+    }
+}
+
+/** One change, as the bridge applies it (`/v1/blueprints/{id}/ops`). The bridge merges ops into the newest copy. */
+object BpOp {
+    fun of(op: String, vararg kv: Pair<String, Any?>) = JSONObject().put("op", op).apply {
+        kv.forEach { (k, v) -> put(k, when (v) { null -> JSONObject.NULL; is List<*> -> JSONArray(v); else -> v }) }
+    }
+    fun checklist(items: List<BpCheck>) = JSONArray(items.map { JSONObject().put("text", it.text).put("done", it.done) })
+
+    /** Apply [op] locally so the screen updates before the bridge answers (the answer replaces it). */
+    fun preview(bp: Blueprint, op: JSONObject): Blueprint = when (op.optString("op")) {
+        "node.update" -> bp.copy(nodes = bp.nodes.map { n ->
+            if (n.id != op.optString("id")) n else n.copy(
+                x = if (op.has("x")) op.optDouble("x").toFloat() else n.x, y = if (op.has("y")) op.optDouble("y").toFloat() else n.y,
+                label = if (op.has("label")) op.optString("label") else n.label, kind = if (op.has("kind")) op.optString("kind") else n.kind,
+                note = if (op.has("note")) op.optString("note") else n.note, color = if (op.has("color")) op.optString("color") else n.color)
+        })
+        "node.remove" -> op.optString("id").let { id -> bp.copy(nodes = bp.nodes.filterNot { it.id == id }, edges = bp.edges.filterNot { it.from == id || it.to == id }) }
+        "edge.remove" -> bp.copy(edges = bp.edges.filterNot { it.id == op.optString("id") })
+        "card.move" -> {
+            val id = op.optString("id"); val col = op.optString("column")
+            val others = bp.cardsIn(col).filterNot { it.id == id }
+            val i = op.optInt("index", others.size).coerceIn(0, others.size)
+            val order = when {
+                others.isEmpty() -> 1.0
+                i >= others.size -> others.last().order + 1
+                i == 0 -> others.first().order - 1
+                else -> (others[i - 1].order + others[i].order) / 2
+            }
+            bp.copy(cards = bp.cards.map { if (it.id == id) it.copy(column = col, order = order) else it })
+        }
+        "card.remove" -> bp.copy(cards = bp.cards.filterNot { it.id == op.optString("id") })
+        else -> bp
+    }
+}
+
+data class BlueprintSummary(val projectId: String, val name: String, val cards: Int, val nodes: Int, val control: String)
+data class BlueprintTrash(val id: String, val name: String, val removedAt: Double, val cards: Int)
+
+data class BlueprintState(
+    /** Projects that have a blueprint (by Hermes project id). */
+    val have: Map<String, BlueprintSummary> = emptyMap(),
+    val trash: List<BlueprintTrash> = emptyList(),
+    val open: Blueprint? = null,
+    val loading: Boolean = false,
+    val error: String? = null,
+    val unsupported: Boolean = false,
+)
+
+/**
+ * Blueprints (flow diagram + board per project). Every edit is sent as an op and the bridge answers
+ * with the merged document, so Hermes' edits made meanwhile are never lost; while a blueprint is open
+ * it is re-read every few seconds (`since=version`, a no-op when nothing changed).
+ */
+class BlueprintRepo(
+    private val scope: CoroutineScope,
+    private val client: () -> BridgeClient?,
+    private val describe: (Throwable) -> String,
+    private val say: (String) -> Unit,
+) {
+    private val _state = MutableStateFlow(BlueprintState())
+    val state: StateFlow<BlueprintState> = _state.asStateFlow()
+    private var poll: Job? = null
+    /** Ops in flight: a poll must not replace the optimistic copy with an older one. */
+    private var inFlight = 0
+
+    fun clear() { stop(); _state.value = BlueprintState() }
+
+    fun refreshList() {
+        val c = client() ?: return
+        scope.launch {
+            try {
+                val o = c.blueprints()
+                _state.update { st ->
+                    st.copy(have = o.optJSONArray("blueprints").objects().associate { b ->
+                        val p = b.optJSONObject("project") ?: JSONObject()
+                        p.optString("id") to BlueprintSummary(p.optString("id"), p.optString("name"), b.optInt("cards"), b.optInt("nodes"), b.optString("control"))
+                    }, trash = o.optJSONArray("trash").objects().map {
+                        BlueprintTrash(it.optString("id"), it.optJSONObject("project")?.optString("name") ?: it.optString("id"), it.optDouble("removed_at", 0.0), it.optInt("cards"))
+                    }, unsupported = false)
+                }
+            } catch (t: Throwable) {
+                if (t is CancellationException) throw t
+                if (t is BridgeException && t.httpCode == 404) _state.update { it.copy(unsupported = true) }
+            }
+        }
+    }
+
+    fun open(projectId: String) {
+        stop()
+        _state.update { it.copy(open = it.open?.takeIf { b -> b.projectId == projectId }, loading = true, error = null) }
+        poll = scope.launch {
+            while (true) { load(projectId); delay(POLL_MS) }
+        }
+    }
+
+    fun stop() { poll?.cancel(); poll = null }
+
+    private suspend fun load(projectId: String) {
+        val c = client() ?: return
+        try {
+            val since = _state.value.open?.takeIf { it.projectId == projectId }?.version ?: 0
+            val o = c.blueprint(projectId, since)
+            if (o.optBoolean("unchanged") || inFlight > 0) { _state.update { it.copy(loading = false) }; return }
+            _state.update { it.copy(open = Blueprint.parse(o), loading = false, error = null) }
+        } catch (t: Throwable) {
+            if (t is CancellationException) throw t
+            _state.update { it.copy(loading = false, error = describe(t)) }
+        }
+    }
+
+    /** Create a blueprint for a Hermes project (long-press project > Add blueprint). */
+    fun create(projectId: String, name: String, path: String?, onDone: () -> Unit = {}) {
+        val c = client() ?: return
+        scope.launch {
+            try {
+                c.createBlueprint(projectId, JSONObject().put("name", name).put("path", path ?: JSONObject.NULL))
+                say("Blueprint added to $name"); refreshList(); onDone()
+            } catch (t: Throwable) { if (t is CancellationException) throw t; say(describe(t)) }
+        }
+    }
+
+    fun trash(projectId: String) {
+        val c = client() ?: return
+        scope.launch {
+            try { c.trashBlueprint(projectId); say("Blueprint moved to the trash"); if (_state.value.open?.projectId == projectId) { stop(); _state.update { it.copy(open = null) } }; refreshList() }
+            catch (t: Throwable) { if (t is CancellationException) throw t; say(describe(t)) }
+        }
+    }
+
+    fun restore(trashId: String) {
+        val c = client() ?: return
+        scope.launch {
+            try { c.restoreBlueprint(trashId); say("Blueprint restored"); refreshList() }
+            catch (t: Throwable) { if (t is CancellationException) throw t; say(describe(t)) }
+        }
+    }
+
+    fun purge(trashId: String) {
+        val c = client() ?: return
+        scope.launch {
+            try { c.purgeBlueprint(trashId); say("Deleted for good"); refreshList() }
+            catch (t: Throwable) { if (t is CancellationException) throw t; say(describe(t)) }
+        }
+    }
+
+    /** Send [ops]; shows the change at once, then the merged document from the bridge. [onApplied] gets the applied ops (new ids). */
+    fun apply(vararg ops: JSONObject, onApplied: (List<JSONObject>) -> Unit = {}) {
+        val bp = _state.value.open ?: return
+        val c = client() ?: return
+        _state.update { st -> st.copy(open = ops.fold(bp) { acc, op -> BpOp.preview(acc, op) }) }
+        inFlight++
+        scope.launch {
+            var failed = false
+            try {
+                val r = c.blueprintOps(bp.projectId, JSONArray(ops.toList()))
+                val doc = Blueprint.parse(r.getJSONObject("doc"))
+                _state.update { st -> if (st.open?.projectId == doc.projectId) st.copy(open = doc) else st }
+                onApplied(r.optJSONArray("applied").objects())
+            } catch (t: Throwable) {
+                if (t is CancellationException) throw t
+                say(describe(t)); failed = true
+            } finally { inFlight = (inFlight - 1).coerceAtLeast(0) }
+            if (failed) load(bp.projectId)  // put back what the bridge really has
+        }
+    }
+
+    companion object { const val POLL_MS = 3_000L }
+}

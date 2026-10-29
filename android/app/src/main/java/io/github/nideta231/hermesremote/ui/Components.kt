@@ -90,6 +90,7 @@ object Glyphs {
     val Filter = line("M4 6h16", "M7 12h10", "M10 18h4")
     val Archive = line("M3 4h18v4H3z", "M5 8v12h14V8", "M10 12h4")
     val Unarchive = line("M3 4h18v4H3z", "M5 8v12h14V8", "M12 18v-6", "M9.5 14.5L12 12l2.5 2.5")
+    val Blueprint = line("M4 4h7v5H4z", "M13 15h7v5h-7z", "M7.5 9v4.5h9V15", "M15 4h5v5h-5z")
     val Tag = line("M3 3h8l10 10-8 8L3 11z", "M7.5 7.5h.01")
     val Pin = line("M12 17v5", "M9 3h6l-1 6 4 4v2H6v-2l4-4z")
     val Stop = line("M7 7h10v10H7z")

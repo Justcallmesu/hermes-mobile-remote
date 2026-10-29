@@ -65,6 +65,9 @@ import io.github.nideta231.hermesremote.data.hiddenFeatures
 import io.github.nideta231.hermesremote.ui.LocalHiddenFeatures
 import io.github.nideta231.hermesremote.ui.ChatActions
 import io.github.nideta231.hermesremote.ui.BridgeAdminActions
+import io.github.nideta231.hermesremote.ui.BlueprintActions
+import io.github.nideta231.hermesremote.ui.BlueprintScreen
+import io.github.nideta231.hermesremote.ui.BlueprintDrawerActions
 import io.github.nideta231.hermesremote.ui.BridgeAdminScreen
 import io.github.nideta231.hermesremote.ui.ProjectActions
 import io.github.nideta231.hermesremote.ui.CronActions
@@ -108,7 +111,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 /** Chat is home; the others are pages pushed on top of it. */
-enum class Page { CHAT, SCHEDULED, PC, TERMINAL, VAULT, GRAPH, NOTES, BRIDGE, SETTINGS }
+enum class Page { CHAT, SCHEDULED, PC, TERMINAL, VAULT, GRAPH, NOTES, BRIDGE, BLUEPRINT, SETTINGS }
 
 class MainActivity : ComponentActivity() {
     private val vm: AppViewModel by viewModels()
@@ -317,6 +320,9 @@ class MainActivity : ComponentActivity() {
         val bridgeUpdateState by vm.bridgeUpdate.state.collectAsState()
         val notesState by vm.notes.state.collectAsState()
         val bridgeAdminState by vm.bridgeAdmin.state.collectAsState()
+        val blueprintState by vm.blueprints.state.collectAsState()
+        var blueprintProject by rememberSaveable { mutableStateOf<String?>(null) }
+        var blueprintName by rememberSaveable { mutableStateOf("") }
         val features by vm.features.collectAsState()
         val unauthorized by vm.unauthorized.collectAsState()
         val pendingShare by vm.pendingShare.collectAsState()
@@ -381,6 +387,10 @@ class MainActivity : ComponentActivity() {
             openGraph = { go(Page.GRAPH) },
             openNotes = if ("notes" in features) ({ go(Page.NOTES) }) else null,
             openBridge = if ("admin" in features) ({ go(Page.BRIDGE) }) else null,
+            blueprints = if ("blueprints" in features) BlueprintDrawerActions(have = blueprintState.have.keys, trash = blueprintState.trash,
+                open = { p -> blueprintProject = p.id; blueprintName = p.label; go(Page.BLUEPRINT) },
+                add = { p -> vm.blueprints.create(p.id, p.label, p.path) { blueprintProject = p.id; blueprintName = p.label; go(Page.BLUEPRINT) } },
+                remove = vm.blueprints::trash, restore = vm.blueprints::restore, purge = vm.blueprints::purge) else null,
             bridgeUpdate = if ("bridge_update" in features) BridgeUpdateActions(bridgeUpdateState, vm.bridgeUpdate::check, vm.bridgeUpdate::start) else null,
             openPc = if (hasMonitor) ({ go(Page.PC) }) else null,
             openTerminal = if (hasTerminal) ({ go(Page.TERMINAL) }) else null,
@@ -445,6 +455,12 @@ class MainActivity : ComponentActivity() {
                         Page.SCHEDULED -> CronScreen(cron, hermesProfiles.active.takeIf { hermesProfiles.items.size > 1 }, cronActions, onBack = { page = Page.CHAT })
                         Page.PC -> PcScreen(pcState, pcActions, onBack = { page = Page.CHAT })
                         Page.TERMINAL -> TerminalScreen(open = vm::openTerminal, onBack = { page = Page.CHAT })
+                        Page.BLUEPRINT -> blueprintProject?.let { pid ->
+                            BlueprintScreen(pid, blueprintName, blueprintState, BlueprintActions(open = vm.blueprints::open, close = vm.blueprints::stop,
+                                apply = { ops, done -> vm.blueprints.apply(*ops, onApplied = done) }, trash = vm.blueprints::trash,
+                                askHermes = { b, what -> vm.askHermesBlueprint(b, what); page = Page.CHAT }),
+                                onBack = { vm.blueprints.refreshList(); page = Page.CHAT })
+                        } ?: run { page = Page.CHAT }
                         Page.BRIDGE -> BridgeAdminScreen(bridgeAdminState, BridgeAdminActions(refresh = vm.bridgeAdmin::refresh,
                             fix = vm.bridgeAdmin::fix, restart = vm.bridgeAdmin::restart, trust = vm.bridgeAdmin::trustCurrent,
                             untrust = vm.bridgeAdmin::untrust, revoke = vm.bridgeAdmin::revoke, loadLogs = vm.bridgeAdmin::loadLogs,

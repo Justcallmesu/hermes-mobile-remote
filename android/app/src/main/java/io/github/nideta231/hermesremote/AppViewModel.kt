@@ -416,6 +416,19 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
     val bridgeUpdate = io.github.nideta231.hermesremote.data.BridgeUpdater(viewModelScope, client = { client },
         describe = ::describe, say = { _toast.value = it }, onBridgeBack = ::bridgeBack)
 
+    val blueprints = io.github.nideta231.hermesremote.data.BlueprintRepo(viewModelScope, client = { client },
+        describe = ::describe, say = { _toast.value = it })
+
+    /** New chat in [b]'s project with a drafted ask (the user sends it): work from the blueprint, take control, or do one card. */
+    fun askHermesBlueprint(b: io.github.nideta231.hermesremote.data.Blueprint, what: String) {
+        newChat(); chooseProject(b.projectId)
+        setDraft(when {
+            what == "control" -> "Take full control of the ${b.name} blueprint (project-blueprint skill): read it, plan the flow and the board, then work through it and keep it updated. I'll mostly watch and adjust."
+            what.startsWith("card:") -> "Read the ${b.name} blueprint (project-blueprint skill), then do the card \"${what.removePrefix("card:")}\": move it to Working, tick its checklist as you go and move it to Done when it's verified."
+            else -> "Read the ${b.name} blueprint (project-blueprint skill) and continue the work: pick the next card, keep the board and diagram updated as you go."
+        })
+    }
+
     val bridgeAdmin = io.github.nideta231.hermesremote.data.BridgeAdmin(viewModelScope, client = { client },
         describe = ::describe, say = { _toast.value = it }, onBridgeBack = ::bridgeBack)
 
@@ -779,6 +792,7 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
             _features.value = features
             store.bridgeFeatures = features
             if ("bridge_update" in features) bridgeUpdate.check(false)
+            if ("blueprints" in features) blueprints.refreshList()
             if (me.optInt("protocol", 0) < MIN_BRIDGE_PROTOCOL) {
                 _toast.value = "Your PC runs an older bridge. Update it: run install.sh on the PC."
             }
@@ -1052,6 +1066,7 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
         monitor.clear()
         bridgeUpdate.clear()
         bridgeAdmin.clear()
+        blueprints.clear()
         notes.clear()
         _features.value = emptySet()
         _claudeUsage.value = null

@@ -213,6 +213,7 @@ $B metrics                 # requests, live sockets, Hermes latency, approval wa
 $B update                  # update to the newest release; pairings and settings stay
 $B update --check          # only say whether a newer release is out
 $B notes list              # the app's Notes (add/show/append/check/edit/rm; Hermes uses these)
+$B blueprint md --here     # the project's blueprint: flow + board (card/node/column/layout/log; Hermes uses these)
 
 journalctl --user -u hermes-remote-bridge -f    # live log
 ```
@@ -278,6 +279,7 @@ frames_per_minute = 600         # per live connection
 park_seconds = 300              # keep Hermes' socket open this long after the phone drops; 0 = off
 self_update = true              # let a paired phone update this bridge (git checkout installs only)
 notes = true                    # the Notes page; files in ~/.config/hermes-remote/notes (notes_dir)
+blueprints = true               # project blueprints; files in ~/.config/hermes-remote/blueprints (blueprints_dir)
 terminal_shell = ""             # the shell the phone's Terminal opens; empty means the platform
                                 #   default (Windows: pwsh, then powershell, then cmd)
 metrics = true                  # GET /metrics (Prometheus); token in ~/.config/hermes-remote/metrics.token

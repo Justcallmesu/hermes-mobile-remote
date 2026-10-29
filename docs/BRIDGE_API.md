@@ -299,6 +299,31 @@ body; `- [ ]` / `- [x]` lines are checklist items. Hermes reads and edits the sa
 - `POST /v1/notes` `{title?, body?, color?, pinned?, labels?}` → the note.
 - `GET|PATCH|DELETE /v1/notes/{id}`: PATCH takes any of those fields plus `archived`; last write wins.
 
+## Blueprints
+
+A flow diagram + task board per Hermes project (feature `blueprints`, config `blueprints`,
+`blueprints_dir`, default `~/.config/hermes-remote/blueprints/<project id>.json`). Hermes edits the
+same files through `hermes-remote-bridge blueprint ...` (skill `project-blueprint`).
+
+| Method | Path | |
+|---|---|---|
+| GET | `/v1/blueprints` | `{blueprints: [summary], trash: [...]}` |
+| GET | `/v1/blueprints/{project}?since=N` | the document; `{version, unchanged: true}` when still at N |
+| POST | `/v1/blueprints/{project}` | create (`{name, path}`) |
+| POST | `/v1/blueprints/{project}/ops` | `{ops: [...]}` → `{doc, applied}`; all ops land or none (400 `bad_op` with the current `doc`) |
+| DELETE | `/v1/blueprints/{project}` | move to the trash → `{trashed: id}` |
+| POST | `/v1/blueprints-trash/{id}/restore` | restore |
+| DELETE | `/v1/blueprints-trash/{id}` | delete for good |
+
+Ops are applied to the newest copy under a file lock, so phone and Hermes edits merge:
+`node.add` (`kind` start/end/feature/flow/decision/note, `label`, `after` = node it follows; placed
+and connected automatically), `node.update`, `node.remove`, `edge.add`, `edge.update`, `edge.remove`,
+`diagram.layout`, `column.add/update/move/remove`, `card.add` (`column`, `title`, `body`, `tags`,
+`checklist`, `priority` low/medium/high, `due` YYYY-MM-DD, `assignee` me/hermes, `node`),
+`card.update`, `card.check`, `card.move` (`column`, `index`), `card.remove`, `control.set`
+(`shared`/`hermes`), `log`. Cards, nodes and columns can be named by id or by a unique title. Every
+change is logged with who made it (`phone`, `hermes`).
+
 ## Bridge update
 
 `GET /v1/bridge/update[?refresh=true]` (device token): `{current, commit, latest, available, can_update,

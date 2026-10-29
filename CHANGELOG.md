@@ -17,6 +17,28 @@ request number.
   subagents (#12), share to Hermes (#15), message search (#16), subagent output and steer (#17)
   and bridge metrics (#18).
 
+## v1.33.0
+
+- **Blueprints**: a flow diagram and a task board for each project, on the PC, shared with Hermes.
+  - Long-press a project in the drawer > *Add blueprint*. Projects with one get a small blueprint
+    button on their header. *Remove blueprint* moves it to the trash (long-press > *Blueprint trash*)
+    where it can be restored or deleted for good.
+  - **Diagram** (like draw.io): Start, End, Feature, Flow, Decision and Note shapes with arrows on a
+    dotted canvas. Pinch to zoom, drag to pan, long-press a box to move it, tap to select (Edit,
+    Connect, Add next, Delete), tap an arrow to delete it, *Tidy diagram* to lay it out.
+  - **Board** (like Trello): your own columns (Docs, Todo, Working, Done to start; add, rename,
+    colour, reorder, delete). Long-press a card and drag it to another column or position. Cards
+    have a description, checklist, tags (filter at the top), priority, due date, who's on it (you or
+    Hermes) and a link to a diagram box, which then shows the card's column.
+  - **Activity**: every change with who made it, you or Hermes.
+  - **Hermes uses it**: the new `project-blueprint` skill makes Hermes read a project's blueprint
+    before working on it and keep it current (moves cards, ticks checklists, adds found work, logs
+    decisions). *Let Hermes take control* hands it the board and diagram; you mostly watch and
+    adjust. *Ask Hermes to work on this* / *Ask Hermes to do this* (on a card) start a drafted chat.
+  - Phone and Hermes edits merge (each change applies to the newest copy), and the open blueprint
+    refreshes every few seconds.
+  - Needs the updated bridge (PC bridge > Update). The update also installs the Hermes skill.
+
 ## v1.32.1
 
 - Notes: what you write is kept when you leave the editor. A background refresh could close a fresh

@@ -154,6 +154,16 @@ private fun DrawerMoreMenu(actions: SessionActions) {
     }
 }
 
+class BlueprintDrawerActions(
+    val have: Set<String>,
+    val trash: List<io.github.nideta231.hermesremote.data.BlueprintTrash>,
+    val open: (ProjectRef) -> Unit,
+    val add: (ProjectRef) -> Unit,
+    val remove: (String) -> Unit,
+    val restore: (String) -> Unit,
+    val purge: (String) -> Unit,
+)
+
 class SessionActions(
     val open: (String) -> Unit,
     val refresh: () -> Unit,
@@ -177,6 +187,8 @@ class SessionActions(
     val openGraph: () -> Unit = {},
     /** Keep-style notes Hermes can read and edit; null when the bridge has none. */
     val openNotes: (() -> Unit)? = null,
+    /** Blueprints (null = the bridge has none): which projects have one, open, add, remove, trash. */
+    val blueprints: BlueprintDrawerActions? = null,
     /** PC bridge admin page (doctor, restart, networks, devices). */
     val openBridge: (() -> Unit)? = null,
     /** The PC bridge's self-update, offered in the menu when a newer release is out. */
@@ -241,6 +253,7 @@ fun SessionsPane(
     // Long-pressed group header: its move menu.
     var movingGroup by remember { mutableStateOf<String?>(null) }
     var editingProject by remember { mutableStateOf<ProjectRef?>(null) }
+    var blueprintTrash by remember { mutableStateOf(false) }
     // "Show more" per group: group key -> rows shown. Search, filters and paging are applied in that
     // order (see pageGroups), and a new query, view, PC or profile starts every group back at one page.
     var shown by remember(query, view, pcs.firstOrNull { it.active }?.id, profiles.active) { mutableStateOf(mapOf<String, Int>()) }
@@ -318,6 +331,7 @@ fun SessionsPane(
             }
         }
         if (filterSheet) SessionViewSheet(view, state.projects, actions.setView, actions.resetGroupOrder, onDismiss = { filterSheet = false })
+        if (blueprintTrash) actions.blueprints?.let { BlueprintTrashSheet(it, onDismiss = { blueprintTrash = false }) }
         editingProject?.let { p -> EditProjectDialog(p.id, p.label, actions.projects, onDismiss = { editingProject = null }) }
         movingGroup?.let { key ->
             val keys = grouped.map { it.key }.filter { it != PINNED_KEY }
@@ -334,7 +348,15 @@ fun SessionsPane(
                     movingGroup = null
                     actions.newChatIn(key.removePrefix("p-").takeIf { it != SessionView.NO_PROJECT })
                 }) else null,
-                onEditProject = saved?.let { p -> { movingGroup = null; editingProject = p } })
+                onEditProject = saved?.let { p -> { movingGroup = null; editingProject = p } },
+                blueprint = actions.blueprints?.let { bpa ->
+                    val pid = key.removePrefix("p-")
+                    val ref = state.projects.firstOrNull { it.id == pid && it.id != SessionView.NO_PROJECT }
+                    if (view.grouping == SessionGrouping.PROJECT && key.startsWith("p-") && ref != null) BlueprintSheetActions(
+                        has = pid in bpa.have, trashCount = bpa.trash.size,
+                        open = { movingGroup = null; bpa.open(ref) }, add = { movingGroup = null; bpa.add(ref) },
+                        remove = { movingGroup = null; bpa.remove(pid) }, openTrash = { movingGroup = null; blueprintTrash = true }) else null
+                })
         }
 
         PullToRefreshBox(isRefreshing = state.loading && state.items.isNotEmpty(), onRefresh = actions.refresh,
@@ -354,6 +376,11 @@ fun SessionsPane(
                         GroupHeader(group.label, group.items.size, closed, Modifier.animateItem(),
                             project = view.grouping == SessionGrouping.PROJECT && group.key != PINNED_KEY,
                             live = page.group.items.count { state.live[it.id] != null },
+                            onBlueprint = actions.blueprints?.let { bpa ->
+                                val pid = group.key.removePrefix("p-")
+                                val ref = state.projects.firstOrNull { it.id == pid }
+                                if (view.grouping == SessionGrouping.PROJECT && group.key.startsWith("p-") && pid in bpa.have && ref != null) ({ bpa.open(ref) }) else null
+                            },
                             onLongClick = if (group.key == PINNED_KEY) null else ({
                                 haptics.performHapticFeedback(HapticFeedbackType.LongPress); movingGroup = group.key
                             })) {
@@ -657,7 +684,9 @@ private fun ShowMoreRow(remaining: Int, step: Int, canShowLess: Boolean, modifie
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun GroupHeader(label: String, count: Int, collapsed: Boolean, modifier: Modifier,
-                        project: Boolean = false, live: Int = 0, onLongClick: (() -> Unit)? = null, onToggle: () -> Unit) {
+                        project: Boolean = false, live: Int = 0, onLongClick: (() -> Unit)? = null,
+                        /** The project's blueprint: a small button on the header (null = none). */
+                        onBlueprint: (() -> Unit)? = null, onToggle: () -> Unit) {
     val angle by animateFloatAsState(if (collapsed) -90f else 0f, label = "chevron")
     if (project) {
         Row(modifier.fillMaxWidth().padding(top = 10.dp, bottom = 2.dp).clip(RoundedCornerShape(12.dp))
@@ -674,6 +703,12 @@ private fun GroupHeader(label: String, count: Int, collapsed: Boolean, modifier:
                     .padding(horizontal = 7.dp, vertical = 1.dp))
             if (live > 0) { Spacer(Modifier.width(6.dp)); StatusDot(Gold, pulse = true) }
             Spacer(Modifier.weight(1f))
+            if (onBlueprint != null) {
+                Box(Modifier.size(30.dp).clip(RoundedCornerShape(8.dp)).clickable(onClick = onBlueprint), contentAlignment = Alignment.Center) {
+                    Icon(Glyphs.Blueprint, "Blueprint of $label", tint = Gold, modifier = Modifier.size(17.dp))
+                }
+                Spacer(Modifier.width(4.dp))
+            }
             Icon(Glyphs.Chevron, if (collapsed) "Expand $label" else "Collapse $label", modifier = Modifier.size(18.dp).rotate(angle),
                 tint = MaterialTheme.colorScheme.onSurfaceVariant)
         }
@@ -840,12 +875,37 @@ private fun SessionViewSheet(view: SessionView, projects: List<ProjectRef>, onCh
 
 private const val PINNED_KEY = "Pinned"
 
+class BlueprintSheetActions(val has: Boolean, val trashCount: Int, val open: () -> Unit, val add: () -> Unit, val remove: () -> Unit, val openTrash: () -> Unit)
+
+/** Removed blueprints: restore or delete for good. */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun BlueprintTrashSheet(a: BlueprintDrawerActions, onDismiss: () -> Unit) {
+    ModalBottomSheet(onDismissRequest = onDismiss, containerColor = MaterialTheme.colorScheme.surfaceContainer) {
+        Column(Modifier.fillMaxWidth().padding(horizontal = 20.dp).padding(bottom = 24.dp)) {
+            Text("Blueprint trash", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+            if (a.trash.isEmpty()) Text("Empty.", color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(vertical = 12.dp))
+            a.trash.forEach { t ->
+                Row(Modifier.fillMaxWidth().padding(vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text(t.name, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text("Removed ${relative(t.removedAt)} · ${t.cards} cards", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    TextButton(onClick = { a.restore(t.id) }) { Text("Restore") }
+                    TextButton(onClick = { a.purge(t.id) }) { Text("Delete", color = Bad) }
+                }
+            }
+        }
+    }
+}
+
 /** Move one drawer group up/down/top/bottom. Stays open so a group can be moved several places in a row. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun GroupMoveSheet(label: String, index: Int, count: Int, custom: Boolean,
                            onMove: (Int) -> Unit, onReset: () -> Unit, onDismiss: () -> Unit,
-                           onNewChat: (() -> Unit)? = null, onEditProject: (() -> Unit)? = null) {
+                           onNewChat: (() -> Unit)? = null, onEditProject: (() -> Unit)? = null,
+                           blueprint: BlueprintSheetActions? = null) {
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
         containerColor = MaterialTheme.colorScheme.surfaceContainer) {
         Column(Modifier.fillMaxWidth().padding(horizontal = 20.dp).padding(bottom = 24.dp)) {
@@ -868,6 +928,22 @@ private fun GroupMoveSheet(label: String, index: Int, count: Int, custom: Boolea
                 }
                 Text("Rename, change folder or description, delete", style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(start = 4.dp, top = 2.dp, bottom = 4.dp))
+            }
+            blueprint?.let { b ->
+                var confirm by remember { mutableStateOf(false) }
+                if (b.has) {
+                    OutlinedButton(onClick = b.open, modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(14.dp)) {
+                        Icon(Glyphs.Blueprint, null, modifier = Modifier.size(18.dp)); Spacer(Modifier.width(8.dp)); Text("Open blueprint")
+                    }
+                    TextButton(onClick = { confirm = true }) { Text("Remove blueprint", color = Bad) }
+                } else OutlinedButton(onClick = b.add, modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(14.dp)) {
+                    Icon(Glyphs.Blueprint, null, modifier = Modifier.size(18.dp)); Spacer(Modifier.width(8.dp)); Text("Add blueprint (diagram + board)")
+                }
+                if (b.trashCount > 0) TextButton(onClick = b.openTrash) { Text("Blueprint trash (${b.trashCount})") }
+                if (confirm) AlertDialog(onDismissRequest = { confirm = false }, title = { Text("Remove the blueprint of $label?") },
+                    text = { Text("It goes to the blueprint trash and can be restored from there.") },
+                    confirmButton = { TextButton(onClick = { confirm = false; b.remove() }) { Text("Remove", color = Bad) } },
+                    dismissButton = { TextButton(onClick = { confirm = false }) { Text("Cancel") } })
             }
             val top = index <= 0
             val bottom = index >= count - 1
