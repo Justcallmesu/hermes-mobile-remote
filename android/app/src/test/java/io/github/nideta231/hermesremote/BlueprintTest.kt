@@ -93,3 +93,17 @@ class BlueprintInstructionsTest {
         assertEquals("A", io.github.nideta231.hermesremote.ui.toggleTemplate(t, "B"))
     }
 }
+
+class BlueprintInboxTest {
+    @Test fun listsUnreadAndOpenQuestionsNewestFirst() {
+        fun card(id: String, vararg c: io.github.nideta231.hermesremote.data.BpComment) =
+            io.github.nideta231.hermesremote.data.BpCard(id, "todo", id, comments = c.toList())
+        fun cm(at: Double, kind: String = "comment", by: String = "hermes") = io.github.nideta231.hermesremote.data.BpComment("m$at", at, by, kind, "t$at")
+        val bp = Blueprint("p", "P", null, 1, "shared", emptyList(), emptyList(), emptyList(),
+            listOf(card("quiet", cm(1.0)), card("unread", cm(5.0)), card("asks", cm(3.0, "question")), card("mine", cm(9.0, by = "phone"))), emptyList())
+        val seen = mapOf("quiet" to 1.0, "asks" to 3.0, "unread" to 0.0, "mine" to 0.0)
+        val items = io.github.nideta231.hermesremote.ui.inboxItems(bp) { c -> c.comments.count { it.by != "phone" && it.at > (seen[c.id] ?: 0.0) } }
+        assertEquals(listOf("unread", "asks"), items.map { it.card.id })
+        assertEquals(1, items[0].unread); assertEquals(1, items[1].asks); assertEquals("t3.0", items[1].text)
+    }
+}

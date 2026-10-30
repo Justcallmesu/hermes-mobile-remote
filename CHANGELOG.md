@@ -26,6 +26,10 @@ request number.
 - **Slimmer search box in the chat list**: the search field is now a 40 dp pill, the same height as
   the filter and new chat buttons beside it (was a tall 56 dp field, also in compact mode), and it
   shrinks with a narrow chat list: the hint is cut short instead of pushing the buttons out.
+- **Blueprint inbox**: a bell in the blueprint header counts the cards that want you (new Hermes
+  comments or an open question/review). Tap it for the list, newest first, with the column, who wrote
+  what and when; tap a row to open that card. *Mark all read* clears every new-comment badge at once
+  (questions stay until you answer them).
 
 ## v1.36.0
 

@@ -22,6 +22,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.offset
@@ -53,6 +54,7 @@ import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.SmallFloatingActionButton
 import androidx.compose.material3.Surface
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.Tab
 import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
@@ -162,6 +164,9 @@ fun BlueprintScreen(projectId: String, projectName: String, state: BlueprintStat
     /** The instructions dialog: (open, then hand control to Hermes on save). */
     var instructions by remember { mutableStateOf(false to false) }
     var boardSettings by remember { mutableStateOf(false) }
+    var inbox by remember { mutableStateOf(false) }
+    /** A card to open on the board (from the inbox). */
+    var openCard by remember { mutableStateOf<String?>(null) }
     val bp = state.open?.takeIf { it.projectId == projectId }
     Column(Modifier.fillMaxSize()) {
         Row(Modifier.fillMaxWidth().statusBarsPadding().padding(horizontal = 4.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -175,6 +180,20 @@ fun BlueprintScreen(projectId: String, projectName: String, state: BlueprintStat
                         working.takeIf { it > 0 }?.let { "$it in progress" }, unreadCards.takeIf { it > 0 }?.let { "$it with new comments" }, waiting.takeIf { it > 0 }?.let { "$it waiting for you" }).joinToString(" · "),
                     style = MaterialTheme.typography.labelSmall, maxLines = 1, overflow = TextOverflow.Ellipsis,
                     color = when { waiting > 0 -> Warn; bp?.hermesControl == true -> Gold; else -> MaterialTheme.colorScheme.onSurfaceVariant })
+            }
+            if (bp != null) {
+                val pending = inboxItems(bp, actions.unread).size
+                IconButton(onClick = { inbox = true }) {
+                    Box {
+                        Icon(Glyphs.Bell, "Comments and questions", tint = if (pending > 0) Gold else LocalContentColor.current)
+                        if (pending > 0) Box(Modifier.align(Alignment.TopEnd).offset(x = 7.dp, y = (-6).dp)
+                            .defaultMinSize(minWidth = 15.dp, minHeight = 15.dp).background(Gold, CircleShape).padding(horizontal = 3.dp),
+                            contentAlignment = Alignment.Center) {
+                            Text(if (pending > 99) "99+" else "$pending", color = MaterialTheme.colorScheme.surface,
+                                fontSize = 9.sp, fontWeight = FontWeight.Bold, lineHeight = 9.sp, maxLines = 1)
+                        }
+                    }
+                }
             }
             if (bp != null) Box {
                 IconButton(onClick = { menu = true }) { Icon(Glyphs.More, "More") }
@@ -203,7 +222,7 @@ fun BlueprintScreen(projectId: String, projectName: String, state: BlueprintStat
                 bp == null && state.error != null -> Text(state.error, color = Bad, modifier = Modifier.padding(24.dp))
                 bp == null -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { TypingDots(Gold) }
                 tab == 0 -> DiagramView(bp, actions)
-                tab == 1 -> BoardView(bp, actions)
+                tab == 1 -> BoardView(bp, actions, openCard) { openCard = it }
                 else -> ActivityView(bp)
             }
             }
@@ -221,6 +240,7 @@ fun BlueprintScreen(projectId: String, projectName: String, state: BlueprintStat
             if (hand) actions.askHermes(bp.copy(instructions = text), "control")
         }
     }
+    if (inbox && bp != null) InboxSheet(bp, actions, onDismiss = { inbox = false }) { id -> inbox = false; tab = 1; openCard = id }
     if (boardSettings && bp != null) BoardSettingsDialog(bp.settings, bp.defaults.over(BpSettings()), onDismiss = { boardSettings = false },
         onGlobal = { boardSettings = false; actions.openGlobalSettings() }) { st ->
         boardSettings = false
@@ -497,8 +517,7 @@ private fun NodeDialog(n: BpNode?, onDismiss: () -> Unit, onSave: (String, Strin
  * column or position; tap to open it. Filter by tag at the top.
  */
 @Composable
-private fun BoardView(bp: Blueprint, actions: BlueprintActions) {
-    var openCard by remember { mutableStateOf<String?>(null) }
+private fun BoardView(bp: Blueprint, actions: BlueprintActions, openCard: String?, setOpenCard: (String?) -> Unit) {
     var tag by rememberSaveable { mutableStateOf<String?>(null) }
     var addingTo by remember { mutableStateOf<String?>(null) }
     var columnMenu by remember { mutableStateOf<String?>(null) }
@@ -687,7 +706,7 @@ private fun BoardView(bp: Blueprint, actions: BlueprintActions) {
                                                     },
                                                     onDragCancel = { dragging = null })
                                             },
-                                        onOpen = { openCard = card.id })
+                                        onOpen = { setOpenCard(card.id) })
                                     }
                                 }
                                 if (placeAt == cards.size) item(key = "drop-slot") { DropSlot(slotHeight, Modifier.animateItem()) }
@@ -753,7 +772,7 @@ private fun BoardView(bp: Blueprint, actions: BlueprintActions) {
     if (newColumn) TextDialog("New column", "", "Name", onDismiss = { newColumn = false }, maxLength = BpLimits.COLUMN) { t ->
         newColumn = false; if (t.isNotBlank()) actions.apply(arrayOf(BpOp.of("column.add", "name" to t))) {}
     }
-    openCard?.let { id -> bp.cards.firstOrNull { it.id == id }?.let { CardSheet(it, bp, actions, onDismiss = { openCard = null }) } ?: run { openCard = null } }
+    openCard?.let { id -> bp.cards.firstOrNull { it.id == id }?.let { CardSheet(it, bp, actions, onDismiss = { setOpenCard(null) }) } ?: run { setOpenCard(null) } }
 }
 
 /** One board's settings: each one follows the global default (Settings > Blueprint boards) or is set here. */
@@ -1125,6 +1144,71 @@ private fun ActivityView(bp: Blueprint) {
                 Column(Modifier.weight(1f)) {
                     Text(l.text, style = MaterialTheme.typography.bodyMedium)
                     Text(fmt.format(java.util.Date((l.at * 1000).toLong())), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+        }
+    }
+}
+
+
+// ================================================================ Inbox
+
+/** One thing on the board for the user: a card with Hermes comments not seen yet, or an open question/review. */
+internal data class InboxItem(val card: BpCard, val unread: Int, val asks: Int, val at: Double, val by: String, val text: String)
+
+/** Cards that want the user's attention, newest first: open questions/reviews and unread Hermes comments. */
+internal fun inboxItems(bp: Blueprint, unread: (BpCard) -> Int): List<InboxItem> = bp.cards.mapNotNull { c ->
+    val u = unread(c)
+    val asks = c.openAsks.size
+    if (u == 0 && asks == 0) return@mapNotNull null
+    val last = (c.openAsks.lastOrNull().takeIf { u == 0 } ?: c.comments.lastOrNull { it.by != "phone" }) ?: c.comments.lastOrNull()
+    InboxItem(c, u, asks, last?.at ?: c.updated, last?.by.orEmpty(), last?.text.orEmpty())
+}.sortedByDescending { it.at }
+
+/**
+ * Bell in the blueprint header: every card with unread Hermes comments or an open question/review, so it
+ * is clear which card the notification was about. Tap opens the card; *Mark all read* clears every
+ * unread badge (open questions stay until answered, they are waiting for you).
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun InboxSheet(bp: Blueprint, actions: BlueprintActions, onDismiss: () -> Unit, onOpen: (String) -> Unit) {
+    val items = inboxItems(bp, actions.unread)
+    val fmt = remember { java.text.DateFormat.getDateTimeInstance(java.text.DateFormat.SHORT, java.text.DateFormat.SHORT) }
+    val cols = bp.columns.associate { it.id to it.name }
+    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+        containerColor = MaterialTheme.colorScheme.surfaceContainerLow) {
+        Row(Modifier.fillMaxWidth().padding(start = 20.dp, end = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text("Comments and questions", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                val u = items.count { it.unread > 0 }; val a = items.count { it.asks > 0 }
+                Text(listOfNotNull(u.takeIf { it > 0 }?.let { "$it with new comments" }, a.takeIf { it > 0 }?.let { "$it waiting for you" })
+                    .joinToString(" · ").ifEmpty { "Nothing new" }, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            if (items.any { it.unread > 0 }) TextButton(onClick = { bp.cards.forEach(actions.markSeen) }) { Text("Mark all read") }
+        }
+        LazyColumn(Modifier.fillMaxWidth().heightIn(max = 560.dp), contentPadding = androidx.compose.foundation.layout.PaddingValues(12.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            if (items.isEmpty()) item {
+                Text("No unread comments and no open questions.", style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(8.dp))
+            }
+            items(items, key = { it.card.id }) { it ->
+                Surface(onClick = { onOpen(it.card.id) }, shape = RoundedCornerShape(12.dp),
+                    color = if (it.asks > 0) Warn.copy(alpha = 0.12f) else MaterialTheme.colorScheme.surfaceContainerHigh, modifier = Modifier.fillMaxWidth()) {
+                    Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            if (it.asks > 0) Pill(if (it.asks == 1) "Waiting for you" else "${it.asks} waiting", tint = Warn)
+                            if (it.unread > 0) Pill(if (it.unread == 1) "1 new" else "${it.unread} new", tint = Gold)
+                            Text(cols[it.card.column].orEmpty(), style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                        }
+                        Text(it.card.title, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                        if (it.text.isNotBlank()) Text((if (it.by == "hermes") "Hermes: " else if (it.by.isNotEmpty()) "${it.by}: " else "") + it.text,
+                            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 3, overflow = TextOverflow.Ellipsis)
+                        if (it.at > 0) Text(fmt.format(java.util.Date((it.at * 1000).toLong())), style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
                 }
             }
         }
