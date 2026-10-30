@@ -1061,6 +1061,9 @@ class SettingsActions(
     /** Global blueprint board settings on this PC; null when the bridge has none (older, or blueprints off). */
     val boardDefaults: io.github.nideta231.hermesremote.data.BpSettings? = null,
     val setBoardDefaults: (io.github.nideta231.hermesremote.data.BpSettings) -> Unit = {},
+    /** Global agent instructions on this PC; null when the bridge has none (older, or blueprints off). */
+    val boardInstructions: String? = null,
+    val setBoardInstructions: (String) -> Unit = {},
 )
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -1124,6 +1127,10 @@ fun SettingsScreen(
                             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                                 BoardSettingsFields(d, null, actions.setBoardDefaults)
                             }
+                        }
+                        actions.boardInstructions?.let { g ->
+                            Spacer(Modifier.size(10.dp))
+                            GlobalInstructionsPanel(g, actions.setBoardInstructions)
                         }
                     }
                 }
@@ -1772,3 +1779,22 @@ private fun Step(n: Int, text: String, code: String? = null) {
     }
 }
 
+
+
+/** Settings > Blueprint boards: the agent instructions every board follows unless it has its own. */
+@Composable
+private fun GlobalInstructionsPanel(saved: String, onSave: (String) -> Unit) {
+    var text by remember(saved) { mutableStateOf(saved) }
+    Panel {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("Agent instructions (global)", style = MaterialTheme.typography.labelLarge)
+            Text("Rules Hermes follows on every board that has none of its own (board ⋮ > Agent instructions > Reset to global).",
+                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            InstructionsEditor(text, { text = it }, "e.g. Read the project docs first. Always attach the result to the card.")
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                TextButton(onClick = { onSave(text.trim()) }, enabled = text.trim() != saved.trim()) { Text("Save for every board") }
+                if (text.trim() != saved.trim()) TextButton(onClick = { text = saved }) { Text("Undo") }
+            }
+        }
+    }
+}

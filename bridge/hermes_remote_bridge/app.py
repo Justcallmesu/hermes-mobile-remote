@@ -519,7 +519,8 @@ def create_app(cfg: Config, *, locator: BackendLocator | None = None, tailnet: T
 
     def _bp(pid: str) -> dict:
         try:
-            return {**bp_store.get(pid), "defaults": bp_store.defaults()}  # the global board settings ride along
+            # the global board settings and agent instructions ride along
+            return {**bp_store.get(pid), "defaults": bp_store.defaults(), "default_instructions": bp_store.default_instructions()}
         except KeyError:
             raise ApiError(404, "no_blueprint", "This project has no blueprint")
 
@@ -528,19 +529,24 @@ def create_app(cfg: Config, *, locator: BackendLocator | None = None, tailnet: T
         _bp_on()
         docs = await asyncio.to_thread(bp_store.all)
         return {"blueprints": [bp_mod.summary(d) for d in docs], "trash": await asyncio.to_thread(bp_store.trashed),
-                "defaults": await asyncio.to_thread(bp_store.defaults)}
+                "defaults": await asyncio.to_thread(bp_store.defaults),
+                "default_instructions": await asyncio.to_thread(bp_store.default_instructions)}
 
     @app.put("/v1/blueprints-settings")
     async def blueprint_defaults(request: Request, device: Device = Depends(device_auth)):
         """Global board settings: every board that has no choice of its own follows them."""
         _bp_on()
         body = await request.json()
+        body = dict(body) if isinstance(body, dict) else {}
+        text = body.pop("instructions", None)  # global agent instructions (every board without its own)
         try:
-            cur = await asyncio.to_thread(bp_store.set_defaults, body if isinstance(body, dict) else {})
+            if text is not None:
+                await asyncio.to_thread(bp_store.set_default_instructions, str(text))
+            cur = await asyncio.to_thread(bp_store.set_defaults, body)
         except bp_mod.BlueprintError as exc:
             raise ApiError(400, "bad_setting", str(exc))
         audit_event({"event": "blueprint_defaults", "device": device.id})
-        return {"defaults": cur}
+        return {"defaults": cur, "default_instructions": await asyncio.to_thread(bp_store.default_instructions)}
 
     @app.get("/v1/blueprints/{pid}")
     async def get_blueprint(pid: str, since: int = 0, _: Device = Depends(device_auth)):
@@ -574,7 +580,8 @@ def create_app(cfg: Config, *, locator: BackendLocator | None = None, tailnet: T
             doc, applied = await asyncio.to_thread(bp_store.apply, pid, ops, "phone")
         except bp_mod.BlueprintError as exc:
             raise ApiError(400, "bad_op", str(exc), doc=await asyncio.to_thread(_bp, pid))
-        return {"doc": {**doc, "defaults": await asyncio.to_thread(bp_store.defaults)}, "applied": applied}
+        return {"doc": {**doc, "defaults": await asyncio.to_thread(bp_store.defaults),
+                        "default_instructions": await asyncio.to_thread(bp_store.default_instructions)}, "applied": applied}
 
     def _bp_file(pid: str, path: str) -> str:
         target = bp_mod.comment_file(_bp(pid), path)

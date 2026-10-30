@@ -96,9 +96,13 @@ data class Blueprint(
     val settings: BpSettings = BpSettings(),
     /** The global board settings on this PC. */
     val defaults: BpSettings = BpSettings(),
+    /** Global agent instructions on this PC, used when [instructions] is empty (null: older bridge). */
+    val globalInstructions: String? = null,
 ) {
     /** What applies on this board. */
     val effective: BpSettings get() = settings.over(defaults)
+    /** The rules Hermes follows here: this board's own, else the global ones. */
+    val effectiveInstructions: String get() = instructions.trim().ifEmpty { globalInstructions.orEmpty().trim() }
     val needsYou get() = cards.filter { it.openAsks.isNotEmpty() }
     val hermesControl get() = control == "hermes"
     fun cardsIn(column: String) = cards.filter { it.column == column }.sortedBy { it.order }
@@ -134,6 +138,7 @@ data class Blueprint(
                 o.optString("instructions"),
                 BpSettings.parse(o.optJSONObject("settings")),
                 BpSettings.parse(o.optJSONObject("defaults")),
+                if (o.has("default_instructions")) o.optString("default_instructions") else null,
             )
         }
     }
@@ -187,6 +192,8 @@ data class BlueprintState(
     val unsupported: Boolean = false,
     /** Global board settings on this PC (null: not read yet, or an older bridge). */
     val defaults: BpSettings? = null,
+    /** Global agent instructions on this PC (null: not read yet, or an older bridge). */
+    val defaultInstructions: String? = null,
 )
 
 /**
@@ -228,7 +235,8 @@ class BlueprintRepo(
                             })
                     }, trash = o.optJSONArray("trash").objects().map {
                         BlueprintTrash(it.optString("id"), it.optJSONObject("project")?.optString("name") ?: it.optString("id"), it.optDouble("removed_at", 0.0), it.optInt("cards"))
-                    }, unsupported = false, defaults = if (o.has("defaults")) BpSettings.parse(o.optJSONObject("defaults")) else null)
+                    }, unsupported = false, defaults = if (o.has("defaults")) BpSettings.parse(o.optJSONObject("defaults")) else null,
+                        defaultInstructions = if (o.has("default_instructions")) o.optString("default_instructions") else null)
                 }
                 checkNewComments()
             } catch (t: Throwable) {
@@ -246,6 +254,19 @@ class BlueprintRepo(
                 val r = c.blueprintDefaults(st.toJson())
                 val d = BpSettings.parse(r.optJSONObject("defaults"))
                 _state.update { s -> s.copy(defaults = d, open = s.open?.copy(defaults = d)) }
+                say("Saved for every board")
+            } catch (t: Throwable) { if (t is CancellationException) throw t; say(describe(t)) }
+        }
+    }
+
+    /** Change the global agent instructions (every board without its own follows them). */
+    fun setDefaultInstructions(text: String) {
+        val c = client() ?: return
+        scope.launch {
+            try {
+                val r = c.blueprintDefaults(JSONObject().put("instructions", text))
+                val t = r.optString("default_instructions")
+                _state.update { s -> s.copy(defaultInstructions = t, open = s.open?.copy(globalInstructions = t)) }
                 say("Saved for every board")
             } catch (t: Throwable) { if (t is CancellationException) throw t; say(describe(t)) }
         }

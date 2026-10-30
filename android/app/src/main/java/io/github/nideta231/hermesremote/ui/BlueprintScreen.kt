@@ -185,7 +185,7 @@ fun BlueprintScreen(projectId: String, projectName: String, state: BlueprintStat
                         if (bp.hermesControl) actions.apply(arrayOf(BpOp.of("control.set", "mode" to "shared"))) {}
                         else instructions = true to true
                     }, leadingIcon = { Icon(Glyphs.Agent, null, Modifier.size(18.dp)) })
-                    DropdownMenuItem({ Text(if (bp.instructions.isBlank()) "Agent instructions" else "Agent instructions (set)") }, { menu = false; instructions = true to false },
+                    DropdownMenuItem({ Text(when { bp.instructions.isNotBlank() -> "Agent instructions (own)"; !bp.globalInstructions.isNullOrBlank() -> "Agent instructions (global)"; else -> "Agent instructions" }) }, { menu = false; instructions = true to false },
                         leadingIcon = { Icon(Glyphs.Edit, null, Modifier.size(18.dp)) })
                     DropdownMenuItem({ Text("Board settings") }, { menu = false; boardSettings = true },
                         leadingIcon = { Icon(Glyphs.Settings, null, Modifier.size(18.dp)) })
@@ -208,7 +208,8 @@ fun BlueprintScreen(projectId: String, projectName: String, state: BlueprintStat
             }
             }
         }
-        if (instructions.first && bp != null) InstructionsDialog(bp.instructions, handOver = instructions.second,
+        if (instructions.first && bp != null) InstructionsDialog(bp.instructions, handOver = instructions.second, global = bp.globalInstructions,
+            onGlobal = { instructions = false to false; actions.openGlobalSettings() },
             onDismiss = { instructions = false to false }) { text ->
             val hand = instructions.second
             instructions = false to false
@@ -1052,28 +1053,63 @@ internal val InstructionTemplates = listOf(
     "Do every Todo card, then report on Telegram.",
 )
 
-/** Standing rules for any agent on this project; sent with every ask and shown first in Hermes' view of the blueprint. */
+/**
+ * Standing rules for any agent on this project; sent with every ask and shown first in Hermes' view of the
+ * blueprint. A board with no rules of its own follows the global ones ([global], set in Settings); *Use global*
+ * clears this board's text so it follows them again.
+ */
 @Composable
-private fun InstructionsDialog(initial: String, handOver: Boolean, onDismiss: () -> Unit, onSave: (String) -> Unit) {
+private fun InstructionsDialog(initial: String, handOver: Boolean, global: String?, onGlobal: () -> Unit,
+                               onDismiss: () -> Unit, onSave: (String) -> Unit) {
     var text by remember { mutableStateOf(initial) }
     AlertDialog(onDismissRequest = onDismiss, title = { Text(if (handOver) "Hand control to Hermes" else "Agent instructions") }, text = {
         Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text("Rules for this project, followed every time Hermes works on it. Saved with the blueprint.",
                 style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            OutlinedTextField(text, { text = it }, minLines = 5, modifier = Modifier.fillMaxWidth(),
-                placeholder = { Text("e.g. Never deploy to LIVE unless I ask. Read the docs folder first. Report on Telegram when a card is done.") })
-            Text("Templates (tap to add or remove)", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            @OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
-            androidx.compose.foundation.layout.FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                InstructionTemplates.forEach { s ->
-                    FilterChip(s in text, { text = if (s in text) text.replace(s, "").replace(Regex("\n{2,}"), "\n").trim() else (text.trim() + "\n" + s).trim() },
-                        { Text(s) }, colors = themedChip())
-                }
-            }
+            if (global != null) GlobalInstructionsNote(global, usingGlobal = text.isBlank(), onUseGlobal = { text = "" }, onEdit = onGlobal)
+            InstructionsEditor(text, { text = it }, if (global.isNullOrBlank()) "e.g. Never deploy to LIVE unless I ask. Read the docs folder first. Report on Telegram when a card is done."
+                else "Empty: this board follows the global instructions above.")
         }
     }, confirmButton = { TextButton(onClick = { onSave(text.trim()) }) { Text(if (handOver) "Save and hand over" else "Save") } },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } })
 }
+
+/** What the global instructions say, whether this board follows them, and a way back to them. */
+@Composable
+private fun GlobalInstructionsNote(global: String, usingGlobal: Boolean, onUseGlobal: () -> Unit, onEdit: () -> Unit) {
+    Surface(color = MaterialTheme.colorScheme.surfaceContainerHighest, shape = RoundedCornerShape(10.dp), modifier = Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(if (usingGlobal) "Following the global instructions" else "Global instructions (not used: this board has its own)",
+                    style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.SemiBold,
+                    color = if (usingGlobal) Gold else MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.weight(1f))
+            }
+            Text(global.ifBlank { "None set yet." }, style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 8, overflow = TextOverflow.Ellipsis)
+            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                if (!usingGlobal) TextButton(onClick = onUseGlobal) { Text("Reset to global") }
+                TextButton(onClick = onEdit) { Text("Edit global") }
+            }
+        }
+    }
+}
+
+/** The instructions text box plus the tap-to-toggle templates (board dialog and Settings share it). */
+@Composable
+internal fun InstructionsEditor(text: String, onChange: (String) -> Unit, placeholder: String) {
+    OutlinedTextField(text, onChange, minLines = 5, modifier = Modifier.fillMaxWidth(), placeholder = { Text(placeholder) })
+    Text("Templates (tap to add or remove)", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    @OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+    androidx.compose.foundation.layout.FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        InstructionTemplates.forEach { s ->
+            FilterChip(s in text, { onChange(toggleTemplate(text, s)) }, { Text(s) }, colors = themedChip())
+        }
+    }
+}
+
+/** Add [s] on its own line, or take it out (and the blank line it leaves). */
+internal fun toggleTemplate(text: String, s: String): String =
+    if (s in text) text.replace(s, "").replace(Regex("\n{2,}"), "\n").trim() else (text.trim() + "\n" + s).trim()
 
 // ================================================================ Activity
 

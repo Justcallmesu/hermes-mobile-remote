@@ -328,7 +328,7 @@ same files through `hermes-remote-bridge blueprint ...` (skill `project-blueprin
 | DELETE | `/v1/blueprints/{project}` | move to the trash → `{trashed: id}` |
 | POST | `/v1/blueprints-trash/{id}/restore` | restore |
 | DELETE | `/v1/blueprints-trash/{id}` | delete for good |
-| PUT | `/v1/blueprints-settings` | global board settings (`new_cards`, `aging_days`; `default` clears one); boards without their own choice follow them. `GET /v1/blueprints` and every blueprint carry them as `defaults` |
+| PUT | `/v1/blueprints-settings` | global board settings (`new_cards`, `aging_days`, `sticky_add`; `default` clears one) and global agent `instructions` (text; empty clears); boards without their own choice follow them. `GET /v1/blueprints` and every blueprint carry them as `defaults` and `default_instructions` |
 
 Ops are applied to the newest copy under a file lock, so phone and Hermes edits merge:
 `node.add` (`kind` start/end/feature/flow/decision/note, `label`, `after` = node it follows; placed

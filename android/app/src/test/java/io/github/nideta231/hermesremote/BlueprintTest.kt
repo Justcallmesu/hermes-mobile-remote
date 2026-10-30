@@ -75,3 +75,21 @@ class BlueprintSettingsTest {
         org.junit.Assert.assertEquals(0.45f, io.github.nideta231.hermesremote.data.agingAlpha(now - 40 * day, now, 7), 0f)
     }
 }
+
+class BlueprintInstructionsTest {
+    private fun doc(own: String, global: String?) = Blueprint.parse(JSONObject().put("project", JSONObject().put("id", "p1"))
+        .put("instructions", own).apply { if (global != null) put("default_instructions", global) })
+
+    @Test fun boardFollowsGlobalUntilItHasItsOwn() {
+        assertEquals("Read docs.", doc("", "Read docs.").effectiveInstructions)
+        assertEquals("Never touch LIVE.", doc("Never touch LIVE.", "Read docs.").effectiveInstructions)
+        assertEquals(null, doc("", null).globalInstructions)
+        assertEquals("", doc("", null).effectiveInstructions)
+    }
+
+    @Test fun templateToggleAddsAndRemovesALine() {
+        val t = io.github.nideta231.hermesremote.ui.toggleTemplate("A", "B")
+        assertEquals("A\nB", t)
+        assertEquals("A", io.github.nideta231.hermesremote.ui.toggleTemplate(t, "B"))
+    }
+}

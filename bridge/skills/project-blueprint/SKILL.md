@@ -45,6 +45,7 @@ $B card ask login "Use Stripe or PayPal?"            # highlighted until the use
 $B card review login "Check the export" --file out/report.csv
 $B card comment login "Pushed abc123" | card resolve login [<comment id>]
 $B instructions                          # print the user's rules for this project (set from the phone)
+$B instructions global ["<text>"|none]   # global rules for every board without its own (md marks them "(global, every board)")
 $B settings                              # board settings: new_cards=top|bottom, aging_days=0|3|7|14|30 (set: settings new_cards=top)
 $B settings global [new_cards=top ...]   # every board's default (also sticky_add=true|false); a board's own choice wins, key=default follows global
 $B column limit Working 3                # WIP cap per column (0 or none removes it); md shows "OVER THE LIMIT"

@@ -573,15 +573,22 @@ def summary(doc: dict) -> dict:
                         for c in cols]}
 
 
-def to_markdown(doc: dict, defaults: dict | None = None) -> str:
+def instructions(doc: dict, global_text: str = "") -> str:
+    """The rules that apply on this board: its own, else the global instructions every board follows."""
+    return (doc.get("instructions") or "").strip() or (global_text or "").strip()
+
+
+def to_markdown(doc: dict, defaults: dict | None = None, global_instructions: str = "") -> str:
     """What Hermes reads before working on the project: the flow, then the board, then recent activity."""
     p = doc["project"]
     d, b = doc["diagram"], doc["board"]
     by_id = {n["id"]: n for n in d["nodes"]}
     lines = [f"# Blueprint: {p['name']}", f"project id {p['id']}" + (f", folder {p['path']}" if p.get("path") else "")
              + f", version {doc['version']}, control: {doc.get('control', 'shared')}", ""]
-    if (doc.get("instructions") or "").strip():
-        lines += ["## Instructions from the user (always follow these on this project)", doc["instructions"].strip(), ""]
+    rules = instructions(doc, global_instructions)
+    if rules:
+        lines += ["## Instructions from the user (always follow these on this project)"
+                  + ("" if (doc.get("instructions") or "").strip() else " (global, every board)"), rules, ""]
     asks = [(c, m) for c in b["cards"] for m in open_asks(c)]
     if asks:
         lines += ["## Waiting for the user (open questions and reviews)"]
@@ -740,6 +747,25 @@ class BlueprintStore:
         with self._lock():
             self._write(self.root / "defaults.settings", cur)
         return cur
+
+    # Global agent instructions: boards with no instructions of their own follow them.
+    def default_instructions(self) -> str:
+        try:
+            return (self.root / "defaults.instructions").read_text(encoding="utf-8").strip()
+        except OSError:
+            return ""
+
+    def set_default_instructions(self, text: str) -> str:
+        text = str(text or "").strip()
+        if len(text) > MAX_TEXT:
+            raise BlueprintError(f"Instructions are at most {MAX_TEXT} characters")
+        with self._lock():
+            self.root.mkdir(parents=True, exist_ok=True)
+            f = self.root / "defaults.instructions"
+            tmp = f.with_suffix(".tmp")
+            tmp.write_text(text, encoding="utf-8")
+            os.replace(tmp, f)
+        return text
 
     def apply(self, project_id: str, ops: list[dict], by: str = "phone", base: int | None = None) -> tuple[dict, list[dict]]:
         defaults = self.defaults()

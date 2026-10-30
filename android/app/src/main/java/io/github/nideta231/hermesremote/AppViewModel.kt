@@ -435,7 +435,7 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
             return askHermesBlueprint(b, "replynew:$title")
         }
         newChat(); chooseProject(b.projectId)
-        val rules = b.instructions.trim().takeIf { it.isNotEmpty() }?.let { "\n\nProject instructions (always follow): $it" }.orEmpty()
+        val rules = b.effectiveInstructions.takeIf { it.isNotEmpty() }?.let { "\n\nProject instructions (always follow): $it" }.orEmpty()
         setDraft(when {
             what == "control" -> "Take full control of the ${b.name} blueprint (project-blueprint skill): read it, plan the flow and the board, then work through it and keep it updated. I'll mostly watch and adjust."
             what.startsWith("card:") -> "Read the ${b.name} blueprint (project-blueprint skill), then do the card \"${what.removePrefix("card:")}\": move it to Working, tick its checklist as you go and move it to Done when it's verified."

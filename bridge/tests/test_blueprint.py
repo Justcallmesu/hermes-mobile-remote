@@ -216,6 +216,10 @@ def test_routes(tmp_path):
     tid = c.delete("/v1/blueprints/p1", headers=h).json()["trashed"]
     assert c.get("/v1/blueprints", headers=h).json()["trash"][0]["id"] == tid
     assert c.post(f"/v1/blueprints-trash/{tid}/restore", headers=h).json()["project"]["name"] == "Shop"
+    r = c.put("/v1/blueprints-settings", json={"instructions": "Read the docs first.", "new_cards": "top"}, headers=h).json()
+    assert r == {"defaults": {"new_cards": "top"}, "default_instructions": "Read the docs first."}
+    assert c.get("/v1/blueprints", headers=h).json()["default_instructions"] == "Read the docs first."
+    assert c.get("/v1/blueprints/p1", headers=h).json()["default_instructions"] == "Read the docs first."
 
 
 def test_comment_files_are_the_only_files_served(tmp_path):
@@ -246,3 +250,22 @@ def test_comment_files_are_the_only_files_served(tmp_path):
     assert "[file: " in bp.to_markdown(s.get("p1"))
     (proj / "result.csv").unlink()
     assert get("result.csv", headers=h).status_code == 404
+
+
+def test_global_instructions_apply_to_boards_without_their_own(tmp_path):
+    s = bp.BlueprintStore(tmp_path)
+    s.create("p1", "Shop")
+    assert s.default_instructions() == ""
+    s.set_default_instructions("  Read the docs first.  ")
+    assert s.default_instructions() == "Read the docs first."
+    assert [d["project"]["id"] for d in s.all()] == ["p1"]  # not listed as a blueprint
+    md = bp.to_markdown(s.get("p1"), s.defaults(), s.default_instructions())
+    assert "(global, every board)" in md and "Read the docs first." in md
+    doc, _ = s.apply("p1", [{"op": "instructions.set", "text": "Never touch LIVE."}])
+    md = bp.to_markdown(doc, s.defaults(), s.default_instructions())
+    assert "Never touch LIVE." in md and "Read the docs first." not in md and "(global" not in md
+    # Reset to global = clear the board's own text
+    doc, _ = s.apply("p1", [{"op": "instructions.set", "text": ""}])
+    assert bp.instructions(doc, s.default_instructions()) == "Read the docs first."
+    with pytest.raises(bp.BlueprintError):
+        s.set_default_instructions("x" * (bp.MAX_TEXT + 1))

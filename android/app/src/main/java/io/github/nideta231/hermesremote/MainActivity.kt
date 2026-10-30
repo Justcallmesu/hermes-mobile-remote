@@ -442,6 +442,8 @@ class MainActivity : ComponentActivity() {
             bridgeUpdate = if ("bridge_update" in features) BridgeUpdateActions(bridgeUpdateState, vm.bridgeUpdate::check, vm.bridgeUpdate::start, heldUpdate, vm.bridgeAdmin::refresh) else null,
             boardDefaults = if ("blueprints" in features) blueprintState.defaults else null,
             setBoardDefaults = vm.blueprints::setDefaults,
+            boardInstructions = if ("blueprints" in features) blueprintState.defaultInstructions else null,
+            setBoardInstructions = vm.blueprints::setDefaultInstructions,
         )
         val pcActions = PcActions(watch = { vm.monitor.watch() }, unwatch = vm.monitor::stop, refresh = vm.monitor::refresh,
             setRange = vm.monitor::setRange, setSort = vm.monitor::setSort, setQuery = vm.monitor::setQuery,

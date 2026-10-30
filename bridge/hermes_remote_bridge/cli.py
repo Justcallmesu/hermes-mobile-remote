@@ -565,7 +565,7 @@ def cmd_blueprint(cfg: Config, args: argparse.Namespace) -> None:
         elif a in ("show", "md"):
             p = project()
             doc = need(p)
-            print(json.dumps(doc, ensure_ascii=False, indent=1) if js else bp.to_markdown(doc, store.defaults()), end="" if not js else "\n")
+            print(json.dumps(doc, ensure_ascii=False, indent=1) if js else bp.to_markdown(doc, store.defaults(), store.default_instructions()), end="" if not js else "\n")
         elif a == "create":
             try:
                 p = project()
@@ -656,8 +656,17 @@ def cmd_blueprint(cfg: Config, args: argparse.Namespace) -> None:
         elif a == "log":
             run([{"op": "log", "text": text()}])
         elif a == "instructions":  # no text: print them; text or '-' (stdin): set; 'none': clear
-            if not rest:
-                print(need(project()).get("instructions") or "(no instructions)")
+            if rest and rest[0] == "global":  # `instructions global [text|-|none]`: every board without its own
+                rest.pop(0)
+                if rest:
+                    t = text()
+                    store.set_default_instructions("" if t.strip() == "none" else t)
+                print(store.default_instructions() or "(no global instructions)")
+            elif not rest:
+                doc = need(project())
+                own = (doc.get("instructions") or "").strip()
+                g = store.default_instructions()
+                print(own or (g + "\n(global: this board has none of its own)" if g else "(no instructions)"))
             else:
                 t = text()
                 run([{"op": "instructions.set", "text": "" if t.strip() == "none" else t}])

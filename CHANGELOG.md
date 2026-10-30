@@ -17,6 +17,13 @@ request number.
   subagents (#12), share to Hermes (#15), message search (#16), subagent output and steer (#17)
   and bridge metrics (#18).
 
+## Unreleased
+
+- **Global agent instructions**: Settings > Blueprint boards now has *Agent instructions (global)*,
+  rules Hermes follows on every board that has none of its own. A board's *Agent instructions* shows
+  what the global ones say, whether the board follows them, *Reset to global* (clears the board's own)
+  and *Edit global*. Hermes CLI: `blueprint instructions global "<text>"`. Needs the updated bridge.
+
 ## v1.36.0
 
 - **GitHub release page: download link first**: each release now starts with a direct link to the APK
