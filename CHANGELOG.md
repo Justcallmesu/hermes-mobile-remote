@@ -17,7 +17,7 @@ request number.
   subagents (#12), share to Hermes (#15), message search (#16), subagent output and steer (#17)
   and bridge metrics (#18).
 
-## Unreleased
+## v1.37.0
 
 - **Global agent instructions**: Settings > Blueprint boards now has *Agent instructions (global)*,
   rules Hermes follows on every board that has none of its own. A board's *Agent instructions* shows
