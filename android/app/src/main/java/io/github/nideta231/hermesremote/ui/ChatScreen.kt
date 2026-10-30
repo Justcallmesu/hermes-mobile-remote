@@ -1338,14 +1338,25 @@ private fun SheetOption(title: String, subtitle: String?, selected: Boolean, onE
 
 @Composable
 fun SearchField(value: String, onChange: (String) -> Unit, hint: String, modifier: Modifier = Modifier) {
+    // A slim pill (40 dp, like the buttons next to it), not Material's 56 dp TextField, and it shrinks
+    // with a narrow chat list: the hint is cut with an ellipsis instead of wrapping or pushing icons out.
+    val ink = MaterialTheme.colorScheme.onSurface
+    val muted = MaterialTheme.colorScheme.onSurfaceVariant
     Surface(color = MaterialTheme.colorScheme.surfaceContainerHighest, shape = CircleShape, modifier = modifier.fillMaxWidth()) {
-        TextField(value, onChange, singleLine = true, modifier = Modifier.fillMaxWidth(),
-            placeholder = { Text(hint) },
-            leadingIcon = { Icon(Glyphs.Search, null, modifier = Modifier.size(18.dp)) },
-            trailingIcon = if (value.isNotEmpty()) ({ IconButton(onClick = { onChange("") }) { Icon(Glyphs.Close, "Clear", modifier = Modifier.size(18.dp)) } }) else null,
-            colors = TextFieldDefaults.colors(
-                focusedContainerColor = Color.Transparent, unfocusedContainerColor = Color.Transparent,
-                focusedIndicatorColor = Color.Transparent, unfocusedIndicatorColor = Color.Transparent))
+        Row(Modifier.fillMaxWidth().heightIn(min = 40.dp).padding(start = 12.dp, end = if (value.isEmpty()) 12.dp else 2.dp),
+            verticalAlignment = Alignment.CenterVertically) {
+            Icon(Glyphs.Search, null, tint = muted, modifier = Modifier.size(18.dp))
+            Spacer(Modifier.width(8.dp))
+            Box(Modifier.weight(1f), contentAlignment = Alignment.CenterStart) {
+                if (value.isEmpty()) Text(hint, style = MaterialTheme.typography.bodyMedium, color = muted, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                androidx.compose.foundation.text.BasicTextField(value, onChange, singleLine = true, modifier = Modifier.fillMaxWidth(),
+                    textStyle = MaterialTheme.typography.bodyMedium.copy(color = ink),
+                    cursorBrush = androidx.compose.ui.graphics.SolidColor(Gold))
+            }
+            if (value.isNotEmpty()) IconButton(onClick = { onChange("") }, modifier = Modifier.size(36.dp)) {
+                Icon(Glyphs.Close, "Clear", modifier = Modifier.size(16.dp))
+            }
+        }
     }
 }
 

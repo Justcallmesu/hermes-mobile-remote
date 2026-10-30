@@ -23,6 +23,9 @@ request number.
   rules Hermes follows on every board that has none of its own. A board's *Agent instructions* shows
   what the global ones say, whether the board follows them, *Reset to global* (clears the board's own)
   and *Edit global*. Hermes CLI: `blueprint instructions global "<text>"`. Needs the updated bridge.
+- **Slimmer search box in the chat list**: the search field is now a 40 dp pill, the same height as
+  the filter and new chat buttons beside it (was a tall 56 dp field, also in compact mode), and it
+  shrinks with a narrow chat list: the hint is cut short instead of pushing the buttons out.
 
 ## v1.36.0
 

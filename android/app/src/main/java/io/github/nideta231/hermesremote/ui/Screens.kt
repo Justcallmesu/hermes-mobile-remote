@@ -317,15 +317,16 @@ fun SessionsPane(
         if (profileSheet) ProfileSheet(profiles, onPick = { profileSheet = false; actions.switchProfile(it) },
             onDismiss = { profileSheet = false })
         update?.let { DrawerUpdateRow(it, onOpenUpdate) }
-        Row(Modifier.padding(start = 12.dp, end = 4.dp, top = 2.dp, bottom = 2.dp), verticalAlignment = Alignment.CenterVertically) {
+        Row(Modifier.padding(start = 12.dp, end = 8.dp, top = 2.dp, bottom = 4.dp), verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(4.dp)) {
             SearchField(query, { query = it }, "Search chats", Modifier.weight(1f))
             // Group / sort / filter, like the desktop sidebar's filter menu. A gold dot marks a non-default view.
             Box {
-                IconButton(onClick = { filterSheet = true }) {
+                IconButton(onClick = { filterSheet = true }, modifier = Modifier.size(40.dp)) {
                     Icon(Glyphs.Filter, "Group, sort and filter", modifier = Modifier.size(20.dp),
                         tint = if (view.customized) Gold else MaterialTheme.colorScheme.onSurfaceVariant)
                 }
-                if (view.filtersActive) Box(Modifier.align(Alignment.TopEnd).padding(top = 10.dp, end = 10.dp).size(7.dp).background(Gold, CircleShape))
+                if (view.filtersActive) Box(Modifier.align(Alignment.TopEnd).padding(top = 8.dp, end = 8.dp).size(7.dp).background(Gold, CircleShape))
             }
             // New chat, as a compact gold round button instead of a full-width bar.
             FilledIconButton(onClick = actions.newChat, modifier = Modifier.size(40.dp),
